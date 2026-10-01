@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+
+  <!-- Shared C++ compiler and linker settings for every MapWinGIS6 project. -->
+
+  <PropertyGroup Label="Configuration">
+    <CharacterSet Condition="'$(CharacterSet)' == ''">Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)' == 'Release'">false</WholeProgramOptimization>
+    <LinkIncremental Condition="'$(Configuration)' == 'Release'">false</LinkIncremental>
+    <MwgEnableAsan Condition="'$(MwgEnableAsan)' == ''">false</MwgEnableAsan>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <ConformanceMode>true</ConformanceMode>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <AdditionalOptions>/utf-8 /Zc:__cplusplus /Zc:preprocessor /Zc:throwingNew /bigobj %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>
+        WIN32_LEAN_AND_MEAN;
+        NOMINMAX;
+        _WIN32_WINNT=0x0A00;
+        WINVER=0x0A00;
+        NTDDI_VERSION=0x0A00000B;
+        _CRT_SECURE_NO_WARNINGS;
+        MWG_VERSION="$(MwgVersion)";
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <!-- Safe here: every binary in the product is built with one toolset and
+           one CRT, so std:: types may cross the DLL boundary. -->
+      <DisableSpecificWarnings>4251;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Windows</SubSystem>
+      <RandomizedBaseAddress>true</RandomizedBaseAddress>
+      <DataExecutionPrevention>true</DataExecutionPrevention>
+      <AdditionalOptions Condition="'$(Platform)' == 'x64'">/HIGHENTROPYVA %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Debug'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <BasicRuntimeChecks Condition="'$(MwgEnableAsan)' != 'true'">EnableFastChecks</BasicRuntimeChecks>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(MwgEnableAsan)' == 'true'">
+    <ClCompile>
+      <AdditionalOptions>/fsanitize=address %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+</Project>

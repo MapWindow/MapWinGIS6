@@ -1,0 +1,19 @@
+{
+  "packages": [
+{
+  "SPDXID" : "SPDXRef-resource-0",
+  "checksums" : 
+  [
+    {
+      "algorithm" : "SHA512",
+      "checksumValue" : "c4dcde3c79e5d69c7231f8862e2e5a83d90d9cce694fb2a4804800b2f8f1bc9db504b9252d81dce872eec8358b33a3a1dbdddcbb6181f6fb8d1d7fc0e9a9fc6a"
+    }
+  ],
+  "copyrightText" : "NOASSERTION",
+  "downloadLocation" : "git+https://gitlab.com/libtiff/libtiff@v4.7.2",
+  "licenseConcluded" : "NOASSERTION",
+  "licenseDeclared" : "NOASSERTION",
+  "name" : "libtiff/libtiff"
+}
+  ]
+}

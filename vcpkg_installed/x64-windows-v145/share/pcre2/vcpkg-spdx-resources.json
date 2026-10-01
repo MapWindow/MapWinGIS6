@@ -1,0 +1,34 @@
+{
+  "packages": [
+{
+  "SPDXID" : "SPDXRef-resource-0",
+  "checksums" : 
+  [
+    {
+      "algorithm" : "SHA512",
+      "checksumValue" : "4deef8ce95711e65fe07624e6b2aace794594adb15e8363a0279a7b947bf5c75a5858fbdc5251d0a28a7ca97ae8bba561aa5f85805d5c07d417d3e7b3b3486a4"
+    }
+  ],
+  "copyrightText" : "NOASSERTION",
+  "downloadLocation" : "git+https://github.com/PCRE2Project/pcre2@pcre2-10.47",
+  "licenseConcluded" : "NOASSERTION",
+  "licenseDeclared" : "NOASSERTION",
+  "name" : "PCRE2Project/pcre2"
+},
+{
+  "SPDXID" : "SPDXRef-resource-1",
+  "checksums" : 
+  [
+    {
+      "algorithm" : "SHA512",
+      "checksumValue" : "c05c83cc762f430c01e2aaf876aaac41a70b67ed8b91bc81102ad527c8921c5e75b41bab35bb8237dd5f53fecd7b8f31206865efffce2ea0a1aa9c87079fc643"
+    }
+  ],
+  "copyrightText" : "NOASSERTION",
+  "downloadLocation" : "git+https://github.com/zherczeg/sljit@45f910b78c6605ebf5b53d3ec7cb00f2312fe417",
+  "licenseConcluded" : "NOASSERTION",
+  "licenseDeclared" : "NOASSERTION",
+  "name" : "zherczeg/sljit"
+}
+  ]
+}

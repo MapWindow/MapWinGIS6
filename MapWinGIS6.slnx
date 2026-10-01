@@ -1,0 +1,24 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Win32" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/MapWinGIS.Core/MapWinGIS.Core.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c01" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MapWinGIS.Core.Tests/MapWinGIS.Core.Tests.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c02" />
+  </Folder>
+  <Folder Name="/build/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Build.targets" />
+    <File Path="build/props/MapWinGIS.Cpp.props" />
+    <File Path="build/scripts/bootstrap-vcpkg.ps1" />
+    <File Path="vcpkg-configuration.json" />
+    <File Path="vcpkg.json" />
+  </Folder>
+  <Folder Name="/docs/">
+    <File Path="README.md" />
+    <File Path="docs/BUILDING.md" />
+  </Folder>
+</Solution>

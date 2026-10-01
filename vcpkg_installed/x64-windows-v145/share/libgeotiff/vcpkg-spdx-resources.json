@@ -1,0 +1,19 @@
+{
+  "packages": [
+{
+  "SPDXID" : "SPDXRef-resource-0",
+  "checksums" : 
+  [
+    {
+      "algorithm" : "SHA512",
+      "checksumValue" : "03468e8eeaf97d82798bf341cf2e27753eb47af985fb08fc6176be799bd0e1e879c6d1701577f7568f269cbef0bb0a20ae460bb943f847daf49aa54601441683"
+    }
+  ],
+  "copyrightText" : "NOASSERTION",
+  "downloadLocation" : "git+https://github.com/OSGeo/libgeotiff@1.7.4",
+  "licenseConcluded" : "NOASSERTION",
+  "licenseDeclared" : "NOASSERTION",
+  "name" : "OSGeo/libgeotiff"
+}
+  ]
+}

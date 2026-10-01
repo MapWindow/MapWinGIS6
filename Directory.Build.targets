@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+
+  <!--
+    Deploy the runtime data that GDAL and PROJ need.
+
+    vcpkg installs these under share/, and nothing copies them next to the
+    binaries. GdalEnvironment looks for "gdal-data" and "proj" beside the
+    loaded module, so they are copied there.
+  -->
+
+  <PropertyGroup>
+    <MwgDeployRuntimeData Condition="'$(MwgDeployRuntimeData)' == ''">true</MwgDeployRuntimeData>
+  </PropertyGroup>
+
+  <Target Name="MwgDeployGdalRuntimeData"
+          AfterTargets="Build"
+          Condition="'$(MwgDeployRuntimeData)' == 'true' And '$(ConfigurationType)' != 'StaticLibrary'">
+
+    <ItemGroup>
+      <MwgGdalData Include="$(MwgVcpkgTripletDir)share\gdal\**\*" />
+      <MwgProjData Include="$(MwgVcpkgTripletDir)share\proj\**\*" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(MwgGdalData)"
+          DestinationFiles="@(MwgGdalData->'$(OutDir)gdal-data\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(MwgGdalData)' != ''" />
+
+    <Copy SourceFiles="@(MwgProjData)"
+          DestinationFiles="@(MwgProjData->'$(OutDir)proj\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(MwgProjData)' != ''" />
+
+    <Warning Text="GDAL runtime data was not found in $(MwgVcpkgTripletDir)share\gdal. Run build\scripts\bootstrap-vcpkg.ps1 and rebuild."
+             Condition="'@(MwgGdalData)' == ''" />
+  </Target>
+
+  <Import Project="$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets"
+          Condition="Exists('$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets')" />
+
+</Project>
