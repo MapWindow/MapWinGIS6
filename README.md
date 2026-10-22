@@ -17,9 +17,10 @@ the migration.
 
 ## Status
 
-Early. The repository currently contains the build infrastructure and the first
-slice of the core: GDAL setup and reading vector data (shapefiles, GeoPackage
-and every other OGR format). The ActiveX layer has not been added yet.
+Early. The core currently includes GDAL setup and OGR-backed vector dataset
+and layer access, including feature and field reading and updates. Available
+formats depend on the GDAL drivers enabled in the build; tests cover shapefiles
+and GeoPackage. The ActiveX layer has not been added yet.
 
 ## Build and test
 
@@ -71,7 +72,7 @@ For additional configurations, dependency features, and troubleshooting, see
 | `src/MapWinGIS.Core/` | The core engine. Public headers in `include/mapwingis/` |
 | `tests/MapWinGIS.Core.Tests/` | C++ unit tests (GoogleTest) |
 | `build/` | Shared MSBuild props, vcpkg triplets and scripts |
-| `docs/` | Build and architecture documentation |
+| `docs/` | Build, architecture, coding, porting and testing documentation |
 
 ## License
 
