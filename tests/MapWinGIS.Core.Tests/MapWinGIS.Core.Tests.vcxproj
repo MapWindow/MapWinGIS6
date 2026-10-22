@@ -42,7 +42,6 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>MWG_TEST_DATA_DIR=R"($(MwgRepoRoot)tests\data)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -56,9 +55,9 @@
   <ItemGroup>
     <ClCompile Include="GdalEnvironmentTests.cpp" />
     <ClCompile Include="Main.cpp" />
-    <ClCompile Include="ProvincesTests.cpp" />
     <ClCompile Include="TestData.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
+    <ClCompile Include="VectorLayerTests.cpp" />
   </ItemGroup>
 
   <ItemGroup>

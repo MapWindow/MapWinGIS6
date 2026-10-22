@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: MPL-2.0
 
 /**
- * @file ProvincesTests.cpp
- * @brief Tests vector reading and editing against committed reference data.
+ * @file VectorLayerTests.cpp
+ * @brief Tests vector layer reading and editing with generated fixtures.
  *
  * Exercises shapefile and GeoPackage behavior for attributes, geometry,
  * projections, null values, and persisted edits across both formats.
  */
-//
-// Tests against the committed reference data in tests/data. Unlike the
-// generated fixtures in VectorDatasetTests.cpp, these exercise real files that
-// carry a projection, a code page and null values.
 
 #include <gtest/gtest.h>
 
 #include "TestData.h"
 #include "mapwingis/core/Error.h"
+#include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 using namespace mwg;
@@ -25,22 +22,23 @@ namespace
 {
     /// Runs every case against both the shapefile and the GeoPackage, so the
     /// core stays format-agnostic.
-    class ProvincesTest : public testing::TestWithParam<const char*>
+    class VectorLayerTest : public testing::TestWithParam<const char*>
     {
     protected:
         void SetUp() override
         {
-            _dataset = VectorDataset::Open(DataDirectory() / GetParam());
+            _dataset = VectorDataset::Open(MakeProvincesDataset(_dir.Path(), GetParam()));
             _layer = _dataset->LayerByName(Provinces::kLayerName);
             ASSERT_NE(_layer, nullptr);
         }
 
+        TempDirectory _dir;
         std::unique_ptr<VectorDataset> _dataset;
         VectorLayer* _layer = nullptr;
     };
 }
 
-INSTANTIATE_TEST_SUITE_P(Formats, ProvincesTest,
+INSTANTIATE_TEST_SUITE_P(Formats, VectorLayerTest,
                          testing::Values("provinces.shp", "provinces.gpkg"),
                          [](const testing::TestParamInfo<const char*>& info)
                          {
@@ -49,13 +47,13 @@ INSTANTIATE_TEST_SUITE_P(Formats, ProvincesTest,
                                         : "Shapefile";
                          });
 
-TEST_P(ProvincesTest, ReportsTheLayer)
+TEST_P(VectorLayerTest, ReportsTheLayer)
 {
     EXPECT_EQ(_layer->Type(), ShapeType::Polygon);
     EXPECT_EQ(_layer->FeatureCount(), Provinces::kFeatureCount);
 }
 
-TEST_P(ProvincesTest, ReportsTheExtent)
+TEST_P(VectorLayerTest, ReportsTheExtent)
 {
     const Extent extent = _layer->GetExtent();
     ASSERT_FALSE(extent.IsEmpty());
@@ -65,7 +63,7 @@ TEST_P(ProvincesTest, ReportsTheExtent)
     EXPECT_DOUBLE_EQ(extent.yMax, Provinces::kMaxY);
 }
 
-TEST_P(ProvincesTest, ReportsAllMapWinGisFieldTypes)
+TEST_P(VectorLayerTest, ReportsAllMapWinGisFieldTypes)
 {
     EXPECT_EQ(_layer->Field(_layer->FieldIndex(Provinces::kIdField)).type, FieldType::Integer);
     EXPECT_EQ(_layer->Field(_layer->FieldIndex(Provinces::kNameField)).type, FieldType::String);
@@ -74,7 +72,7 @@ TEST_P(ProvincesTest, ReportsAllMapWinGisFieldTypes)
     EXPECT_EQ(_layer->Field(_layer->FieldIndex(Provinces::kActiveField)).type, FieldType::Boolean);
 }
 
-TEST_P(ProvincesTest, ReadsAttributes)
+TEST_P(VectorLayerTest, ReadsAttributes)
 {
     const int id = _layer->FieldIndex(Provinces::kIdField);
     const int name = _layer->FieldIndex(Provinces::kNameField);
@@ -90,13 +88,13 @@ TEST_P(ProvincesTest, ReadsAttributes)
     EXPECT_EQ(_layer->CellInteger(active, 3), 1);
 }
 
-TEST_P(ProvincesTest, PreservesNonAsciiAttributeValues)
+TEST_P(VectorLayerTest, PreservesNonAsciiAttributeValues)
 {
     const int name = _layer->FieldIndex(Provinces::kNameField);
     EXPECT_EQ(_layer->CellString(name, 2), Provinces::kNonAsciiName);
 }
 
-TEST_P(ProvincesTest, DistinguishesNullFromEmpty)
+TEST_P(VectorLayerTest, DistinguishesNullFromEmpty)
 {
     const int name = _layer->FieldIndex(Provinces::kNameField);
     const int surveyed = _layer->FieldIndex(Provinces::kSurveyedField);
@@ -107,13 +105,13 @@ TEST_P(ProvincesTest, DistinguishesNullFromEmpty)
     EXPECT_FALSE(_layer->IsCellNull(surveyed, 0));
 }
 
-TEST_P(ProvincesTest, ReadsDatesAsText)
+TEST_P(VectorLayerTest, ReadsDatesAsText)
 {
     const int surveyed = _layer->FieldIndex(Provinces::kSurveyedField);
     EXPECT_EQ(_layer->CellString(surveyed, 0), "2020/01/15");
 }
 
-TEST_P(ProvincesTest, ReportsTheProjection)
+TEST_P(VectorLayerTest, ReportsTheProjection)
 {
     const std::string wkt = _layer->ProjectionWkt();
     ASSERT_FALSE(wkt.empty());
@@ -121,7 +119,7 @@ TEST_P(ProvincesTest, ReportsTheProjection)
     EXPECT_NE(wkt.find("28992"), std::string::npos) << wkt;
 }
 
-TEST_P(ProvincesTest, ReadsGeometry)
+TEST_P(VectorLayerTest, ReadsGeometry)
 {
     const std::string wkt = _layer->GeometryWkt(0);
     EXPECT_TRUE(wkt.starts_with("POLYGON")) << wkt;
@@ -133,7 +131,7 @@ TEST_P(ProvincesTest, ReadsGeometry)
     EXPECT_DOUBLE_EQ(extent.Width() * extent.Height(), 1000000.0);
 }
 
-TEST_P(ProvincesTest, IsReadOnlyByDefault)
+TEST_P(VectorLayerTest, IsReadOnlyByDefault)
 {
     EXPECT_FALSE(_dataset->IsWritable());
     EXPECT_FALSE(_layer->IsWritable());
@@ -146,15 +144,15 @@ TEST_P(ProvincesTest, IsReadOnlyByDefault)
 
 namespace
 {
-    class ProvincesEditTest : public testing::TestWithParam<const char*>
+    class VectorLayerEditTest : public testing::TestWithParam<const char*>
     {
     protected:
         void SetUp() override
         {
-            _path = CopyDataset(_dir.Path(), GetParam());
+            _path = MakeProvincesDataset(_dir.Path(), GetParam());
         }
 
-        /// Opens the working copy, hands the layer to `edit`, then closes so the
+        /// Opens the fixture, hands the layer to `edit`, then closes so the
         /// driver flushes everything to disk.
         template <typename TEdit>
         void Edit(TEdit edit)
@@ -174,7 +172,7 @@ namespace
     };
 }
 
-INSTANTIATE_TEST_SUITE_P(Formats, ProvincesEditTest,
+INSTANTIATE_TEST_SUITE_P(Formats, VectorLayerEditTest,
                          testing::Values("provinces.shp", "provinces.gpkg"),
                          [](const testing::TestParamInfo<const char*>& info)
                          {
@@ -183,7 +181,7 @@ INSTANTIATE_TEST_SUITE_P(Formats, ProvincesEditTest,
                                         : "Shapefile";
                          });
 
-TEST_P(ProvincesEditTest, CopiesEveryPartOfTheDataset)
+TEST_P(VectorLayerEditTest, GeneratesEveryPartOfTheDataset)
 {
     EXPECT_TRUE(std::filesystem::exists(_path));
     if (_path.extension() == ".shp")
@@ -196,7 +194,7 @@ TEST_P(ProvincesEditTest, CopiesEveryPartOfTheDataset)
     }
 }
 
-TEST_P(ProvincesEditTest, PersistsAttributeEdits)
+TEST_P(VectorLayerEditTest, PersistsAttributeEdits)
 {
     Edit([](VectorLayer& layer)
     {
@@ -217,7 +215,7 @@ TEST_P(ProvincesEditTest, PersistsAttributeEdits)
     EXPECT_EQ(layer.CellString(layer.FieldIndex(Provinces::kNameField), 1), "Oost");
 }
 
-TEST_P(ProvincesEditTest, PersistsNonAsciiEdits)
+TEST_P(VectorLayerEditTest, PersistsNonAsciiEdits)
 {
     Edit([](VectorLayer& layer)
     {
@@ -230,7 +228,7 @@ TEST_P(ProvincesEditTest, PersistsNonAsciiEdits)
               "Sk\u00e2rsterl\u00e2n");
 }
 
-TEST_P(ProvincesEditTest, PersistsNulls)
+TEST_P(VectorLayerEditTest, PersistsNulls)
 {
     Edit([](VectorLayer& layer)
     {
@@ -247,7 +245,7 @@ TEST_P(ProvincesEditTest, PersistsNulls)
     EXPECT_EQ(layer.CellString(name, Provinces::kNullFeature), "Filled");
 }
 
-TEST_P(ProvincesEditTest, PersistsGeometryEdits)
+TEST_P(VectorLayerEditTest, PersistsGeometryEdits)
 {
     static constexpr const char* kMoved =
         "POLYGON ((200000 500000, 201000 500000, 201000 501000, 200000 501000, 200000 500000))";
@@ -262,15 +260,16 @@ TEST_P(ProvincesEditTest, PersistsGeometryEdits)
     EXPECT_DOUBLE_EQ(extent.yMax, 501000.0);
 }
 
-TEST_P(ProvincesEditTest, RejectsInvalidWkt)
+TEST_P(VectorLayerEditTest, RejectsInvalidWkt)
 {
+    const GdalEnvironment::QuietScope quiet;
     Edit([](VectorLayer& layer)
     {
         EXPECT_THROW(layer.SetGeometryWkt(0, "NOT WKT"), CoreError);
     });
 }
 
-TEST_P(ProvincesEditTest, ReflectsEditsWithoutReopening)
+TEST_P(VectorLayerEditTest, ReflectsEditsWithoutReopening)
 {
     const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(_path, OpenMode::Update);
     VectorLayer& layer = dataset->Layer(0);
@@ -290,7 +289,7 @@ TEST_P(ProvincesEditTest, ReflectsEditsWithoutReopening)
     EXPECT_TRUE(layer.IsCellNull(area, 0));
 }
 
-TEST_P(ProvincesEditTest, RecomputesTheExtentAfterAGeometryEdit)
+TEST_P(VectorLayerEditTest, RecomputesTheExtentAfterAGeometryEdit)
 {
     static constexpr const char* kMoved =
         "POLYGON ((200000 500000, 201000 500000, 201000 501000, 200000 501000, 200000 500000))";
@@ -304,16 +303,17 @@ TEST_P(ProvincesEditTest, RecomputesTheExtentAfterAGeometryEdit)
     EXPECT_DOUBLE_EQ(layer.GetExtent().xMax, 201000.0);
 }
 
-TEST_P(ProvincesEditTest, LeavesTheReferenceDataUntouched)
+TEST_P(VectorLayerEditTest, KeepsGeneratedFixturesIndependent)
 {
     Edit([](VectorLayer& layer)
     {
         layer.SetCellString(layer.FieldIndex(Provinces::kNameField), 0, "Changed");
     });
 
-    const std::unique_ptr<VectorDataset> original =
-        VectorDataset::Open(DataDirectory() / GetParam());
-    EXPECT_EQ(original->Layer(0).CellString(
-                  original->Layer(0).FieldIndex(Provinces::kNameField), 0),
+    const TempDirectory otherDir;
+    const std::unique_ptr<VectorDataset> other =
+        VectorDataset::Open(MakeProvincesDataset(otherDir.Path(), GetParam()));
+    EXPECT_EQ(other->Layer(0).CellString(
+                  other->Layer(0).FieldIndex(Provinces::kNameField), 0),
               "Noord");
 }

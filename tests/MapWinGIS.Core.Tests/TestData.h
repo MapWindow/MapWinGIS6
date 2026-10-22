@@ -4,8 +4,8 @@
  * @file TestData.h
  * @brief Declares shared vector test data and fixture helpers.
  *
- * Provides reference dataset metadata, temporary-directory support, and
- * declarations for copying fixtures and creating sample shapefiles.
+ * Provides generated dataset metadata, temporary-directory support, and
+ * helpers for creating Shapefile and GeoPackage fixtures.
  */
 #pragma once
 
@@ -14,8 +14,7 @@
 
 namespace mwg::test
 {
-    /// Describes tests/data/provinces.*, so tests can assert against it without
-    /// repeating literals. See tests/data/README.md.
+    /// Describes the projected polygon layer written by MakeProvincesDataset().
     struct Provinces
     {
         static constexpr int kFeatureCount = 4;
@@ -39,13 +38,10 @@ namespace mwg::test
         static constexpr const char* kNonAsciiName = "Frysl\u00e2n";
     };
 
-    /// Read-only root of tests/data.
-    const std::filesystem::path& DataDirectory();
-
-    /// Copies a dataset out of tests/data so a test can modify it, and returns
-    /// the copied main file. For shapefiles every sidecar comes along.
-    std::filesystem::path CopyDataset(const std::filesystem::path& destination,
-                                      const std::string& fileName);
+    /// Writes four polygons with all five field types, null values, and UTF-8
+    /// names. fileName must have a .shp or .gpkg extension.
+    std::filesystem::path MakeProvincesDataset(const std::filesystem::path& directory,
+                                               const std::string& fileName);
 
     /// Describes the sample layer that MakeSampleShapefile() writes, so tests
     /// can assert against it without repeating literals.

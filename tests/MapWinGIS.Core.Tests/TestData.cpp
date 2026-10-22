@@ -4,8 +4,8 @@
  * @file TestData.cpp
  * @brief Implements shared vector test fixture helpers.
  *
- * Locates and copies committed datasets, manages temporary directories, and
- * creates sample polygon shapefiles for the core tests.
+ * Manages temporary directories and creates polygon datasets with attributes,
+ * null values, and projections for the core tests.
  */
 #include "TestData.h"
 
@@ -47,60 +47,87 @@ namespace mwg::test
         std::filesystem::remove_all(_path, ignored);
     }
 
-    const std::filesystem::path& DataDirectory()
+    std::filesystem::path MakeProvincesDataset(const std::filesystem::path& directory,
+                                               const std::string& fileName)
     {
-        static const std::filesystem::path directory = [] {
-#ifdef MWG_TEST_DATA_DIR
-            std::filesystem::path configured(MWG_TEST_DATA_DIR);
-            if (std::filesystem::is_directory(configured)) return configured;
-#endif
-            // Fallback for a relocated binary: walk up looking for tests/data.
-            std::filesystem::path dir = std::filesystem::current_path();
-            for (int i = 0; i < 8; ++i)
-            {
-                if (std::filesystem::is_directory(dir / "tests" / "data"))
-                    return dir / "tests" / "data";
-                if (!dir.has_parent_path() || dir.parent_path() == dir) break;
-                dir = dir.parent_path();
-            }
-            throw std::runtime_error("tests/data was not found");
-        }();
-        return directory;
-    }
+        GdalEnvironment::Initialize();
 
-    std::filesystem::path CopyDataset(const std::filesystem::path& destination,
-                                      const std::string& fileName)
-    {
-        const std::filesystem::path source = DataDirectory() / fileName;
-        if (!std::filesystem::exists(source))
-            throw std::runtime_error("Test data is missing: " + source.string());
+        const std::filesystem::path path = directory / fileName;
+        const bool shapefile = path.extension() == ".shp";
+        if (!shapefile && path.extension() != ".gpkg")
+            throw std::invalid_argument("Test dataset must have a .shp or .gpkg extension");
 
-        std::filesystem::create_directories(destination);
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName(
+            shapefile ? "ESRI Shapefile" : "GPKG");
+        if (driver == nullptr) throw std::runtime_error("Test dataset driver is not available");
 
-        static constexpr const char* kShapefileParts[] = {".shp", ".shx", ".dbf", ".prj",
-                                                          ".cpg", ".sbn", ".sbx", ".qix"};
+        GDALDatasetUniquePtr dataset(
+            driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+        if (!dataset) throw std::runtime_error("Cannot create " + ToUtf8(path));
 
-        auto copy = [&destination](const std::filesystem::path& file)
+        OGRSpatialReference srs;
+        if (srs.importFromEPSG(Provinces::kEpsg) != OGRERR_NONE)
+            throw std::runtime_error("Cannot create test projection");
+
+        const char* options[] = {"ENCODING=UTF-8", nullptr};
+        OGRLayer* layer = dataset->CreateLayer(Provinces::kLayerName, &srs, wkbPolygon,
+                                               shapefile ? options : nullptr);
+        if (layer == nullptr) throw std::runtime_error("Cannot create layer");
+
+        OGRFieldDefn idField(Provinces::kIdField, OFTInteger);
+        OGRFieldDefn nameField(Provinces::kNameField, OFTString);
+        nameField.SetWidth(32);
+        OGRFieldDefn areaField(Provinces::kAreaField, OFTReal);
+        areaField.SetWidth(18);
+        areaField.SetPrecision(4);
+        OGRFieldDefn surveyedField(Provinces::kSurveyedField, OFTDate);
+        OGRFieldDefn activeField(Provinces::kActiveField, OFTInteger);
+        activeField.SetSubType(OFSTBoolean);
+
+        if (layer->CreateField(&idField) != OGRERR_NONE ||
+            layer->CreateField(&nameField) != OGRERR_NONE ||
+            layer->CreateField(&areaField) != OGRERR_NONE ||
+            layer->CreateField(&surveyedField) != OGRERR_NONE ||
+            layer->CreateField(&activeField) != OGRERR_NONE)
         {
-            std::filesystem::copy_file(file, destination / file.filename(),
-                                       std::filesystem::copy_options::overwrite_existing);
-        };
-
-        if (source.extension() == ".shp")
-        {
-            for (const char* extension : kShapefileParts)
-            {
-                std::filesystem::path part = source;
-                part.replace_extension(extension);
-                if (std::filesystem::exists(part)) copy(part);
-            }
-        }
-        else
-        {
-            copy(source);
+            throw std::runtime_error("Cannot create fields");
         }
 
-        return destination / source.filename();
+        static constexpr const char* kNames[] = {"Noord", "Oost", Provinces::kNonAsciiName};
+        static constexpr int kDates[][3] = {{2020, 1, 15}, {2021, 6, 30}, {2022, 11, 1}};
+
+        for (int i = 0; i < Provinces::kFeatureCount; ++i)
+        {
+            OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
+            feature->SetField(Provinces::kIdField, i + 1);
+            if (i != Provinces::kNullFeature)
+            {
+                feature->SetField(Provinces::kNameField, kNames[i]);
+                feature->SetField(Provinces::kSurveyedField,
+                                  kDates[i][0], kDates[i][1], kDates[i][2]);
+            }
+            feature->SetField(Provinces::kAreaField, 1.0);
+            feature->SetField(Provinces::kActiveField, i == 2 ? 0 : 1);
+
+            const double x = Provinces::kMinX + 1000.0 * i;
+            OGRLinearRing ring;
+            ring.addPoint(x, Provinces::kMinY);
+            ring.addPoint(x + 1000.0, Provinces::kMinY);
+            ring.addPoint(x + 1000.0, Provinces::kMaxY);
+            ring.addPoint(x, Provinces::kMaxY);
+            ring.closeRings();
+
+            OGRPolygon polygon;
+            polygon.addRing(&ring);
+            if (feature->SetGeometry(&polygon) != OGRERR_NONE ||
+                layer->CreateFeature(feature.get()) != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot write feature " + std::to_string(i));
+            }
+        }
+
+        dataset.reset();
+        return path;
     }
 
     std::filesystem::path MakeSampleShapefile(const std::filesystem::path& directory,

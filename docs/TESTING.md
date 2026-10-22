@@ -4,8 +4,8 @@
   default through `MwgVcpkgFeatures`).
 - Test project: `tests/MapWinGIS.Core.Tests`, built with the solution.
 - Shared fixtures and helpers live in `TestData.h/.cpp` (`TempDirectory`,
-  `MakeSampleShapefile`, `SampleLayer` constants). Extend these instead of
-  writing per-file fixture code.
+  `MakeSampleShapefile`, `MakeProvincesDataset`, and layer constants). Extend
+  these instead of writing per-file fixture code.
 
 ## Running
 
@@ -20,7 +20,7 @@ up automatically).
 ## Conventions
 
 - One test file per area under test (`VectorDatasetTests.cpp`,
-  `GdalEnvironmentTests.cpp`).
+  `VectorLayerTests.cpp`, `GdalEnvironmentTests.cpp`).
 - Fixture classes go in an anonymous namespace, derive from `testing::Test`
   and use `protected:` `SetUp()`; member naming follows production rules
   (`_camelCase`).
@@ -38,4 +38,7 @@ up automatically).
   error cases.
 - Test data is generated at runtime inside a `TempDirectory`; do not commit
   shapefiles or databases to the repository.
+- `MakeProvincesDataset` creates Shapefile and GeoPackage fixtures for layer
+  tests. Each has four polygons in EPSG:28992, all five field types, null
+  values, and UTF-8 names. Tests edit their own generated datasets.
 - Wrap expected GDAL noise in `GdalEnvironment::QuietScope`.
