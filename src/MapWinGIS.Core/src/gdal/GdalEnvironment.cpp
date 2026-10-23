@@ -9,6 +9,7 @@
  */
 #include "mapwingis/gdal/GdalEnvironment.h"
 
+#include <atomic>
 #include <mutex>
 
 #include <cpl_conv.h>
@@ -22,6 +23,7 @@
 #include <windows.h>
 
 #include "internal/Utf8.h"
+#include "mapwingis/gdal/GdalRuntime.h"
 
 namespace mwg
 {
@@ -30,7 +32,7 @@ namespace mwg
     namespace
     {
         std::once_flag g_initFlag;
-        bool g_initialized = false;
+        std::atomic_bool g_initialized{false};
 
         std::mutex g_logHandlerMutex;
         LogHandler g_logHandler;
@@ -80,8 +82,9 @@ namespace mwg
                 OSRSetPROJSearchPaths(paths);
             }
 
-            GDALAllRegister();
-            g_initialized = true;
+            const GdalInitializer initializer;
+            (void)initializer;
+            g_initialized.store(true, std::memory_order_release);
         }
 
         GDALDriverH FindDriver(const std::string& name, const unsigned int kind)
@@ -124,7 +127,7 @@ namespace mwg
 
     bool GdalEnvironment::IsInitialized() noexcept
     {
-        return g_initialized;
+        return g_initialized.load(std::memory_order_acquire);
     }
 
     void GdalEnvironment::SetLogHandler(LogHandler handler)
