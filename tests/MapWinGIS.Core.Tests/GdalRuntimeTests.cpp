@@ -12,8 +12,10 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include <cpl_conv.h>
 #include <cpl_error.h>
 #include <gdal_priv.h>
 
@@ -25,6 +27,12 @@ using namespace mwg;
 
 namespace
 {
+    std::string ToUtf8(const std::filesystem::path& path)
+    {
+        const std::u8string utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
     using DatasetPtr = std::unique_ptr<GDALDataset, decltype([](GDALDataset* dataset)
     {
         if (dataset != nullptr)
@@ -80,6 +88,40 @@ TEST(GdalRuntime, ScopedConfigurationClearsPreviouslyUnsetOption)
     EXPECT_EQ(CPLGetConfigOption("MWG_TEST_SCOPED_CONFIG_UNSET", nullptr), nullptr);
 }
 
+TEST(GdalRuntime, ScopedConfigurationRestoresGlobalValueWithoutChangingThreadLocalValue)
+{
+    constexpr char optionName[] = "MWG_TEST_SCOPED_CONFIG_THREAD_LOCAL";
+    CPLSetConfigOption(optionName, "before");
+    CPLSetThreadLocalConfigOption(optionName, "local");
+
+    {
+        const ScopedGdalConfigOption option(optionName, "during");
+        EXPECT_STREQ(CPLGetConfigOption(optionName, nullptr), "local");
+
+        std::string valueOnOtherThread;
+        std::thread worker([&valueOnOtherThread, &optionName]
+        {
+            const char* value = CPLGetConfigOption(optionName, nullptr);
+            valueOnOtherThread = value != nullptr ? value : "";
+        });
+        worker.join();
+        EXPECT_EQ(valueOnOtherThread, "during");
+    }
+
+    EXPECT_STREQ(CPLGetConfigOption(optionName, nullptr), "local");
+    std::string restoredGlobalValue;
+    std::thread worker([&restoredGlobalValue, &optionName]
+    {
+        const char* value = CPLGetConfigOption(optionName, nullptr);
+        restoredGlobalValue = value != nullptr ? value : "";
+    });
+    worker.join();
+    EXPECT_EQ(restoredGlobalValue, "before");
+
+    CPLSetThreadLocalConfigOption(optionName, nullptr);
+    CPLSetConfigOption(optionName, nullptr);
+}
+
 TEST(GdalRuntime, RejectsEmptyConfigurationName)
 {
     EXPECT_THROW(GdalConfig::ClearOption(""), std::invalid_argument);
@@ -117,7 +159,7 @@ TEST(GdalRuntime, ReportsProgressFromStartToCompletion)
         return true;
     });
 
-    const std::string outputPath = (directory.Path() / "progress.tif").string();
+    const std::string outputPath = ToUtf8(directory.Path() / "progress.tif");
     DatasetPtr output(outputDriver->CreateCopy(
         outputPath.c_str(), source.get(), 0, nullptr, adapter.Function(), adapter.UserData()));
 
@@ -144,7 +186,7 @@ TEST(GdalRuntime, CancelsCopyWhenTokenIsRequested)
     GdalProgressAdapter adapter({}, &cancellation);
     cancellation.Cancel();
 
-    const std::string outputPath = (directory.Path() / "cancelled.tif").string();
+    const std::string outputPath = ToUtf8(directory.Path() / "cancelled.tif");
     DatasetPtr output(outputDriver->CreateCopy(
         outputPath.c_str(), source.get(), 0, nullptr, adapter.Function(), adapter.UserData()));
 
@@ -164,7 +206,7 @@ TEST(GdalRuntime, ProgressCallbackCancellationStopsOperation)
     ASSERT_NE(outputDriver, nullptr);
 
     GdalProgressAdapter adapter([](double, std::string_view) { return false; });
-    const std::string outputPath = (directory.Path() / "callback-cancelled.tif").string();
+    const std::string outputPath = ToUtf8(directory.Path() / "callback-cancelled.tif");
     DatasetPtr output(outputDriver->CreateCopy(
         outputPath.c_str(), source.get(), 0, nullptr, adapter.Function(), adapter.UserData()));
 

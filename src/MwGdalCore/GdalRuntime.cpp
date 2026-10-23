@@ -15,6 +15,7 @@
 
 #include <cpl_conv.h>
 #include <cpl_error.h>
+#include <cpl_string.h>
 #include <gdal.h>
 
 namespace mwg
@@ -27,6 +28,15 @@ namespace mwg
         {
             if (name.empty() || name.find('\0') != std::string_view::npos)
                 throw std::invalid_argument("GDAL configuration option name must be non-empty and contain no null bytes.");
+        }
+
+        std::optional<std::string> GetGlobalConfigOption(const std::string& name)
+        {
+            using ConfigOptionsPtr = std::unique_ptr<char*, void(*)(char**)>;
+            ConfigOptionsPtr configOptions(CPLGetConfigOptions(), &CSLDestroy);
+            if (const char* value = CSLFetchNameValue(configOptions.get(), name.c_str()))
+                return value;
+            return std::nullopt;
         }
     }
 
@@ -84,8 +94,7 @@ namespace mwg
         : _name(name)
     {
         ValidateOptionName(name);
-        if (const char* previousValue = CPLGetConfigOption(_name.c_str(), nullptr))
-            _previousValue = previousValue;
+        _previousValue = GetGlobalConfigOption(_name);
         GdalConfig::SetOption(_name, value);
     }
 
