@@ -203,6 +203,9 @@ namespace mwg
         {
             if (_featureIdsValid) return;
 
+            // Keep expected diagnostics suppressed for the entire scan, not
+            // just while SetIgnoredFields is configured.
+            const GdalEnvironment::QuietScope quiet;
             const IgnoreAllButIds ignoreScope(*_layer, _fields);
 
             _featureIds.clear();
@@ -230,7 +233,6 @@ namespace mwg
                 ignored.push_back("OGR_GEOMETRY");
                 ignored.push_back(nullptr);
 
-                const GdalEnvironment::QuietScope quiet;
                 _applied = _layer.SetIgnoredFields(ignored.data()) == OGRERR_NONE;
             }
 
