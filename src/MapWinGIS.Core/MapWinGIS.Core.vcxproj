@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{2B6A9A3B-0C5E-4E6E-9E31-3E8F5A2D1C01}</ProjectGuid>
+    <RootNamespace>MapWinGISCore</RootNamespace>
+    <ProjectName>MapWinGIS.Core</ProjectName>
+    <TargetName>MapWinGIS.Core</TargetName>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\include;$(MSBuildProjectDirectory)\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>MWG_CORE_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClInclude Include="include\mapwingis\core\Api.h" />
+    <ClInclude Include="include\mapwingis\core\Enums.h" />
+    <ClInclude Include="include\mapwingis\core\Error.h" />
+    <ClInclude Include="include\mapwingis\core\Extent.h" />
+    <ClInclude Include="include\mapwingis\gdal\GdalEnvironment.h" />
+    <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
+    <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
+    <ClInclude Include="src\internal\Utf8.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClCompile Include="src\gdal\GdalEnvironment.cpp" />
+    <ClCompile Include="src\vector\VectorDataset.cpp" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+</Project>

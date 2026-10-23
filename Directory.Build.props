@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+
+  <!--
+    Repository-wide settings. Imported by Microsoft.Cpp.Default.props, so
+    everything set here is visible before Microsoft.Cpp.props runs and can
+    therefore control the toolset and the Windows SDK.
+  -->
+
+  <PropertyGroup Label="Repository">
+    <MwgRepoRoot>$(MSBuildThisFileDirectory)</MwgRepoRoot>
+    <MwgVersion>6.0.0</MwgVersion>
+  </PropertyGroup>
+
+  <!-- Toolset and SDK -->
+  <PropertyGroup Label="Toolchain">
+    <PlatformToolset Condition="'$(PlatformToolset)' == ''">v145</PlatformToolset>
+    <!-- Pinned for reproducibility. Override with /p:MwgWindowsSdk=10.0 to use
+         whatever is newest on the machine (useful on CI images). -->
+    <MwgWindowsSdk Condition="'$(MwgWindowsSdk)' == ''">10.0.28000.0</MwgWindowsSdk>
+    <WindowsTargetPlatformVersion>$(MwgWindowsSdk)</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <!-- Output layout -->
+  <PropertyGroup Label="Output">
+    <OutDir>$(MwgRepoRoot)bin\$(Configuration)\$(Platform)\</OutDir>
+    <IntDir>$(MwgRepoRoot)obj\$(MSBuildProjectName)\$(Configuration)\$(Platform)\</IntDir>
+  </PropertyGroup>
+
+  <!-- vcpkg -->
+  <PropertyGroup Label="Vcpkg">
+    <!-- Resolution order matches build\scripts\bootstrap-vcpkg.ps1. -->
+    <MwgVcpkgRoot Condition="'$(MwgVcpkgRoot)' == '' And '$(MWG_VCPKG_ROOT)' != ''">$(MWG_VCPKG_ROOT)</MwgVcpkgRoot>
+    <MwgVcpkgRoot Condition="'$(MwgVcpkgRoot)' == '' And Exists('$(MwgRepoRoot)..\vcpkg\.vcpkg-root')">$(MwgRepoRoot)..\vcpkg</MwgVcpkgRoot>
+    <MwgVcpkgRoot Condition="'$(MwgVcpkgRoot)' == '' And '$(VCPKG_ROOT)' != ''">$(VCPKG_ROOT)</MwgVcpkgRoot>
+
+    <VcpkgRoot>$(MwgVcpkgRoot)</VcpkgRoot>
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <VcpkgManifestInstall>true</VcpkgManifestInstall>
+    <VcpkgManifestRoot>$(MwgRepoRoot)</VcpkgManifestRoot>
+    <VcpkgInstalledDir>$(MwgRepoRoot)vcpkg_installed\</VcpkgInstalledDir>
+    <VcpkgUseStatic>false</VcpkgUseStatic>
+    <VcpkgAutoLink>true</VcpkgAutoLink>
+    <VcpkgApplocalDeps>true</VcpkgApplocalDeps>
+
+    <VcpkgTriplet Condition="'$(Platform)' == 'x64'">x64-windows-v145</VcpkgTriplet>
+    <VcpkgTriplet Condition="'$(Platform)' == 'Win32'">x86-windows-v145</VcpkgTriplet>
+    <VcpkgHostTriplet>x64-windows-v145</VcpkgHostTriplet>
+
+    <!-- Manifest features. "full-drivers" is what release packages build. -->
+    <MwgVcpkgFeatures Condition="'$(MwgVcpkgFeatures)' == ''">tests</MwgVcpkgFeatures>
+    <VcpkgAdditionalInstallOptions>--overlay-triplets=$(MwgRepoRoot)build\triplets --x-feature=$(MwgVcpkgFeatures.Replace(';',' --x-feature='))</VcpkgAdditionalInstallOptions>
+  </PropertyGroup>
+
+  <PropertyGroup Label="VcpkgPaths">
+    <MwgVcpkgTripletDir>$(VcpkgInstalledDir)$(VcpkgTriplet)\</MwgVcpkgTripletDir>
+    <MwgVcpkgShareDir Condition="'$(Configuration)' == 'Debug'">$(MwgVcpkgTripletDir)share\</MwgVcpkgShareDir>
+    <MwgVcpkgShareDir Condition="'$(MwgVcpkgShareDir)' == ''">$(MwgVcpkgTripletDir)share\</MwgVcpkgShareDir>
+  </PropertyGroup>
+
+  <Import Project="$(MwgRepoRoot)build\props\MapWinGIS.Cpp.props" />
+
+  <Import Project="$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.props"
+          Condition="Exists('$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.props')" />
+
+</Project>

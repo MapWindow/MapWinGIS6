@@ -1,0 +1,54 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
+  "name": "mapwingis6",
+  "version": "6.0.0",
+  "description": "MapWinGIS 6 mapping engine",
+  "homepage": "https://github.com/MapWindow/MapWinGIS6",
+  "license": "MPL-2.0",
+  "supports": "windows & !uwp",
+  "dependencies": [
+    {
+      "name": "gdal",
+      "default-features": false,
+      "features": [
+        "recommended-features",
+        "gif",
+        "iconv",
+        "libxml2",
+        "lzma",
+        "openjpeg",
+        "openssl",
+        "pcre2",
+        "webp",
+        "zstd"
+      ]
+    },
+    "geos"
+  ],
+  "default-features": [],
+  "features": {
+    "full-drivers": {
+      "description": "Driver set used for release packages: adds HDF5, NetCDF, KML, SpatiaLite and PostgreSQL support to GDAL. Slow to build.",
+      "dependencies": [
+        {
+          "name": "gdal",
+          "default-features": false,
+          "features": [
+            "hdf5",
+            "libkml",
+            "libspatialite",
+            "netcdf",
+            "postgresql"
+          ]
+        }
+      ]
+    },
+    "tests": {
+      "description": "Build the C++ unit tests",
+      "dependencies": [
+        "gtest"
+      ]
+    }
+  },
+  "builtin-baseline": "a42757564758c60651ebc616d9b000b7b91249ef"
+}

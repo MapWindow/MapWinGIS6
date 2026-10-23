@@ -1,0 +1,65 @@
+name: build
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, Win32]
+        configuration: [Debug, Release]
+
+    env:
+      VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+      # The runner image does not ship SDK 10.0.28000 yet.
+      MWG_WINDOWS_SDK: '10.0'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Export GitHub Actions cache variables
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: ./build/scripts/bootstrap-vcpkg.ps1
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build
+        shell: pwsh
+        run: |
+          msbuild MapWinGIS6.slnx `
+            -p:Configuration=${{ matrix.configuration }} `
+            -p:Platform=${{ matrix.platform }} `
+            -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
+            -m -v:m
+
+      - name: Test
+        shell: pwsh
+        run: |
+          $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/MapWinGIS.Core.Tests.exe"
+          & $exe --gtest_output="xml:testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testresults-${{ matrix.platform }}-${{ matrix.configuration }}
+          path: testresults-*.xml
+
+      - name: Upload binaries
+        if: matrix.configuration == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MapWinGIS.Core-${{ matrix.platform }}
+          path: bin/Release/${{ matrix.platform }}/

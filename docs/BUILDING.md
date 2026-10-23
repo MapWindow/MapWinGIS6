@@ -1,0 +1,123 @@
+# Building MapWinGIS6
+
+## Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Visual Studio 2026 | 18.10 or later | Workload **Desktop development with C++** |
+| MSVC toolset | v145 (14.51 or later) | Installed with the workload |
+| Windows SDK | 10.0.28000.0 | Override with `/p:MwgWindowsSdk=10.0` to use the newest installed instead |
+| Git | any recent version | Needed to clone vcpkg |
+| Disk space | about 15 GB | vcpkg sources, build trees and binaries |
+
+The ActiveX layer is not part of the solution yet. When it arrives it will also
+need the **C++ MFC** and **C++ ATL** components.
+
+## First build
+
+```powershell
+# 1. Get vcpkg. Clones into ..\vcpkg next to this repository by default.
+pwsh -File build\scripts\bootstrap-vcpkg.ps1
+
+# 2. Build. The first build compiles GDAL and its dependencies from source and
+#    takes a while; later builds reuse the vcpkg binary cache.
+msbuild MapWinGIS6.slnx -p:Configuration=Debug -p:Platform=x64 -m
+```
+
+Or just open `MapWinGIS6.slnx` in Visual Studio after step 1 and build.
+
+### Where vcpkg is found
+
+`Directory.Build.props` and `bootstrap-vcpkg.ps1` look in this order:
+
+1. `/p:MwgVcpkgRoot=<path>` on the MSBuild command line
+2. the `MWG_VCPKG_ROOT` environment variable
+3. `..\vcpkg` next to the repository
+4. the `VCPKG_ROOT` environment variable
+
+## Configurations and platforms
+
+| | |
+|---|---|
+| Configurations | `Debug` (`/MDd`, `_DEBUG`), `Release` (`/MD`, `/O2`) |
+| Platforms | `x64`, `Win32` |
+| Triplets | `x64-windows-v145`, `x86-windows-v145` (in `build/triplets`, pinned to v145) |
+| Output | `bin\<Configuration>\<Platform>\` |
+| Intermediates | `obj\<Project>\<Configuration>\<Platform>\` |
+
+Nothing is written outside the repository and no environment variables are
+changed. The build does not register anything with COM.
+
+## Dependencies
+
+All dependencies come from vcpkg; see `vcpkg.json`. There is no manual SDK
+download and no `support\` folder.
+
+Manifest features:
+
+| Feature | Contents | When |
+|---|---|---|
+| (default) | GDAL with the recommended drivers plus the small permissive codecs | Everyday development |
+| `tests` | GoogleTest | Enabled by default through `MwgVcpkgFeatures` |
+| `full-drivers` | Adds HDF5, NetCDF, KML, SpatiaLite and PostgreSQL to GDAL | Release packages. Much slower to build |
+
+```powershell
+msbuild MapWinGIS6.slnx -p:Platform=x64 -p:Configuration=Release -p:MwgVcpkgFeatures="tests;full-drivers"
+```
+
+### Runtime data
+
+vcpkg installs `gdal-data` and `proj.db` under `vcpkg_installed\<triplet>\share`.
+A target in `Directory.Build.targets` copies them into the output folder as
+`gdal-data\` and `proj\`, and `GdalEnvironment` points GDAL and PROJ at them.
+No `GDAL_DATA` or `PROJ_LIB` environment variable is needed or set.
+
+### Binary cache
+
+vcpkg caches built packages in `%LOCALAPPDATA%\vcpkg\archives` by default, so a
+rebuild or a second platform is fast. To share a cache across machines, set
+`VCPKG_BINARY_SOURCES`, for example:
+
+```powershell
+$env:VCPKG_BINARY_SOURCES = 'clear;files,\\server\share\vcpkg-cache,readwrite'
+```
+
+## Running the tests
+
+```powershell
+bin\Debug\x64\MapWinGIS.Core.Tests.exe
+```
+
+Or use Test Explorer in Visual Studio, which picks up the GoogleTest adapter
+automatically.
+
+For CI, write a JUnit-style report:
+
+```powershell
+bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml
+```
+
+## Extra build switches
+
+| Property | Default | Effect |
+|---|---|---|
+| `MwgWindowsSdk` | `10.0.28000.0` | Windows SDK version. `10.0` means "newest installed" |
+| `MwgVcpkgRoot` | resolved (see above) | vcpkg location |
+| `MwgVcpkgFeatures` | `tests` | Semicolon-separated manifest features |
+| `MwgEnableAsan` | `false` | Adds `/fsanitize=address` |
+| `MwgDeployRuntimeData` | `true` | Copies `gdal-data` and `proj` to the output folder |
+
+## Troubleshooting
+
+**`Invalid triplet: x64-windows-v145`**
+vcpkg was run without the overlay triplets. Build through MSBuild, or pass
+`--overlay-triplets=build\triplets` when calling vcpkg directly.
+
+**`gdal-data is missing`, reported by a test**
+The dependencies are not installed yet, or `MwgDeployRuntimeData` was turned
+off. Rebuild after running the bootstrap script.
+
+**vcpkg picks the wrong compiler**
+The triplets pin `VCPKG_PLATFORM_TOOLSET v145`. If an older Visual Studio is
+still selected, check that the VS 2026 C++ workload is installed and delete
+`vcpkg_installed\` before rebuilding.
