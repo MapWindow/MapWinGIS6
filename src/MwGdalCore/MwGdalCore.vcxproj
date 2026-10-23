@@ -41,7 +41,7 @@
 
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\MapWinGIS.Core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\MapWinGIS.Core\include;..\MapWinGIS.Core\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MWG_CORE_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
@@ -49,11 +49,13 @@
   <ItemGroup>
     <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalRuntime.h" />
     <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalAlgorithmRunner.h" />
+    <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalTypedOptions.h" />
   </ItemGroup>
 
   <ItemGroup>
     <ClCompile Include="GdalRuntime.cpp" />
     <ClCompile Include="GdalAlgorithmRunner.cpp" />
+    <ClCompile Include="GdalTypedOptions.cpp" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

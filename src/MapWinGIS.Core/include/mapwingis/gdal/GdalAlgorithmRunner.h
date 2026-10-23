@@ -57,8 +57,14 @@ namespace mwg
         [[nodiscard]] bool SetArgument(std::string_view name, double value);
         /// Sets a list of real-valued algorithm argument values.
         [[nodiscard]] bool SetArgument(std::string_view name, const std::vector<double>& value);
+        /// Sets a list of integer-valued algorithm argument values.
+        [[nodiscard]] bool SetArgument(std::string_view name, const std::vector<int>& value);
         /// Sets a list of string-valued algorithm argument values.
         [[nodiscard]] bool SetArgument(std::string_view name, const std::vector<std::string>& value);
+
+        /// Validates configured values using the instantiated GDAL algorithm's
+        /// argument metadata and constraints.
+        [[nodiscard]] bool ValidateArguments();
 
         /// Parses GDAL-style command-line flags for this algorithm.
         [[nodiscard]] bool ParseCommandLineArgs(const std::vector<std::string>& args);
