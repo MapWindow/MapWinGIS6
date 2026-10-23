@@ -45,7 +45,7 @@
       <PreprocessorDefinitions>MWG_CORE_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalOptions>/WHOLEARCHIVE:$(OutDir)MwGdalCore.lib %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/WHOLEARCHIVE:"$(OutDir)MwGdalCore.lib" %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
 

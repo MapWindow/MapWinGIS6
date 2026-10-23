@@ -21,7 +21,7 @@ class GDALDataset;
 
 namespace mwg
 {
-    /// Closes a dataset returned by GdalAlgorithmRunner.
+    /// Releases a dataset reference returned by GdalAlgorithmRunner.
     struct MWG_CORE_API GdalDatasetDeleter
     {
         void operator()(GDALDataset* dataset) const noexcept;

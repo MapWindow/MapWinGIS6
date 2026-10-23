@@ -95,7 +95,7 @@ namespace mwg
     void GdalDatasetDeleter::operator()(GDALDataset* dataset) const noexcept
     {
         if (dataset != nullptr)
-            GDALClose(dataset);
+            GDALReleaseDataset(dataset);
     }
 
     GdalAlgorithmRunner::GdalAlgorithmRunner(const std::string_view algorithmPath)
@@ -273,6 +273,12 @@ namespace mwg
 
         if (_impl->algorithm == nullptr || !_impl->configurationValid)
             return false;
+
+        if (cancellationToken != nullptr && cancellationToken->IsCancellationRequested())
+        {
+            AddError(_impl->errors, "GDAL algorithm execution was cancelled.");
+            return false;
+        }
 
         GdalProgressAdapter adapter(std::move(progress), cancellationToken);
         GdalErrorScope scope;

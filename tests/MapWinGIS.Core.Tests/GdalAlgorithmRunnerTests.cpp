@@ -136,6 +136,27 @@ namespace
         }
     };
 
+    class InvocationTrackingAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static constexpr const char* kName = "mwg-test-invocation-tracking";
+        static int runCount;
+
+        InvocationTrackingAlgorithm()
+            : GDALAlgorithm(kName, "Test algorithm invocation tracking", "")
+        {
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            ++runCount;
+            return true;
+        }
+    };
+
+    int InvocationTrackingAlgorithm::runCount = 0;
+
     void RegisterTestAlgorithms()
     {
         static std::once_flag registrationFlag;
@@ -148,6 +169,8 @@ namespace
                                       [] { return std::make_unique<FinalizeFailureAlgorithm>(); });
             registry.DeclareAlgorithm({"mwg-test", "progress"},
                                       [] { return std::make_unique<ProgressAlgorithm>(); });
+            registry.DeclareAlgorithm({"mwg-test", "invocation-tracking"},
+                                      [] { return std::make_unique<InvocationTrackingAlgorithm>(); });
         });
     }
 
@@ -256,6 +279,22 @@ TEST(GdalAlgorithmRunner, ReportsProgressAndCancellation)
     EXPECT_FALSE(cancelled.Run({}, &cancellation));
     ASSERT_FALSE(cancelled.Errors().empty());
     EXPECT_NE(cancelled.Errors().back().message.find("cancelled"), std::string::npos);
+}
+
+TEST(GdalAlgorithmRunner, RejectsPreCancelledRunBeforeInvokingAlgorithm)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    InvocationTrackingAlgorithm::runCount = 0;
+
+    GdalAlgorithmRunner runner("mwg-test invocation-tracking");
+    GdalCancellationToken cancellation;
+    cancellation.Cancel();
+
+    EXPECT_FALSE(runner.Run({}, &cancellation));
+    EXPECT_EQ(InvocationTrackingAlgorithm::runCount, 0);
+    ASSERT_FALSE(runner.Errors().empty());
+    EXPECT_NE(runner.Errors().back().message.find("cancelled"), std::string::npos);
 }
 
 TEST(GdalAlgorithmRunner, ConvertsGeoTiffEquivalentlyFromTypedAndCommandLineArguments)
