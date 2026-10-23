@@ -5,6 +5,7 @@
   </Configurations>
   <Folder Name="/src/">
     <Project Path="src/MapWinGIS.Core/MapWinGIS.Core.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c01" />
+    <Project Path="src/MwGdalCore/MwGdalCore.vcxproj" Id="5d2b77f3-53b2-4d95-99dd-b2a15772f5e8" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MapWinGIS.Core.Tests/MapWinGIS.Core.Tests.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c02" />

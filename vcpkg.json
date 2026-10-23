@@ -9,6 +9,7 @@
   "dependencies": [
     {
       "name": "gdal",
+      "version>=": "3.12.4",
       "default-features": false,
       "features": [
         "recommended-features",

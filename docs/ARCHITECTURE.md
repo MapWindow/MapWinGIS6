@@ -14,6 +14,8 @@ Everything that can be tested must be testable through the core alone.
 
 ## Module design
 
+- `MwGdalCore` is a native static library linked into `MapWinGIS.Core.dll`.
+  It contains GDAL execution support and has no COM, ATL or MFC dependency.
 - Public API lives in `src/MapWinGIS.Core/include/mapwingis/<area>/`, grouped
   by area (`core`, `gdal`, `vector`, ...). All of it is in namespace `mwg`.
 - Implementation lives in `src/MapWinGIS.Core/src/<area>/`, mirroring the
@@ -47,9 +49,16 @@ expect.
 
 ## GDAL lifecycle
 
-- Everything that touches GDAL goes through
-  `mapwingis/gdal/GdalEnvironment.h`. `GdalEnvironment::Initialize()` is
-  idempotent and thread-safe; call it before any GDAL use.
+- Call `GdalEnvironment::Initialize()` before normal GDAL use. It is
+  idempotent and thread-safe, configures deployed runtime data and delegates
+  one-time driver registration to `GdalInitializer`.
+- `GdalInitializer` registers drivers once and leaves GDAL's process-wide
+  driver manager alive until process exit. Use `ScopedGdalConfigOption` for
+  temporary process-wide configuration and `GdalErrorScope` to capture
+  diagnostics from an operation on the current thread.
+- `GdalProgressAdapter` maps GDAL progress callbacks to C++ callbacks and
+  checks a thread-safe `GdalCancellationToken`. Re-throw callback exceptions
+  with `RethrowCallbackException()` after GDAL returns.
 - GDAL and PROJ data (`gdal-data`, `proj.db`) are deployed next to
   `MapWinGIS.Core.dll` by the build (`Directory.Build.targets`,
   `MwgDeployRuntimeData`). Code must point GDAL/PROJ at those locations via
@@ -59,6 +68,8 @@ expect.
 - Observe GDAL errors through the thread-local `LastErrorMessage()` /
   `SetLogHandler()`. Never write to stderr and never show message boxes from
   the core.
+- The supported GDAL version and dependency pin are documented in
+  `docs/gdal-version.md`.
 
 ## Threading
 
