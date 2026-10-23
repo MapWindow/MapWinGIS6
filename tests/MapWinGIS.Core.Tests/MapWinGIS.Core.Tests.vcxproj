@@ -53,6 +53,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ClCompile Include="GdalAlgorithmRunnerTests.cpp" />
     <ClCompile Include="GdalEnvironmentTests.cpp" />
     <ClCompile Include="GdalRuntimeTests.cpp" />
     <ClCompile Include="Main.cpp" />
