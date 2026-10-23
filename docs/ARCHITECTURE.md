@@ -11,11 +11,16 @@ MapWinGIS6 splits the monolithic MapWinGIS 5 control into two layers:
    and convert core exceptions into MapWinGIS error codes.
 
 Everything that can be tested must be testable through the core alone.
+Until the ActiveX wrapper exists, generic GDAL algorithms are exposed through
+the native `MapWinGIS.Core.dll` API; the COM façade is not yet available.
 
 ## Module design
 
 - `MwGdalCore` is a native static library linked into `MapWinGIS.Core.dll`.
-  It contains GDAL execution support and has no COM, ATL or MFC dependency.
+  It contains GDAL execution support, including `GdalAlgorithmRunner`, and
+  has no COM, ATL or MFC dependency. The runner configures algorithms through
+  GDAL's registry, returns structured diagnostics, and transfers dataset
+  ownership with `GdalDatasetPtr`.
 - Public API lives in `src/MapWinGIS.Core/include/mapwingis/<area>/`, grouped
   by area (`core`, `gdal`, `vector`, ...). All of it is in namespace `mwg`.
 - Implementation lives in `src/MapWinGIS.Core/src/<area>/`, mirroring the
@@ -24,7 +29,8 @@ Everything that can be tested must be testable through the core alone.
 - Public classes use the PImpl idiom: a private `Impl` class held in a
   `std::unique_ptr<Impl> _impl`, constructed via
   `explicit X(std::unique_ptr<Impl>)`. Public headers stay free of
-  third-party includes — GDAL/OGR types never appear in public headers.
+  third-party includes. Public API may forward-declare a GDAL type when needed
+  to transfer ownership without exposing GDAL headers.
   Copying is disabled; there is no inheritance in public APIs.
 - Exported classes and functions are marked `MWG_CORE_API`
   (`mapwingis/core/Api.h`).

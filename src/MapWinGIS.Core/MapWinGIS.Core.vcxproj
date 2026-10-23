@@ -44,6 +44,9 @@
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\include;$(MSBuildProjectDirectory)\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MWG_CORE_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <Link>
+      <AdditionalOptions>/WHOLEARCHIVE:"$(OutDir)MwGdalCore.lib" %(AdditionalOptions)</AdditionalOptions>
+    </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
@@ -53,6 +56,7 @@
     <ClInclude Include="include\mapwingis\core\Extent.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalEnvironment.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalRuntime.h" />
+    <ClInclude Include="include\mapwingis\gdal\GdalAlgorithmRunner.h" />
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
     <ClInclude Include="src\internal\Utf8.h" />
