@@ -21,12 +21,13 @@ up automatically).
 
 - One test file per area under test (`VectorDatasetTests.cpp`,
   `VectorLayerTests.cpp`, `GdalEnvironmentTests.cpp`).
-- Fixture classes go in an anonymous namespace, derive from `testing::Test`
-  and use `protected:` `SetUp()`; member naming follows production rules
-  (`_camelCase`).
+- Fixture classes go in an anonymous namespace and derive from `testing::Test`
+  or `testing::TestWithParam<T>` for parameterized cases. Use `protected:`
+  `SetUp()` and production member naming (`_camelCase`).
 - Test names are PascalCase behavior statements:
   `ReportsTheDriverAndPath`, `RejectsOutOfRangeFieldIndexes`. Use `TEST_F`
-  with fixtures; plain `TEST` for one-off cases.
+  with fixtures, `TEST_P` with parameterized fixtures, and plain `TEST` for
+  one-off cases. Register parameter values with `INSTANTIATE_TEST_SUITE_P`.
 - Prefer `EXPECT_*`; use `ASSERT_*` only when continuing would crash (e.g.
   before dereferencing).
 - Cast `[[nodiscard]]` returns to `(void)` inside `EXPECT_THROW`.

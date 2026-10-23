@@ -12,10 +12,12 @@
 #include <algorithm>
 #include <limits>
 
+#include "mapwingis/core/Api.h"
+
 namespace mwg
 {
     /// Axis-aligned bounding box. Default-constructed instances are empty.
-    struct Extent
+    struct MWG_CORE_API Extent
     {
         double xMin = std::numeric_limits<double>::quiet_NaN();
         double yMin = std::numeric_limits<double>::quiet_NaN();

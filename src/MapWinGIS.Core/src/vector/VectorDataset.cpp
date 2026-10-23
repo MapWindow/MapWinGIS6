@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cctype>
 #include <optional>
+#include <utility>
 
 #include <cpl_conv.h>
 #include <gdal_priv.h>
@@ -120,22 +121,32 @@ namespace mwg
             }
         }
 
-        /// Borrowed pointer, valid until the next call. Null when the index is
-        /// out of range.
+        /// Borrowed pointer, valid until the next call. Throws when the index is
+        /// out of range or the feature cannot be read.
         ///
         /// Callers read several fields of the same feature in a row, so the most
         /// recently used feature is kept. Without it, reading five attributes of
         /// one feature would mean five reads from the file.
         [[nodiscard]] OGRFeature* GetFeature(const std::int64_t index) const
         {
-            if (index < 0) return nullptr;
+            if (index < 0)
+                throw CoreError("Feature index out of range: " + std::to_string(index));
             if (_cachedIndex == index && _cachedFeature) return _cachedFeature.get();
 
             EnsureFeatureIds();
-            if (static_cast<std::size_t>(index) >= _featureIds.size()) return nullptr;
+            if (std::cmp_greater_equal(index, _featureIds.size()))
+                throw CoreError("Feature index out of range: " + std::to_string(index));
 
+            GdalEnvironment::ClearLastError();
             _cachedFeature.reset(_layer->GetFeature(_featureIds[static_cast<std::size_t>(index)]));
             _cachedIndex = _cachedFeature ? index : -1;
+            if (!_cachedFeature)
+            {
+                std::string message = "Cannot read feature at index " + std::to_string(index);
+                if (const std::string detail = GdalEnvironment::LastErrorMessage(); !detail.empty())
+                    message += " (" + detail + ")";
+                throw CoreError(message);
+            }
             return _cachedFeature.get();
         }
 
@@ -144,10 +155,7 @@ namespace mwg
             if (!_writable)
                 throw CoreError("The dataset was not opened for update");
 
-            OGRFeature* feature = GetFeature(index);
-            if (feature == nullptr)
-                throw CoreError("Feature index out of range: " + std::to_string(index));
-            return feature;
+            return GetFeature(index);
         }
 
         void Save(OGRFeature* feature) const
@@ -322,14 +330,14 @@ namespace mwg
     {
         ValidateField(fieldIndex);
         const OGRFeature* feature = _impl->GetFeature(featureIndex);
-        return feature == nullptr || !feature->IsFieldSetAndNotNull(fieldIndex);
+        return !feature->IsFieldSetAndNotNull(fieldIndex);
     }
 
     std::string VectorLayer::CellString(const int fieldIndex, const std::int64_t featureIndex) const
     {
         ValidateField(fieldIndex);
         const OGRFeature* feature = _impl->GetFeature(featureIndex);
-        if (feature == nullptr || !feature->IsFieldSetAndNotNull(fieldIndex)) return {};
+        if (!feature->IsFieldSetAndNotNull(fieldIndex)) return {};
 
         const char* value = feature->GetFieldAsString(fieldIndex);
         return value != nullptr ? value : std::string{};
@@ -339,7 +347,7 @@ namespace mwg
     {
         ValidateField(fieldIndex);
         const OGRFeature* feature = _impl->GetFeature(featureIndex);
-        if (feature == nullptr || !feature->IsFieldSetAndNotNull(fieldIndex)) return std::nullopt;
+        if (!feature->IsFieldSetAndNotNull(fieldIndex)) return std::nullopt;
         return feature->GetFieldAsDouble(fieldIndex);
     }
 
@@ -347,14 +355,13 @@ namespace mwg
     {
         ValidateField(fieldIndex);
         const OGRFeature* feature = _impl->GetFeature(featureIndex);
-        if (feature == nullptr || !feature->IsFieldSetAndNotNull(fieldIndex)) return std::nullopt;
+        if (!feature->IsFieldSetAndNotNull(fieldIndex)) return std::nullopt;
         return static_cast<std::int64_t>(feature->GetFieldAsInteger64(fieldIndex));
     }
 
     std::string VectorLayer::GeometryWkt(const std::int64_t featureIndex) const
     {
         const OGRFeature* feature = _impl->GetFeature(featureIndex);
-        if (feature == nullptr) return {};
 
         const OGRGeometry* geometry = feature->GetGeometryRef();
         if (geometry == nullptr) return {};
@@ -374,7 +381,6 @@ namespace mwg
     Extent VectorLayer::GeometryExtent(const std::int64_t featureIndex) const
     {
         const OGRFeature* feature = _impl->GetFeature(featureIndex);
-        if (feature == nullptr) return {};
 
         const OGRGeometry* geometry = feature->GetGeometryRef();
         if (geometry == nullptr || geometry->IsEmpty()) return {};
@@ -515,7 +521,14 @@ namespace mwg
 
     void VectorDataset::Flush()
     {
-        _impl->_dataset->FlushCache(false);
+        GdalEnvironment::ClearLastError();
+        if (_impl->_dataset->FlushCache(false) != CE_None)
+        {
+            std::string message = "Cannot flush vector data source: " + ToUtf8(_impl->_path);
+            if (const char* detail = CPLGetLastErrorMsg(); detail != nullptr && *detail != '\0')
+                message += " (" + std::string(detail) + ")";
+            throw CoreError(message);
+        }
     }
 
     std::string VectorDataset::DriverName() const

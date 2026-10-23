@@ -66,12 +66,6 @@ namespace mwg
             if (handler) handler(ToLogLevel(severity), message);
         }
 
-        std::string ToUtf8(const std::filesystem::path& path)
-        {
-            const std::u8string utf8 = path.u8string();
-            return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
-        }
-
         void DoInitialize(const std::filesystem::path& gdalDataDir, const std::filesystem::path& projDataDir)
         {
             CPLSetErrorHandler(&ErrorHandler);

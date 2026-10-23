@@ -10,6 +10,9 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <limits>
+
 #include "TestData.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -140,6 +143,34 @@ TEST_P(VectorLayerTest, IsReadOnlyByDefault)
     EXPECT_THROW(_layer->SetCellString(name, 0, "Zuid"), CoreError);
 }
 
+TEST_P(VectorLayerTest, RejectsOutOfRangeFeatureIndexes)
+{
+    const int name = _layer->FieldIndex(Provinces::kNameField);
+    const int area = _layer->FieldIndex(Provinces::kAreaField);
+    const int id = _layer->FieldIndex(Provinces::kIdField);
+
+    const std::array<std::int64_t, 4> invalidIndexes{
+        -1, _layer->FeatureCount(), std::int64_t{1} << 32, std::numeric_limits<std::int64_t>::max()};
+    for (const std::int64_t index : invalidIndexes)
+    {
+        EXPECT_THROW((void)_layer->IsCellNull(name, index), CoreError);
+        EXPECT_THROW((void)_layer->CellString(name, index), CoreError);
+        EXPECT_THROW((void)_layer->CellDouble(area, index), CoreError);
+        EXPECT_THROW((void)_layer->CellInteger(id, index), CoreError);
+        EXPECT_THROW((void)_layer->GeometryWkt(index), CoreError);
+        EXPECT_THROW((void)_layer->GeometryExtent(index), CoreError);
+    }
+}
+
+TEST_P(VectorLayerTest, PreservesNullAttributeResults)
+{
+    const int name = _layer->FieldIndex(Provinces::kNameField);
+    EXPECT_TRUE(_layer->IsCellNull(name, Provinces::kNullFeature));
+    EXPECT_TRUE(_layer->CellString(name, Provinces::kNullFeature).empty());
+    EXPECT_FALSE(_layer->CellDouble(name, Provinces::kNullFeature).has_value());
+    EXPECT_FALSE(_layer->CellInteger(name, Provinces::kNullFeature).has_value());
+}
+
 // ------------------------------------------------------------------ editing
 
 namespace
@@ -213,6 +244,38 @@ TEST_P(VectorLayerEditTest, PersistsAttributeEdits)
 
     EXPECT_EQ(layer.FeatureCount(), Provinces::kFeatureCount);
     EXPECT_EQ(layer.CellString(layer.FieldIndex(Provinces::kNameField), 1), "Oost");
+}
+
+TEST_P(VectorLayerEditTest, FlushesPendingEdits)
+{
+    const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(_path, OpenMode::Update);
+    VectorLayer& layer = dataset->Layer(0);
+    layer.SetCellString(layer.FieldIndex(Provinces::kNameField), 0, "Flushed");
+    EXPECT_NO_THROW(dataset->Flush());
+
+    const std::unique_ptr<VectorDataset> reopened = Reopen();
+    EXPECT_EQ(reopened->Layer(0).CellString(
+                  reopened->Layer(0).FieldIndex(Provinces::kNameField), 0), "Flushed");
+}
+
+TEST_P(VectorLayerEditTest, RejectsOutOfRangeFeatureIndexes)
+{
+    Edit([](VectorLayer& layer)
+    {
+        const int name = layer.FieldIndex(Provinces::kNameField);
+        const int area = layer.FieldIndex(Provinces::kAreaField);
+        const int id = layer.FieldIndex(Provinces::kIdField);
+        const std::array<std::int64_t, 4> invalidIndexes{
+            -1, layer.FeatureCount(), std::int64_t{1} << 32, std::numeric_limits<std::int64_t>::max()};
+        for (const std::int64_t index : invalidIndexes)
+        {
+            EXPECT_THROW(layer.SetCellString(name, index, "Invalid"), CoreError);
+            EXPECT_THROW(layer.SetCellDouble(area, index, 1.0), CoreError);
+            EXPECT_THROW(layer.SetCellInteger(id, index, 1), CoreError);
+            EXPECT_THROW(layer.SetCellNull(name, index), CoreError);
+            EXPECT_THROW(layer.SetGeometryWkt(index, "POLYGON EMPTY"), CoreError);
+        }
+    });
 }
 
 TEST_P(VectorLayerEditTest, PersistsNonAsciiEdits)

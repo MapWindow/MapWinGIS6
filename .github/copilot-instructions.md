@@ -1,10 +1,21 @@
 # MapWinGIS Development Guidelines
 
+## Scope and authoritative guidance
+
+Follow [AGENTS.md](../AGENTS.md) and the detailed standards linked there.
+They take precedence over the general guidance below.
+
+`MapWinGIS.Core` is a C++20 DLL. It must not use COM, ATL, or MFC.
+The ActiveX wrapper is not implemented yet. COM/ActiveX guidance below
+applies only to that future wrapper and to preserving the MapWinGIS 5 contract.
+
 ## Project Context
 
-This repository contains the modernized MapWinGIS codebase.
+This repository contains the modernized MapWinGIS6 codebase.
 
-MapWinGIS is a long-lived C++ mapping library with a COM/ActiveX API and an established user base. Functionality is being migrated from the legacy MapWinGIS codebase incrementally, one component or piece of functionality at a time.
+MapWinGIS 5 is the legacy COM/ActiveX library and the behavior reference.
+Port its functionality incrementally as modern C++20. Do not transliterate
+the legacy implementation.
 
 When working in this repository, prioritize:
 
@@ -269,7 +280,8 @@ Do not claim that a behavior is required for backwards compatibility unless that
 
 Modernize code deliberately rather than mechanically.
 
-Prefer modern C++ practices where they are compatible with the project's architecture and supported toolchain.
+Use C++20 and follow the architecture and conventions in
+[docs/CODING-STANDARDS.md](../docs/CODING-STANDARDS.md).
 
 Examples include:
 

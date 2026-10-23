@@ -9,6 +9,9 @@
  */
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <thread>
+
 #include <cpl_error.h>
 
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -107,5 +110,27 @@ TEST(GdalEnvironment, QuietScopeRestoresTheHandler)
     EXPECT_EQ(seen, 1);
 
     GdalEnvironment::SetLogHandler({});
+    GdalEnvironment::ClearLastError();
+}
+
+TEST(GdalEnvironment, QuietScopeDoesNotSuppressOtherThreads)
+{
+    GdalEnvironment::Initialize();
+
+    std::atomic<int> seen{0};
+    GdalEnvironment::SetLogHandler([&seen](LogLevel, std::string_view) { ++seen; });
+
+    {
+        const GdalEnvironment::QuietScope quiet;
+        CPLError(CE_Warning, CPLE_AppDefined, "%s", "suppressed");
+        std::thread worker([]
+        {
+            CPLError(CE_Warning, CPLE_AppDefined, "%s", "reported on another thread");
+        });
+        worker.join();
+    }
+
+    GdalEnvironment::SetLogHandler({});
+    EXPECT_EQ(seen.load(), 1);
     GdalEnvironment::ClearLastError();
 }

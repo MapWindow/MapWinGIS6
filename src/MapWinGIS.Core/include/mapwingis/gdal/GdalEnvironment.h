@@ -18,7 +18,7 @@
 
 namespace mwg
 {
-    enum class LogLevel
+    enum class LogLevel : int
     {
         Debug,
         Warning,
@@ -46,29 +46,31 @@ namespace mwg
         static void Initialize(const std::filesystem::path& gdalDataDir,
                                const std::filesystem::path& projDataDir);
 
-        static bool IsInitialized() noexcept;
+        [[nodiscard]] static bool IsInitialized() noexcept;
 
         /// Installs a handler for GDAL diagnostics. Pass {} to remove it.
         static void SetLogHandler(LogHandler handler);
 
         /// Last GDAL error raised on the calling thread, or "" if there was none.
-        static std::string LastErrorMessage();
+        [[nodiscard]] static std::string LastErrorMessage();
         static void ClearLastError();
 
-        static std::string GdalVersion();
-        static std::string GeosVersion();
-        static std::string ProjVersion();
+        [[nodiscard]] static std::string GdalVersion();
+        [[nodiscard]] static std::string GeosVersion();
+        [[nodiscard]] static std::string ProjVersion();
 
-        static int RasterDriverCount();
-        static int VectorDriverCount();
-        static bool HasRasterDriver(const std::string& name);
-        static bool HasVectorDriver(const std::string& name);
+        [[nodiscard]] static int RasterDriverCount();
+        [[nodiscard]] static int VectorDriverCount();
+        [[nodiscard]] static bool HasRasterDriver(const std::string& name);
+        [[nodiscard]] static bool HasVectorDriver(const std::string& name);
 
         /// Directory the core DLL was loaded from. Runtime data lives here.
-        static std::filesystem::path ModuleDirectory();
+        [[nodiscard]] static std::filesystem::path ModuleDirectory();
 
-        /// Suppresses GDAL diagnostics for as long as it is alive. Always
-        /// restores the previous handler, including when an exception unwinds.
+        /// Suppresses GDAL diagnostics on the calling thread for its lifetime.
+        /// Uses GDAL's per-thread handler stack, so other threads are unaffected.
+        /// Construct and destroy on the same thread, in reverse construction
+        /// order. Restores the previous handler even when an exception unwinds.
         class MWG_CORE_API QuietScope
         {
         public:

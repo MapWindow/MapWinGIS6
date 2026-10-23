@@ -26,7 +26,7 @@ namespace mwg
 {
     class VectorDataset;
 
-    enum class OpenMode
+    enum class OpenMode : int
     {
         ReadOnly,
         Update,
@@ -43,6 +43,9 @@ namespace mwg
     ///
     /// The first indexed feature access costs one pass over the layer to map
     /// indexes onto feature ids. Later accesses are direct lookups.
+    /// All indexed feature access throws CoreError for an invalid index or a
+    /// feature that cannot be read. Null attributes and absent geometries
+    /// still return empty values.
     class MWG_CORE_API VectorLayer
     {
     public:
@@ -131,6 +134,7 @@ namespace mwg
 
         /// Writes pending changes to disk without closing. Closing the dataset
         /// does this as well.
+        /// \throws CoreError when GDAL cannot flush pending changes.
         void Flush();
 
         [[nodiscard]] int LayerCount() const;

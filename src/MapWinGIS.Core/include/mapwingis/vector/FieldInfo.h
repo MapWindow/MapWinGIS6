@@ -11,12 +11,13 @@
 
 #include <string>
 
+#include "mapwingis/core/Api.h"
 #include "mapwingis/core/Enums.h"
 
 namespace mwg
 {
     /// Definition of one attribute field.
-    struct FieldInfo
+    struct MWG_CORE_API FieldInfo
     {
         std::string name;
         FieldType type = FieldType::String;

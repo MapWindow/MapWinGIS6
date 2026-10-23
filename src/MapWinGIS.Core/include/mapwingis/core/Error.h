@@ -12,16 +12,20 @@
 #include <stdexcept>
 #include <string>
 
+#include "mapwingis/core/Api.h"
+
 namespace mwg
 {
     /// Thrown when a core operation fails.
     ///
     /// Exceptions cross the MapWinGIS.Core.dll boundary; see Api.h for why that
     /// is safe here. The ActiveX layer converts them into MapWinGIS error codes.
+    /// Export constructors individually because MSVC's std::runtime_error is
+    /// not a DLL-interface base class.
     class CoreError : public std::runtime_error
     {
     public:
-        explicit CoreError(const std::string& message)
+        MWG_CORE_API explicit CoreError(const std::string& message)
             : std::runtime_error(message)
         {
         }
@@ -31,7 +35,7 @@ namespace mwg
     class OpenFailed : public CoreError
     {
     public:
-        explicit OpenFailed(const std::string& message)
+        MWG_CORE_API explicit OpenFailed(const std::string& message)
             : CoreError(message)
         {
         }

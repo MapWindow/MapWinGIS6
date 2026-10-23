@@ -9,8 +9,11 @@
  */
 #include <gtest/gtest.h>
 
+#include <gdal_priv.h>
+
 #include "TestData.h"
 #include "mapwingis/core/Error.h"
+#include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 using namespace mwg;
@@ -18,6 +21,25 @@ using namespace mwg::test;
 
 namespace
 {
+    class FlushFailureDataset : public GDALDataset
+    {
+    public:
+        explicit FlushFailureDataset(const bool reportError)
+            : _reportError(reportError)
+        {
+        }
+
+        CPLErr FlushCache(bool) override
+        {
+            if (_reportError)
+                CPLError(CE_Failure, CPLE_FileIO, "%s", "Simulated flush failure");
+            return CE_Failure;
+        }
+
+    private:
+        bool _reportError;
+    };
+
     class VectorDatasetTest : public testing::Test
     {
     protected:
@@ -125,7 +147,7 @@ TEST_F(VectorDatasetTest, ExportsGeometryAsWkt)
     EXPECT_TRUE(wkt.starts_with("POLYGON")) << wkt;
     EXPECT_NE(wkt.find("0 0"), std::string::npos) << wkt;
 
-    EXPECT_EQ(_layer->GeometryWkt(SampleLayer::kFeatureCount), "");
+    EXPECT_THROW((void)_layer->GeometryWkt(SampleLayer::kFeatureCount), CoreError);
 }
 
 TEST_F(VectorDatasetTest, ReportsPerFeatureExtents)
@@ -160,4 +182,51 @@ TEST(VectorDataset, OpensNonAsciiPaths)
     const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(shp);
     ASSERT_EQ(dataset->LayerCount(), 1);
     EXPECT_EQ(dataset->Layer(0).FeatureCount(), SampleLayer::kFeatureCount);
+}
+
+TEST(VectorDataset, ReportsFlushFailures)
+{
+    GdalEnvironment::Initialize();
+    const auto deregister = [](GDALDriver* driver)
+    {
+        GetGDALDriverManager()->DeregisterDriver(driver);
+        delete driver;
+    };
+    const std::unique_ptr<GDALDriver, decltype(deregister)> driver{
+        std::make_unique<GDALDriver>().release(), deregister};
+    driver->SetDescription("MWGFlushFailure");
+    driver->SetMetadataItem(GDAL_DCAP_VECTOR, "YES");
+    driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
+    driver->pfnIdentify = [](GDALOpenInfo* info)
+    {
+        return std::string_view(info->pszFilename).starts_with("MWG_FLUSH_FAILURE:") ? TRUE : FALSE;
+    };
+    driver->pfnOpen = [](GDALOpenInfo* info) -> GDALDataset*
+    {
+        const std::string_view name(info->pszFilename);
+        if (!name.starts_with("MWG_FLUSH_FAILURE:")) return nullptr;
+        return std::make_unique<FlushFailureDataset>(name.ends_with("detail")).release();
+    };
+    GetGDALDriverManager()->RegisterDriver(driver.get());
+
+    const GdalEnvironment::QuietScope quiet;
+    for (const char* path : {"MWG_FLUSH_FAILURE:detail", "MWG_FLUSH_FAILURE:silent"})
+    {
+        const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+        CPLError(CE_Failure, CPLE_AppDefined, "%s", "Stale error");
+        try
+        {
+            dataset->Flush();
+            ADD_FAILURE() << "Flush did not report failure";
+        }
+        catch (const CoreError& error)
+        {
+            const std::string message(error.what());
+            EXPECT_NE(message.find("Cannot flush vector data source:"), std::string::npos) << message;
+            EXPECT_NE(message.find(path), std::string::npos) << message;
+            EXPECT_EQ(message.find("Stale error"), std::string::npos) << message;
+            if (std::string_view(path).ends_with("detail"))
+                EXPECT_NE(message.find("Simulated flush failure"), std::string::npos) << message;
+        }
+    }
 }
