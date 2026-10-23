@@ -222,6 +222,14 @@ namespace mwg
                                 _impl->configurationValid, name, value);
     }
 
+    bool GdalAlgorithmRunner::SetArgument(const std::string_view name, const std::vector<int>& value)
+    {
+        if (!CanConfigure(name))
+            return false;
+        return SetArgumentValue(_impl->algorithm.get(), _impl->errors,
+                                _impl->configurationValid, name, value);
+    }
+
     bool GdalAlgorithmRunner::SetArgument(const std::string_view name,
                                           const std::vector<std::string>& value)
     {
@@ -256,6 +264,30 @@ namespace mwg
         {
             AddFailureIfNoDiagnostic(_impl->errors, previousCount,
                                      "Could not parse GDAL algorithm command-line arguments.");
+            _impl->configurationValid = false;
+        }
+        return succeeded;
+    }
+
+    bool GdalAlgorithmRunner::ValidateArguments()
+    {
+        if (_impl->runAttempted)
+        {
+            AddError(_impl->errors, "GDAL algorithm arguments cannot be validated after Run().");
+            return false;
+        }
+        if (_impl->algorithm == nullptr || !_impl->configurationValid)
+            return false;
+
+        GdalErrorScope scope;
+        const std::size_t previousCount = _impl->errors.size();
+        const bool succeeded = _impl->algorithm->ValidateArguments();
+        AppendErrors(_impl->errors, scope);
+        scope.RethrowCaptureException();
+        if (!succeeded)
+        {
+            AddFailureIfNoDiagnostic(_impl->errors, previousCount,
+                                     "GDAL algorithm argument validation failed.");
             _impl->configurationValid = false;
         }
         return succeeded;
