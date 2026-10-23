@@ -5,35 +5,41 @@ on:
     branches: [main, development]
   pull_request:
 
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-2025
+
     strategy:
       fail-fast: false
-      matrix:
-        platform: [x64, Win32]
-        configuration: [Debug, Release]
+      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"include":[{"platform":"x64","configuration":"Debug"}]}') }}
 
     env:
-      VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
       # The runner image does not ship SDK 10.0.28000 yet.
       MWG_WINDOWS_SDK: '10.0'
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Export GitHub Actions cache variables
-        uses: actions/github-script@v7
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@v4
         with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+          path: vcpkg-binary-cache
+          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake', 'Directory.Build.props') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
 
       - name: Bootstrap vcpkg
         shell: pwsh
         run: ./build/scripts/bootstrap-vcpkg.ps1
 
-      - uses: microsoft/setup-msbuild@v2
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
 
       - name: Build
         shell: pwsh
@@ -49,13 +55,17 @@ jobs:
         run: |
           $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/MapWinGIS.Core.Tests.exe"
           & $exe --gtest_output="xml:testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: testresults-${{ matrix.platform }}-${{ matrix.configuration }}
-          path: testresults-*.xml
+          path: testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml
+          if-no-files-found: ignore
 
       - name: Upload binaries
         if: matrix.configuration == 'Release'
@@ -63,3 +73,4 @@ jobs:
         with:
           name: MapWinGIS.Core-${{ matrix.platform }}
           path: bin/Release/${{ matrix.platform }}/
+          if-no-files-found: error
