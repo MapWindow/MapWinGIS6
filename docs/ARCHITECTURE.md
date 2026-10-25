@@ -5,12 +5,16 @@
 MapWinGIS6 splits the monolithic MapWinGIS 5 control into two layers:
 
 1. **MapWinGIS.Core.dll** — the mapping engine, a plain C++ DLL. All logic
-   lives here. No COM, ATL or MFC anywhere in this layer.
-2. **MapWinGIS.ocx** — a thin ActiveX/COM wrapper (not started yet). Its only
-   jobs are to expose the v5 COM API, translate between COM and core types,
-   and convert core exceptions into MapWinGIS error codes.
+   for GIS behavior and backend-neutral rendering lives here. No COM, ATL,
+   MFC, windowing, or graphics API dependencies are allowed in this layer.
+2. **MapWinGIS.ocx** — an ActiveX/COM wrapper (not started yet). It exposes the
+   v5 COM API, translates between COM and core types, converts core exceptions
+   into MapWinGIS error codes, and integrates the core with the host control
+   surface and graphics backend.
 
-Everything that can be tested must be testable through the core alone.
+Core behavior must be testable through the core alone. OCX-specific
+host/rendering integration must also be testable as native components without
+COM activation; it must not contain GIS rules or core data ownership.
 Until the ActiveX wrapper exists, generic GDAL algorithms are exposed through
 the native `MapWinGIS.Core.dll` API; the COM façade is not yet available.
 
@@ -94,31 +98,31 @@ these responsibilities do not require separate DLLs.
 
 | Component | Responsibility | Must not depend on |
 |---|---|---|
-| `MapWinGIS.Core` | Own GIS data access and reusable map/layer state. Keep its public API independent of windowing, COM, and graphics APIs. | COM, ATL, MFC, OpenGL, OpenCL |
-| `MapWinGIS.ocx` | Own COM activation, host-facing control lifecycle, and translation between the external API and core operations. | Rendering-specific types in its public COM contract |
-| Rendering coordinator (initially internal to the OCX) | Turn the current map view into backend-neutral render input, select a backend, and coordinate drawing and recovery. | COM interface layout and backend-specific resource types outside the backend |
-| CPU backend | Provide the supported rendering path when GPU rendering is unavailable or disabled. | GPU or OpenCL availability |
-| OpenGL backend | Provide optional accelerated drawing and own its context and GPU resources. | Core GIS data ownership and public COM interfaces |
+| `MapWinGIS.Core` | Own GIS data, reusable map/layer state, backend-neutral render data, and the CPU rendering backend. Keep its public API independent of windowing, COM, and graphics APIs. | COM, ATL, MFC, windowing APIs, OpenGL, OpenCL |
+| `MapWinGIS.ocx` | Own COM activation, host-facing control lifecycle, and translation between the external API and core operations. Integrate core rendering with the host surface and selected backend. | GIS rules, core data ownership, rendering-specific types in its public COM contract |
+| Rendering coordinator (initially internal to the OCX) | Bind core render requests to the control's target; select a backend and coordinate host-specific drawing and recovery. Keep this native component independent of COM activation. | GIS rules, COM interface layout, backend-specific resource types outside the backend |
+| CPU backend (in Core) | Provide the supported rendering path when GPU rendering is unavailable or disabled. | GPU or OpenCL availability |
+| OpenGL backend (in the OCX) | Provide optional accelerated drawing and own its context and GPU resources. | Core GIS data ownership and public COM interfaces |
 | Future compute work | Host optional compute acceleration only for workloads justified by profiling. | OpenGL being installed or selected |
 
-The OCX is the initial composition root for control, rendering, and graphics
+The OCX is the initial composition root for control and host-specific graphics
 context lifetimes. The control owns its core-side map/session object; that
 object owns open dataset handles, and each `VectorDataset` owns its
-`VectorLayer` objects. A render operation borrows the necessary map inputs
-only for that operation. Backends must not retain pointers or references to
-dataset-owned objects after a draw. Core dataset and layer objects are not
-thread-safe, so the initial control must serialize their use. Backend-specific
-contexts, buffers, and other GPU resources belong to the OpenGL backend and
-are released when that backend or its control surface is destroyed. Resizing
-updates the render target and viewport without changing ownership of the map
-data.
+`VectorLayer` objects. Core creates backend-neutral render input from map
+state; the coordinator binds it to the current control target and backend.
+Backends must not retain pointers or references to dataset-owned objects after
+a draw. Core dataset and layer objects are not thread-safe, so the initial
+control must serialize their use. Backend-specific contexts, buffers, and
+other GPU resources belong to the OpenGL backend and are released when that
+backend or its control surface is destroyed. Resizing updates the render
+target and viewport without changing ownership of the map data.
 
-Rendering consumes backend-neutral input prepared from core data; it does not
-load datasets or implement GIS rules itself. The existing vector API exposes
-feature geometry as WKT, but the core does not yet provide a map scene or
-render-ready geometry. A later rendering slice must choose the smallest
-appropriate conversion path without adding graphics dependencies to the core
-or retaining `VectorLayer` internals in a backend.
+Rendering consumes backend-neutral input prepared from core data; neither the
+coordinator nor a backend loads datasets or implements GIS rules. The
+existing vector API exposes feature geometry as WKT, but the core does not yet
+provide a map scene or render-ready geometry. A later rendering slice must
+choose the smallest appropriate conversion path without adding graphics
+dependencies to the core or retaining `VectorLayer` internals in a backend.
 
 Backend choice is internal to the rendering coordinator and is observable
 through diagnostics, not through a graphics-specific COM API. A caller or
@@ -129,9 +133,10 @@ loses its context, release its resources, record the reason, and select the
 CPU backend. Switching backends must not discard map state. The CPU backend
 remains usable without a GPU, OpenGL, or OpenCL runtime.
 
-The boundary must be testable without a GPU: test backend selection and
-failure recovery with injected capabilities and initialization results, and
-test CPU drawing with deterministic input and output. OpenGL-specific
+Test core scene preparation and CPU drawing through the core with deterministic
+input and output. Test the native OCX coordinator without COM activation by
+injecting capabilities, render targets, and backend initialization results;
+verify backend selection and failure recovery there. OpenGL-specific
 integration checks may require a real context, but they must not be required
 for core or CPU-rendering tests.
 
