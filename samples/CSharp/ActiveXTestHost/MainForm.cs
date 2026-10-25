@@ -132,8 +132,8 @@ internal sealed class MainForm : Form
             RecordCheck("Activation and creation", CreateHostedControl);
             RecordCheck("Automation contract", () =>
             {
-                bool initialized = ReadCoreInitialized();
-                _statusLabel.Text = $"Active: {ProgId}; CoreInitialized={initialized}";
+                VerifyCoreInitialized("initial activation");
+                _statusLabel.Text = $"Active: {ProgId}; CoreInitialized=true";
             });
 
             RecordCheck("Resize", VerifyResize);
@@ -142,8 +142,8 @@ internal sealed class MainForm : Form
             RecordCheck("Recreation", CreateHostedControl);
             RecordCheck("Recreated automation contract", () =>
             {
-                bool initialized = ReadCoreInitialized();
-                _statusLabel.Text = $"Recreated: {ProgId}; CoreInitialized={initialized}";
+                VerifyCoreInitialized("recreated activation");
+                _statusLabel.Text = $"Recreated: {ProgId}; CoreInitialized=true";
             });
             await RecordCheckAsync("Recreated repaint", VerifyRepaintAsync);
             RecordCheck("Final dispose", VerifyDispose);
@@ -267,6 +267,15 @@ internal sealed class MainForm : Form
         dynamic automation = _host.AutomationObject ??
             throw new InvalidOperationException("The ActiveX automation object is unavailable.");
         return (bool)automation.CoreInitialized;
+    }
+
+    private void VerifyCoreInitialized(string activation)
+    {
+        if (!ReadCoreInitialized())
+        {
+            throw new InvalidOperationException(
+                $"The ActiveX control reported CoreInitialized=false after {activation}.");
+        }
     }
 
     private void VerifyResize()
