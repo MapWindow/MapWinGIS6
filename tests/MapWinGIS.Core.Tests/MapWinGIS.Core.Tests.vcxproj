@@ -57,6 +57,7 @@
     <ClCompile Include="GdalEnvironmentTests.cpp" />
     <ClCompile Include="GdalRuntimeTests.cpp" />
     <ClCompile Include="GdalTypedOptionsTests.cpp" />
+    <ClCompile Include="GdalUtilsTests.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="TestData.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
