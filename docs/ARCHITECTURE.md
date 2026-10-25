@@ -85,9 +85,70 @@ pattern is: one dataset object per thread, or serialized access.
 `GdalEnvironment` initialization is the exception — safe to call from
 anywhere.
 
+## ActiveX and rendering architecture
+
+This section records the design baseline for the future ActiveX control and
+rendering path. It describes intended boundaries, not implemented
+functionality. The first implementation should remain a small vertical slice;
+these responsibilities do not require separate DLLs.
+
+| Component | Responsibility | Must not depend on |
+|---|---|---|
+| `MapWinGIS.Core` | Own GIS data access and reusable map/layer state. Keep its public API independent of windowing, COM, and graphics APIs. | COM, ATL, MFC, OpenGL, OpenCL |
+| `MapWinGIS.ocx` | Own COM activation, host-facing control lifecycle, and translation between the external API and core operations. | Rendering-specific types in its public COM contract |
+| Rendering coordinator (initially internal to the OCX) | Turn the current map view into backend-neutral render input, select a backend, and coordinate drawing and recovery. | COM interface layout and backend-specific resource types outside the backend |
+| CPU backend | Provide the supported rendering path when GPU rendering is unavailable or disabled. | GPU or OpenCL availability |
+| OpenGL backend | Provide optional accelerated drawing and own its context and GPU resources. | Core GIS data ownership and public COM interfaces |
+| Future compute work | Host optional compute acceleration only for workloads justified by profiling. | OpenGL being installed or selected |
+
+The OCX is the initial composition root for control, rendering, and graphics
+context lifetimes. The control owns its core-side map/session object; that
+object owns open dataset handles, and each `VectorDataset` owns its
+`VectorLayer` objects. A render operation borrows the necessary map inputs
+only for that operation. Backends must not retain pointers or references to
+dataset-owned objects after a draw. Core dataset and layer objects are not
+thread-safe, so the initial control must serialize their use. Backend-specific
+contexts, buffers, and other GPU resources belong to the OpenGL backend and
+are released when that backend or its control surface is destroyed. Resizing
+updates the render target and viewport without changing ownership of the map
+data.
+
+Rendering consumes backend-neutral input prepared from core data; it does not
+load datasets or implement GIS rules itself. The existing vector API exposes
+feature geometry as WKT, but the core does not yet provide a map scene or
+render-ready geometry. A later rendering slice must choose the smallest
+appropriate conversion path without adding graphics dependencies to the core
+or retaining `VectorLayer` internals in a backend.
+
+Backend choice is internal to the rendering coordinator and is observable
+through diagnostics, not through a graphics-specific COM API. A caller or
+test can request CPU rendering; otherwise the coordinator may try OpenGL when
+the target supports it. It must use runtime capability and initialization
+results, not GPU vendor or presence alone. If OpenGL cannot initialize or
+loses its context, release its resources, record the reason, and select the
+CPU backend. Switching backends must not discard map state. The CPU backend
+remains usable without a GPU, OpenGL, or OpenCL runtime.
+
+The boundary must be testable without a GPU: test backend selection and
+failure recovery with injected capabilities and initialization results, and
+test CPU drawing with deterministic input and output. OpenGL-specific
+integration checks may require a real context, but they must not be required
+for core or CPU-rendering tests.
+
+At the COM boundary, preserve established MapWinGIS behavior where it is
+intentionally implemented, including the existing 0-based feature-index
+contract and error translation. Before implementing a legacy interface,
+inspect its type-library identifiers and signatures; retain identifiers only
+for compatible interfaces. Full legacy API parity, the historical MFC/ATL
+class hierarchy and rendering pipeline, and OpenCL integration are deferred.
+Document intentional compatibility gaps as the corresponding interfaces are
+introduced.
+
 ## Current state
 
 The tree is early: GDAL environment setup and vector reading/editing
 (`VectorDataset`, `VectorLayer`, backed by OGR) are the first slices. Areas
 still to be ported (map control, rendering, raster, tiles, ...) get new
-`<area>` folders under both `include/mapwingis/` and `src/`.
+`<area>` folders under both `include/mapwingis/` and `src/`. The ActiveX and
+rendering components described above are architectural plans, not implemented
+or verified capabilities.
