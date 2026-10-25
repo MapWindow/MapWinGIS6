@@ -1,0 +1,305 @@
+// SPDX-License-Identifier: MPL-2.0
+
+/**
+ * @file GdalUtilsTests.cpp
+ * @brief Tests legacy-named native GDAL compatibility operations.
+ *
+ * Covers raster utility options, vector conversion and reprojection, overview
+ * creation, clipping, and mapping GDAL diagnostics to the legacy error state.
+ */
+#include <gtest/gtest.h>
+
+#include <array>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include <gdal_priv.h>
+#include <ogrsf_frmts.h>
+
+#include "mapwingis/gdal/GdalAlgorithmRunner.h"
+#include "mapwingis/gdal/GdalEnvironment.h"
+#include "mapwingis/gdal/GdalUtils.h"
+#include "TestData.h"
+
+#pragma warning(push)
+#pragma warning(disable: 4996)
+
+using namespace mwg;
+
+namespace
+{
+    GdalDatasetPtr OpenDataset(const std::filesystem::path& path, const unsigned int flags)
+    {
+        const std::u8string pathUtf8 = path.u8string();
+        const std::string utf8(reinterpret_cast<const char*>(pathUtf8.data()), pathUtf8.size());
+        return GdalDatasetPtr(static_cast<GDALDataset*>(
+            GDALOpenEx(utf8.c_str(), flags, nullptr, nullptr, nullptr)));
+    }
+
+    std::filesystem::path MakeWgs84Shapefile(const std::filesystem::path& directory)
+    {
+        const std::filesystem::path path = directory / "wgs84.shp";
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("ESRI Shapefile");
+        if (driver == nullptr)
+            return {};
+
+        const std::u8string pathUtf8 = path.u8string();
+        const std::string utf8(reinterpret_cast<const char*>(pathUtf8.data()), pathUtf8.size());
+        GDALDataset* dataset = driver->Create(utf8.c_str(), 0, 0, 0, GDT_Unknown, nullptr);
+        if (dataset == nullptr)
+            return {};
+
+        OGRSpatialReference spatialReference;
+        if (spatialReference.importFromEPSG(4326) != OGRERR_NONE)
+        {
+            GDALClose(dataset);
+            return {};
+        }
+        spatialReference.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
+
+        OGRLayer* layer = dataset->CreateLayer("points", &spatialReference, wkbPoint, nullptr);
+        if (layer == nullptr)
+        {
+            GDALClose(dataset);
+            return {};
+        }
+
+        OGRFieldDefn idField("id", OFTInteger);
+        if (layer->CreateField(&idField) != OGRERR_NONE)
+        {
+            GDALClose(dataset);
+            return {};
+        }
+
+        OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
+        feature->SetField("id", 1);
+        OGRPoint point(5.1, 52.1);
+        feature->SetGeometry(&point);
+        if (layer->CreateFeature(feature.get()) != OGRERR_NONE)
+        {
+            GDALClose(dataset);
+            return {};
+        }
+
+        GDALClose(dataset);
+        return path;
+    }
+
+    std::filesystem::path MakeClipOverlay(const std::filesystem::path& directory)
+    {
+        const std::filesystem::path path = directory / "overlay.gpkg";
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+        if (driver == nullptr)
+            return {};
+
+        const std::u8string pathUtf8 = path.u8string();
+        const std::string utf8(reinterpret_cast<const char*>(pathUtf8.data()), pathUtf8.size());
+        GDALDataset* dataset = driver->Create(utf8.c_str(), 0, 0, 0, GDT_Unknown, nullptr);
+        if (dataset == nullptr)
+            return {};
+
+        OGRSpatialReference spatialReference;
+        if (spatialReference.importFromEPSG(28992) != OGRERR_NONE)
+        {
+            GDALClose(dataset);
+            return {};
+        }
+
+        OGRLayer* layer = dataset->CreateLayer("overlay", &spatialReference, wkbPolygon, nullptr);
+        if (layer == nullptr)
+        {
+            GDALClose(dataset);
+            return {};
+        }
+
+        OGRLinearRing ring;
+        ring.addPoint(100500, 400250);
+        ring.addPoint(101500, 400250);
+        ring.addPoint(101500, 400750);
+        ring.addPoint(100500, 400750);
+        ring.addPoint(100500, 400250);
+        OGRPolygon polygon;
+        polygon.addRing(&ring);
+
+        OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
+        feature->SetGeometry(&polygon);
+        if (layer->CreateFeature(feature.get()) != OGRERR_NONE)
+        {
+            GDALClose(dataset);
+            return {};
+        }
+
+        GDALClose(dataset);
+        return path;
+    }
+}
+
+TEST(GdalUtils, TranslatesRasterWithLegacyTypeResolutionResamplingAndWindowOptions)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input =
+        test::MakeRaster(directory.Path(), std::filesystem::path(u8"legacy-入力.tif"));
+    const std::filesystem::path output =
+        directory.Path() / std::filesystem::path(u8"legacy-出力.tif");
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.GdalRasterTranslate(
+        input, output,
+        {"-of", "GTiff", "-ot", "Float32", "-tr", "0.5", "0.5",
+         "-r", "bilinear", "-projwin", "0", "8", "12", "0"}))
+        << utils.DetailedErrorMsg();
+
+    GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_RASTER | GDAL_OF_READONLY);
+    ASSERT_NE(dataset, nullptr);
+    EXPECT_EQ(dataset->GetRasterXSize(), 24);
+    EXPECT_EQ(dataset->GetRasterYSize(), 16);
+    ASSERT_NE(dataset->GetRasterBand(1), nullptr);
+    EXPECT_EQ(dataset->GetRasterBand(1)->GetRasterDataType(), GDT_Float32);
+
+    std::array<double, 6> transform{};
+    ASSERT_EQ(dataset->GetGeoTransform(transform.data()), CE_None);
+    EXPECT_DOUBLE_EQ(transform[1], 0.5);
+    EXPECT_DOUBLE_EQ(transform[5], -0.5);
+    EXPECT_EQ(utils.LastErrorCode(), 0);
+}
+
+TEST(GdalUtils, WarpsRasterUsingLegacyOptions)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+    const std::filesystem::path output = directory.Path() / "warped.tif";
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.GdalRasterWarp(input, output, {"-t_srs", "EPSG:3857", "-r", "bilinear"}))
+        << utils.DetailedErrorMsg();
+
+    GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_RASTER | GDAL_OF_READONLY);
+    ASSERT_NE(dataset, nullptr);
+    ASSERT_NE(dataset->GetSpatialRef(), nullptr);
+    EXPECT_STREQ(dataset->GetSpatialRef()->GetAuthorityCode(nullptr), "3857");
+}
+
+TEST(GdalUtils, TranslatesVectorAndPreservesFeatures)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input =
+        test::MakeProvincesDataset(directory.Path(), "input.gpkg");
+    const std::filesystem::path output = directory.Path() / "converted.geojson";
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.GdalVectorTranslate(input, output, {"-f", "GeoJSON", "-nln", "converted"}))
+        << utils.DetailedErrorMsg();
+
+    GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_VECTOR | GDAL_OF_READONLY);
+    ASSERT_NE(dataset, nullptr);
+    ASSERT_EQ(dataset->GetLayerCount(), 1);
+    OGRLayer* layer = dataset->GetLayer(0);
+    ASSERT_NE(layer, nullptr);
+    EXPECT_STREQ(layer->GetName(), "converted");
+    EXPECT_EQ(layer->GetFeatureCount(), test::Provinces::kFeatureCount);
+}
+
+TEST(GdalUtils, ReprojectsWgs84ShapefileToEpsg28992)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = MakeWgs84Shapefile(directory.Path());
+    ASSERT_FALSE(input.empty());
+    const std::filesystem::path output = directory.Path() / "projected.gpkg";
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.GdalVectorReproject(input, output, 4326, 28992))
+        << utils.DetailedErrorMsg();
+
+    GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_VECTOR | GDAL_OF_READONLY);
+    ASSERT_NE(dataset, nullptr);
+    ASSERT_EQ(dataset->GetLayerCount(), 1);
+    OGRLayer* layer = dataset->GetLayer(0);
+    ASSERT_NE(layer, nullptr);
+    ASSERT_NE(layer->GetSpatialRef(), nullptr);
+    EXPECT_STREQ(layer->GetSpatialRef()->GetAuthorityCode(nullptr), "28992");
+    EXPECT_EQ(layer->GetFeatureCount(), 1);
+}
+
+TEST(GdalUtils, BuildsRasterOverviewsForSelectedBands)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.GdalBuildOverviews(input, "NEAREST", {2, 4}, {1}))
+        << utils.DetailedErrorMsg();
+
+    GdalDatasetPtr dataset = OpenDataset(input, GDAL_OF_RASTER | GDAL_OF_READONLY);
+    ASSERT_NE(dataset, nullptr);
+    ASSERT_NE(dataset->GetRasterBand(1), nullptr);
+    EXPECT_EQ(dataset->GetRasterBand(1)->GetOverviewCount(), 2);
+}
+
+TEST(GdalUtils, ClipsVectorFeaturesWithAnOverlayDataset)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input =
+        test::MakeProvincesDataset(directory.Path(), "input.gpkg");
+    const std::filesystem::path overlay = MakeClipOverlay(directory.Path());
+    ASSERT_FALSE(overlay.empty());
+    const std::filesystem::path output = directory.Path() / "clipped.gpkg";
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.ClipVectorWithVector(input, overlay, output))
+        << utils.DetailedErrorMsg();
+
+    GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_VECTOR | GDAL_OF_READONLY);
+    ASSERT_NE(dataset, nullptr);
+    ASSERT_EQ(dataset->GetLayerCount(), 1);
+    OGRLayer* layer = dataset->GetLayer(0);
+    ASSERT_NE(layer, nullptr);
+    EXPECT_EQ(layer->GetFeatureCount(), 2);
+}
+
+TEST(GdalUtils, MapsFailureDiagnosticsToLegacyErrorProperties)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    GdalUtils utils;
+
+    EXPECT_FALSE(utils.GdalRasterTranslate(
+        directory.Path() / "missing.tif", directory.Path() / "missing-output.tif", {}));
+    EXPECT_NE(utils.LastErrorCode(), 0);
+    EXPECT_FALSE(utils.ErrorMsg(utils.LastErrorCode()).empty());
+    EXPECT_FALSE(utils.DetailedErrorMsg().empty());
+    EXPECT_FALSE(utils.Errors().empty());
+
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+    EXPECT_TRUE(utils.GdalRasterTranslate(
+        input, directory.Path() / "valid-output.tif", {}))
+        << utils.DetailedErrorMsg();
+    EXPECT_EQ(utils.LastErrorCode(), 0);
+}
+
+TEST(GdalUtils, RejectsOptionStringsContainingNullBytes)
+{
+    GdalUtils utils;
+    std::string invalidOption = "option";
+    invalidOption.push_back('\0');
+    invalidOption += "truncated";
+
+    EXPECT_FALSE(utils.GdalRasterTranslate("input.tif", "output.tif", {invalidOption}));
+    EXPECT_NE(utils.LastErrorCode(), 0);
+    EXPECT_NE(utils.DetailedErrorMsg().find("null bytes"), std::string::npos);
+}
+
+#pragma warning(pop)

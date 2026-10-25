@@ -6,6 +6,8 @@ library in `MapWinGIS.odl`). It is the **reference implementation**: when
 re-creating a feature, its behavior is the specification. The goal is a
 modern rewrite, not a line-by-line translation.
 
+For GDAL-specific migration guidance, see [GDAL migration](gdal-migration.md).
+
 ## What "port" means here
 
 1. **Study the v5 behavior.** Read the v5 sources for the feature: what the
