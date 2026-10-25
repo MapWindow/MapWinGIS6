@@ -38,7 +38,7 @@ not transliterate its code.
 
 ```powershell
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
-msbuild MapWinGIS6.slnx -p:Configuration=Debug -p:Platform=x64 -m
+msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
 ```
 

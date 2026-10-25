@@ -11,6 +11,8 @@
 | Disk space | about 15 GB | vcpkg sources, build trees and binaries |
 
 The ActiveX project uses ATL and statically links it. MFC is not required.
+The C# test host requires the .NET 10 SDK and the Windows Forms desktop
+runtime.
 
 ## First build
 
@@ -20,7 +22,7 @@ pwsh -File build\scripts\bootstrap-vcpkg.ps1
 
 # 2. Build. The first build compiles GDAL and its dependencies from source and
 #    takes a while; later builds reuse the vcpkg binary cache.
-msbuild MapWinGIS6.slnx -p:Configuration=Debug -p:Platform=x64 -m
+msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 ```
 
 Or just open `MapWinGIS6.slnx` in Visual Studio after step 1 and build.
@@ -42,6 +44,37 @@ CLSID or either ProgID is already registered, so it cannot overwrite another
 build's registration. It also embeds the control in an ATL OLE host, resizes
 the host, repaints, and recreates the control. Use 32-bit PowerShell with
 `-Platform Win32`.
+
+### C# ActiveX test host
+
+Build the solution for the same architecture as the native control. The host
+targets x64 explicitly by default and also defines a Win32/x86 configuration
+for use when the native Win32 build is available. Its executable is placed
+beside the OCX, core DLL, native dependencies, and GDAL/PROJ runtime data.
+The host uses `AxHost` directly with the control's CLSID and an embedded
+application manifest that declares the OCX class and type library. This
+registration-free COM activation needs no generated interop assembly,
+wrapper-generation tool, `regsvr32`, or registry changes.
+
+Run the launcher from an interactive Windows desktop session. It starts the
+host beside the native files; the manifest activates that OCX for the host
+process only. The launcher does not read, add, overwrite, or remove COM
+registration.
+
+```powershell
+# Visible manual host. Close the window to release the control.
+pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration Debug -Platform x64
+
+# Visible automated hosting checks; writes JSON and returns a nonzero code on failure.
+pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration Debug -Platform x64 -Automated
+```
+
+For Win32, use `-Platform Win32` after building the matching native binaries.
+Automated checks need Windows and an interactive desktop session. The host
+currently verifies background painting, activation, resize, repaint, and
+control recreation. It can activate the OCX without a registration and does
+not display map data. The separate native activation script above retains its
+own temporary registration-based test.
 
 ### Where vcpkg is found
 
@@ -79,7 +112,7 @@ Manifest features:
 | `full-drivers` | Adds HDF5, NetCDF, KML, SpatiaLite and PostgreSQL to GDAL | Release packages. Much slower to build |
 
 ```powershell
-msbuild MapWinGIS6.slnx -p:Platform=x64 -p:Configuration=Release -p:MwgVcpkgFeatures="tests;full-drivers"
+msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release -p:MwgVcpkgFeatures="tests;full-drivers"
 ```
 
 ### Runtime data
