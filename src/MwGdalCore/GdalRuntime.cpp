@@ -69,19 +69,28 @@ namespace mwg
                 return;
 
             auto& scope = *static_cast<Impl*>(userData);
-            if (scope.captureException)
-                return;
             try
             {
                 scope.errors.push_back(
                     {static_cast<GdalErrorClass>(errorClass), static_cast<int>(errorCode), message});
+            }
+            catch (...)
+            {
+                if (!scope.captureException)
+                    scope.captureException = std::current_exception();
+                return;
+            }
+
+            try
+            {
                 const LogLevel level = errorClass >= CE_Failure ? LogLevel::Error
                     : errorClass == CE_Warning ? LogLevel::Warning : LogLevel::Debug;
                 GdalEnvironment::ReportDiagnostic(level, message);
             }
             catch (...)
             {
-                scope.captureException = std::current_exception();
+                if (!scope.captureException)
+                    scope.captureException = std::current_exception();
             }
         }
     };

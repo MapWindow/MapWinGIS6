@@ -225,16 +225,25 @@ namespace mwg
             options.like = overlayFilename;
             options.overwrite = true;
 
-            const bool configured = ConfigureGdalAlgorithm(runner, options.ToArgs());
-            const bool succeeded = configured && runner.Run(std::move(progress), cancellationToken);
-            errors = runner.Errors();
-            cancelled = runner.Result().WasCancelled();
-            if (!succeeded && !HasFailure(errors))
+            try
             {
-                errors.push_back({GdalErrorClass::Failure, kCompatibilityErrorCode,
-                                  "The GDAL vector clipping operation failed."});
+                const bool configured = ConfigureGdalAlgorithm(runner, options.ToArgs());
+                const bool succeeded = configured && runner.Run(std::move(progress), cancellationToken);
+                errors = runner.Errors();
+                cancelled = runner.Result().WasCancelled();
+                if (!succeeded && !HasFailure(errors))
+                {
+                    errors.push_back({GdalErrorClass::Failure, kCompatibilityErrorCode,
+                                      "The GDAL vector clipping operation failed."});
+                }
+                return succeeded;
             }
-            return succeeded;
+            catch (...)
+            {
+                errors = runner.Errors();
+                cancelled = runner.Result().WasCancelled();
+                throw;
+            }
         }
 
         bool RunVectorTranslateOperation(

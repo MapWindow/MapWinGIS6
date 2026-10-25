@@ -369,6 +369,28 @@ TEST(GdalUtils, MapsFailureDiagnosticsToLegacyErrorProperties)
     EXPECT_EQ(utils.LastErrorCode(), 0);
 }
 
+TEST(GdalUtils, PreservesClipDiagnosticsWhenLoggerThrows)
+{
+    GdalEnvironment::Initialize();
+    test::TempDirectory directory;
+    GdalUtils utils;
+    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    {
+        throw std::runtime_error("logger failure");
+    });
+
+    EXPECT_THROW((void)utils.ClipVectorWithVector(
+        directory.Path() / "missing-subject.gpkg",
+        directory.Path() / "missing-overlay.gpkg",
+        directory.Path() / "clipped.gpkg"), std::runtime_error);
+    GdalEnvironment::SetLogHandler({});
+
+    const GdalOperationResult result = utils.Result();
+    EXPECT_FALSE(result.Succeeded());
+    EXPECT_FALSE(result.AllErrors().empty());
+    EXPECT_NE(result.LastErrorCode(), 0);
+}
+
 TEST(GdalUtils, RejectsOptionStringsContainingNullBytes)
 {
     GdalUtils utils;
