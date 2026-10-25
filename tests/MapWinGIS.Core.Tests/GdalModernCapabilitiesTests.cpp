@@ -21,6 +21,7 @@
 #include <cpl_error.h>
 #include <gdal_priv.h>
 #include <gdalalgorithm.h>
+#include <vrtdataset.h>
 
 #include "TestData.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -86,6 +87,52 @@ namespace
 
     GDALDataset* PipelineOutputAlgorithm::outputDataset = nullptr;
 
+    class PipelineVrtAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static constexpr const char* kName = "mwg-test-pipeline-vrt";
+
+        PipelineVrtAlgorithm()
+            : GDALAlgorithm(kName, "Test pipeline VRT source ownership", "")
+        {
+            AddInputDatasetArg(&_input);
+            AddArg("output", 0, "Output dataset", &_output);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            GDALDataset* source = _input.GetDatasetRef();
+            if (source == nullptr || source->GetRasterCount() == 0)
+            {
+                ReportError(CE_Failure, CPLE_AppDefined, "%s",
+                            "pipeline VRT test input is unavailable");
+                return false;
+            }
+
+            auto vrt = VRTDataset::CreateVRTDataset(
+                "", source->GetRasterXSize(), source->GetRasterYSize(), 1,
+                source->GetRasterBand(1)->GetRasterDataType(), nullptr);
+            auto* band = vrt != nullptr
+                             ? dynamic_cast<VRTSourcedRasterBand*>(vrt->GetRasterBand(1))
+                             : nullptr;
+            if (band == nullptr ||
+                band->AddSimpleSource(source->GetRasterBand(1)) != CE_None)
+            {
+                ReportError(CE_Failure, CPLE_AppDefined, "%s",
+                            "could not create pipeline VRT source");
+                return false;
+            }
+
+            _output.Set(std::unique_ptr<GDALDataset>(vrt.release()));
+            return true;
+        }
+
+    private:
+        GDALArgDatasetValue _input;
+        GDALArgDatasetValue _output;
+    };
+
     class PipelineFailureAlgorithm final : public GDALAlgorithm
     {
     public:
@@ -147,6 +194,9 @@ namespace
             registry.DeclareAlgorithm(
                 {"mwg-test", "pipeline-output"},
                 [] { return std::make_unique<PipelineOutputAlgorithm>(); });
+            registry.DeclareAlgorithm(
+                {"mwg-test", "pipeline-vrt"},
+                [] { return std::make_unique<PipelineVrtAlgorithm>(); });
             registry.DeclareAlgorithm(
                 {"mwg-test", "pipeline-failure"},
                 [] { return std::make_unique<PipelineFailureAlgorithm>(); });
@@ -227,6 +277,31 @@ TEST(GdalModernCapabilities, PassesMemoryDatasetsBetweenPipelineSteps)
     EXPECT_EQ(std::distance(std::filesystem::directory_iterator(directory.Path()),
                             std::filesystem::directory_iterator{}),
               1);
+}
+
+TEST(GdalModernCapabilities, KeepsIntermediateDatasetsAliveForPipelineVrtOutput)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    RegisterPipelineTestAlgorithms();
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+
+    GdalPipelineStep first;
+    first.algorithmPath = {"raster", "convert"};
+    first.arguments = {
+        {"input", ToUtf8(input)},
+        {"output-format", std::string("MEM")},
+    };
+    GdalPipelineStep second;
+    second.algorithmPath = {"mwg-test", "pipeline-vrt"};
+
+    const GdalOperationResult result = RunPipeline({first, second});
+    ASSERT_TRUE(result.Succeeded()) << LastError(result);
+    ASSERT_NE(result.outputDataset, nullptr);
+    ASSERT_EQ(result.retainedDatasets.size(), 1u);
+    EXPECT_EQ(ReadPixel(result.outputDataset.get(), 0, 0), 42);
+    EXPECT_EQ(ReadPixel(result.retainedDatasets.front().get(), 0, 0), 42);
 }
 
 TEST(GdalModernCapabilities, RunnerRetainsDatasetArgumentUntilRunAndReleasesIt)

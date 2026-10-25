@@ -25,6 +25,7 @@ namespace mwg
     {
         bool succeeded = false;
         GdalDatasetPtr outputDataset;
+        std::vector<GdalDatasetPtr> retainedDatasets;
         std::vector<GdalError> errors;
 
         /// Indicates whether the operation completed successfully.
@@ -76,7 +77,9 @@ namespace mwg
      * Every step must produce an output dataset. Set output-format to "MEM" or
      * "VRT" for in-memory processing where the algorithm and driver support it.
      * Progress is reported over the full pipeline. A failed step stops execution
-     * and returns its diagnostics; all intermediate datasets are released.
+     * and returns its diagnostics; intermediate datasets are released on failure.
+     * On success, the result retains intermediate datasets so dependent outputs
+     * remain valid. Keep the result alive while using its output dataset.
      *
      * Not thread-safe for shared GDAL datasets or runners. Allocation failures
      * propagate.

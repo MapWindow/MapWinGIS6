@@ -90,6 +90,8 @@ namespace mwg
         }
 
         GdalDatasetPtr previousOutput;
+        std::vector<GdalDatasetPtr> retainedDatasets;
+        retainedDatasets.reserve(steps.size() - 1);
         for (std::size_t index = 0; index < steps.size(); ++index)
         {
             const GdalPipelineStep& step = steps[index];
@@ -127,18 +129,23 @@ namespace mwg
                 return result;
             }
 
-            previousOutput = runner.TakeOutputDataset();
-            if (previousOutput == nullptr)
+            GdalDatasetPtr output = runner.TakeOutputDataset();
+            if (output == nullptr)
             {
                 AppendRunnerErrors(result, runner);
                 AddOperationError(result,
                                   "A GDAL pipeline step completed without an output dataset.");
                 return result;
             }
+
+            if (previousOutput != nullptr)
+                retainedDatasets.push_back(std::move(previousOutput));
+            previousOutput = std::move(output);
             AppendRunnerErrors(result, runner);
         }
 
         result.outputDataset = std::move(previousOutput);
+        result.retainedDatasets = std::move(retainedDatasets);
         result.succeeded = true;
         return result;
     }

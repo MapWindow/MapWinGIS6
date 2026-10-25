@@ -36,7 +36,9 @@ VRT is used.
 
 Each pipeline step after the first receives the previous step's dataset as
 `input`. It must omit an explicit `input` argument and must produce an output
-dataset. Intermediate datasets are released when the pipeline ends or fails.
+dataset. On success, the result retains intermediate datasets so outputs such
+as VRTs that depend on earlier datasets remain valid. Keep the result alive
+while using its output dataset. On failure, intermediate datasets are released.
 
 ## Multidimensional data
 
