@@ -43,3 +43,5 @@ up automatically).
   tests. Each has four polygons in EPSG:28992, all five field types, null
   values, and UTF-8 names. Tests edit their own generated datasets.
 - Wrap expected GDAL noise in `GdalEnvironment::QuietScope`.
+- Tests use local generated data and do not require network access by default.
+  Set `MWG_RUN_NETWORK_GDAL_TESTS=1` to enable the public `/vsicurl/` COG test.

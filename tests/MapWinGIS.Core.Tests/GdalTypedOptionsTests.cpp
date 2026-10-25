@@ -368,6 +368,28 @@ TEST(GdalTypedOptions, ConvertsRasterToPngAndReturnsTheOutputDataset)
     EXPECT_TRUE(std::filesystem::exists(output));
 }
 
+TEST(GdalTypedOptions, ReportsUnavailableOutputDriver)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+
+    RasterConvertOptions options;
+    options.input = test::MakeRaster(directory.Path());
+    options.output = directory.Path() / "unavailable-driver.out";
+    options.outputFormat = "MWG_DRIVER_NOT_INSTALLED";
+
+    GdalAlgorithmRunner runner("raster convert");
+    const bool configured = ConfigureGdalAlgorithm(runner, options.ToArgs());
+    if (configured)
+        EXPECT_FALSE(runner.Run());
+
+    EXPECT_FALSE(runner.Result().Succeeded());
+    ASSERT_FALSE(runner.Errors().empty());
+    EXPECT_FALSE(runner.Errors().back().message.empty());
+    EXPECT_FALSE(std::filesystem::exists(options.output));
+}
+
 TEST(GdalTypedOptions, ConvertsVectorLayersAndPreservesAttributes)
 {
     test::TempDirectory directory;

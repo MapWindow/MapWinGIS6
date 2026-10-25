@@ -71,8 +71,12 @@ For additional configurations, dependency features, and troubleshooting, see
 |---|---|
 | `src/MapWinGIS.Core/` | The core engine. Public headers in `include/mapwingis/` |
 | `tests/MapWinGIS.Core.Tests/` | C++ unit tests (GoogleTest) |
+| `samples/Cpp/` | Buildable native C++ examples |
 | `build/` | Shared MSBuild props, vcpkg triplets and scripts |
-| `docs/` | Build, architecture, coding, porting and testing documentation |
+| `docs/` | Build, architecture, coding, GDAL integration, porting and testing documentation |
+
+See [GDAL integration](docs/gdal-integration.md) for GDAL setup, API examples,
+progress handling, migration notes, and limitations.
 
 ## License
 
