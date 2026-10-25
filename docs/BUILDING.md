@@ -37,7 +37,9 @@ pwsh -File tests\MapWinGIS.Core.Tests\Verify-ActiveXActivation.ps1 -Configuratio
 
 The script registers the control for the current user, creates it through its
 ProgID, checks the automation boundary, and removes the per-user registration.
-Use 32-bit PowerShell with `-Platform Win32`.
+It checks both per-user registry views first and refuses to run if the control's
+CLSID or either ProgID is already registered, so it cannot overwrite another
+build's registration. Use 32-bit PowerShell with `-Platform Win32`.
 
 ### Where vcpkg is found
 

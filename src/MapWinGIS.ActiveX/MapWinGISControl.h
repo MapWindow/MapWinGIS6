@@ -46,6 +46,7 @@ public:
         COM_INTERFACE_ENTRY(IOleControl)
         COM_INTERFACE_ENTRY(IOleInPlaceActiveObject)
         COM_INTERFACE_ENTRY(IPersistStreamInit)
+        COM_INTERFACE_ENTRY2(IPersist, IPersistStreamInit)
     END_COM_MAP()
 
     BEGIN_PROP_MAP(CMapWinGISControl)

@@ -26,6 +26,38 @@ $registrationTool = if ($Platform -eq 'x64') {
     Join-Path $env:SystemRoot 'SysWOW64\regsvr32.exe'
 }
 
+$registrationPaths = @(
+    'Software\Classes\CLSID\{2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F}'
+    'Software\Classes\MapWinGIS6.Control.6'
+    'Software\Classes\MapWinGIS6.Control'
+)
+$existingRegistration = @()
+foreach ($view in @(
+        [Microsoft.Win32.RegistryView]::Registry32,
+        [Microsoft.Win32.RegistryView]::Registry64
+    )) {
+    $userRegistry = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::CurrentUser,
+        $view
+    )
+    try {
+        foreach ($registrationPath in $registrationPaths) {
+            $registrationKey = $userRegistry.OpenSubKey($registrationPath)
+            if ($null -ne $registrationKey) {
+                $registrationKey.Dispose()
+                $existingRegistration += "$view\$registrationPath"
+            }
+        }
+    }
+    finally {
+        $userRegistry.Dispose()
+    }
+}
+
+if ($existingRegistration.Count -gt 0) {
+    throw "Per-user COM registration already exists ($($existingRegistration -join ', ')). Refusing to replace or remove it."
+}
+
 $registerResult = Start-Process -FilePath $registrationTool `
     -ArgumentList @('/s', '/n', '/i:user', "`"$controlPath`"") `
     -Wait -PassThru

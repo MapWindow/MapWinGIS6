@@ -120,6 +120,15 @@ TEST(ActiveXActivation, CreatesControlThroughClassFactory)
         << "IClassFactory::CreateInstance failed with HRESULT "
         << std::hex << static_cast<unsigned long>(result);
 
+    ComPtr<IPersist> persist;
+    result = control.As(&persist);
+    ASSERT_TRUE(SUCCEEDED(result));
+
+    CLSID persistedClassId{};
+    result = persist->GetClassID(&persistedClassId);
+    ASSERT_TRUE(SUCCEEDED(result));
+    EXPECT_TRUE(IsEqualCLSID(persistedClassId, classId));
+
     ComPtr<IMapWinGISControl> activeXControl;
     result = control.As(&activeXControl);
     ASSERT_TRUE(SUCCEEDED(result));
