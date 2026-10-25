@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include <cpl_conv.h>
 #include <gdal_priv.h>
 #include <ogrsf_frmts.h>
 
@@ -35,6 +36,12 @@ namespace
         const std::string utf8(reinterpret_cast<const char*>(pathUtf8.data()), pathUtf8.size());
         return GdalDatasetPtr(static_cast<GDALDataset*>(
             GDALOpenEx(utf8.c_str(), flags, nullptr, nullptr, nullptr)));
+    }
+
+    std::string ToUtf8(const std::filesystem::path& path)
+    {
+        const std::u8string pathUtf8 = path.u8string();
+        return {reinterpret_cast<const char*>(pathUtf8.data()), pathUtf8.size()};
     }
 
     std::filesystem::path MakeWgs84Shapefile(const std::filesystem::path& directory)
@@ -218,6 +225,8 @@ TEST(GdalUtils, ReprojectsWgs84ShapefileToEpsg28992)
     GdalUtils utils;
     ASSERT_TRUE(utils.GdalVectorReproject(input, output, 4326, 28992))
         << utils.DetailedErrorMsg();
+    ASSERT_TRUE(utils.GdalVectorReproject(input, output, 4326, 28992))
+        << utils.DetailedErrorMsg();
 
     GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_VECTOR | GDAL_OF_READONLY);
     ASSERT_NE(dataset, nullptr);
@@ -244,6 +253,75 @@ TEST(GdalUtils, BuildsRasterOverviewsForSelectedBands)
     ASSERT_NE(dataset, nullptr);
     ASSERT_NE(dataset->GetRasterBand(1), nullptr);
     EXPECT_EQ(dataset->GetRasterBand(1)->GetOverviewCount(), 2);
+}
+
+TEST(GdalUtils, BuildsAutomaticOverviewsWhenTheOverviewListIsEmpty)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = directory.Path() / "large.tif";
+    GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+    ASSERT_NE(driver, nullptr);
+    GdalDatasetPtr created(driver->Create(ToUtf8(input).c_str(), 1024, 768, 1,
+                                          GDT_Byte, nullptr));
+    ASSERT_NE(created, nullptr);
+    created.reset();
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.GdalBuildOverviews(input, "NEAREST", {}, {1}))
+        << utils.DetailedErrorMsg();
+
+    GdalDatasetPtr dataset = OpenDataset(input, GDAL_OF_RASTER | GDAL_OF_READONLY);
+    ASSERT_NE(dataset, nullptr);
+    GDALRasterBand* band = dataset->GetRasterBand(1);
+    ASSERT_NE(band, nullptr);
+    ASSERT_EQ(band->GetOverviewCount(), 2);
+    EXPECT_EQ(band->GetOverview(0)->GetXSize(), 512);
+    EXPECT_EQ(band->GetOverview(0)->GetYSize(), 384);
+    EXPECT_EQ(band->GetOverview(1)->GetXSize(), 256);
+    EXPECT_EQ(band->GetOverview(1)->GetYSize(), 192);
+}
+
+TEST(GdalUtils, BuildsExternalOverviewsForReadOnlyPngRasters)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = directory.Path() / "source.png";
+    GDALDriver* memoryDriver = GetGDALDriverManager()->GetDriverByName("MEM");
+    GDALDriver* pngDriver = GetGDALDriverManager()->GetDriverByName("PNG");
+    ASSERT_NE(memoryDriver, nullptr);
+    ASSERT_NE(pngDriver, nullptr);
+    GdalDatasetPtr memoryRaster(memoryDriver->Create("", 512, 512, 1, GDT_Byte, nullptr));
+    ASSERT_NE(memoryRaster, nullptr);
+    GdalDatasetPtr pngRaster(
+        pngDriver->CreateCopy(ToUtf8(input).c_str(), memoryRaster.get(), FALSE,
+                              nullptr, nullptr, nullptr));
+    ASSERT_NE(pngRaster, nullptr);
+    ASSERT_EQ(GDALClose(pngRaster.release()), CE_None);
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.GdalBuildOverviews(input, "NEAREST", {2}, {1}))
+        << utils.DetailedErrorMsg();
+    EXPECT_TRUE(std::filesystem::exists(input.string() + ".ovr"));
+}
+
+TEST(GdalUtils, RestoresDuplicateConfigurationOptionsInReverseOrder)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+    constexpr char kConfigName[] = "MWG_GDAL_UTILS_TEST_OPTION";
+    ScopedGdalConfigOption initialValue(kConfigName, "original");
+
+    GdalUtils utils;
+    ASSERT_TRUE(utils.GdalBuildOverviews(
+        input, "NEAREST", {2}, {1},
+        {{kConfigName, "first"}, {kConfigName, "second"}}))
+        << utils.DetailedErrorMsg();
+    EXPECT_STREQ(CPLGetConfigOption(kConfigName, nullptr), "original");
 }
 
 TEST(GdalUtils, ClipsVectorFeaturesWithAnOverlayDataset)

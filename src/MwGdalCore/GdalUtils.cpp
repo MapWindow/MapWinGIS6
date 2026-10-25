@@ -112,6 +112,30 @@ namespace mwg
                 GDALOpenEx(utf8Path.c_str(), flags, nullptr, nullptr, nullptr)));
         }
 
+        bool CloseDataset(DatasetPtr& dataset) noexcept
+        {
+            GDALDataset* rawDataset = dataset.release();
+            return rawDataset == nullptr || GDALClose(rawDataset) == CE_None;
+        }
+
+        class ScopedGdalConfigOptions
+        {
+        public:
+            ~ScopedGdalConfigOptions()
+            {
+                for (auto option = _options.rbegin(); option != _options.rend(); ++option)
+                    option->reset();
+            }
+
+            void Add(const std::string& name, const std::string& value)
+            {
+                _options.push_back(std::make_unique<ScopedGdalConfigOption>(name, value));
+            }
+
+        private:
+            std::vector<std::unique_ptr<ScopedGdalConfigOption>> _options;
+        };
+
         bool HasFailure(const std::vector<GdalError>& errors)
         {
             return std::any_of(errors.begin(), errors.end(),
@@ -203,7 +227,9 @@ namespace mwg
                     DatasetPtr output(static_cast<GDALDataset*>(
                         GDALVectorTranslate(destination.c_str(), nullptr, 1, sources,
                                             translateOptions.get(), &usageError)));
-                    return output != nullptr && usageError == FALSE;
+                    const bool succeeded = output != nullptr && usageError == FALSE;
+                    const bool closed = CloseDataset(output);
+                    return succeeded && closed;
                 });
         }
     }
@@ -285,7 +311,9 @@ namespace mwg
                 DatasetPtr output(static_cast<GDALDataset*>(
                     GDALTranslate(destination.c_str(), input.get(), translateOptions.get(),
                                   &usageError)));
-                return output != nullptr && usageError == FALSE;
+                const bool succeeded = output != nullptr && usageError == FALSE;
+                const bool closed = CloseDataset(output);
+                return succeeded && closed;
             });
     }
 
@@ -317,7 +345,9 @@ namespace mwg
                 DatasetPtr output(static_cast<GDALDataset*>(
                     GDALWarp(destination.c_str(), nullptr, 1, sources, warpOptions.get(),
                              &usageError)));
-                return output != nullptr && usageError == FALSE;
+                const bool succeeded = output != nullptr && usageError == FALSE;
+                const bool closed = CloseDataset(output);
+                return succeeded && closed;
             });
     }
 
@@ -344,6 +374,7 @@ namespace mwg
     {
         (void)useSharedConnection;
         const std::vector<std::string> options{
+            "-overwrite",
             "-s_srs", "EPSG:" + std::to_string(sourceEpsgCode),
             "-t_srs", "EPSG:" + std::to_string(destinationEpsgCode)};
         return RunVectorTranslateOperation(_impl->errors, sourceFilename,
@@ -377,20 +408,37 @@ namespace mwg
             _impl->errors,
             [&]()
             {
-                std::vector<std::unique_ptr<ScopedGdalConfigOption>> scopedOptions;
-                scopedOptions.reserve(configOptions.size());
+                ScopedGdalConfigOptions scopedOptions;
                 for (const auto& [name, value] : configOptions)
-                    scopedOptions.push_back(
-                        std::make_unique<ScopedGdalConfigOption>(name, value));
+                    scopedOptions.Add(name, value);
 
-                DatasetPtr dataset = OpenDataset(sourceFilename, GDAL_OF_RASTER | GDAL_OF_UPDATE);
+                DatasetPtr dataset = OpenDataset(sourceFilename, GDAL_OF_RASTER | GDAL_OF_READONLY);
                 if (dataset == nullptr)
                     return false;
 
                 const std::string resampling(resamplingMethod);
+                std::vector<int> automaticOverviewList;
+                const std::vector<int>* overviewLevels = &overviewList;
+                if (overviewList.empty())
+                {
+                    int overviewWidth = dataset->GetRasterXSize();
+                    int overviewHeight = dataset->GetRasterYSize();
+                    int overviewFactor = 2;
+                    while (overviewWidth > 256 || overviewHeight > 256)
+                    {
+                        automaticOverviewList.push_back(overviewFactor);
+                        overviewWidth = overviewWidth / 2 + overviewWidth % 2;
+                        overviewHeight = overviewHeight / 2 + overviewHeight % 2;
+                        overviewFactor *= 2;
+                    }
+                    overviewLevels = &automaticOverviewList;
+                    if (overviewLevels->empty())
+                        return true;
+                }
+
                 const int result = GDALBuildOverviews(
-                    dataset.get(), resampling.c_str(),
-                    static_cast<int>(overviewList.size()), overviewList.data(),
+                    dataset.get(), resampling.c_str(), static_cast<int>(overviewLevels->size()),
+                    overviewLevels->data(),
                     static_cast<int>(bandList.size()), bandList.data(), nullptr, nullptr);
                 return result == CE_None;
             });
