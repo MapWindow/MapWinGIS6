@@ -160,5 +160,7 @@ The tree is early: GDAL environment setup and vector reading/editing
 (`VectorDataset`, `VectorLayer`, backed by OGR) are the first slices. Areas
 still to be ported (map control, rendering, raster, tiles, ...) get new
 `<area>` folders under both `include/mapwingis/` and `src/`. The ActiveX and
-rendering components described above are architectural plans, not implemented
-or verified capabilities.
+rendering design is only partially implemented: the OCX now supports COM
+activation, an opaque client-area draw, and the ATL resize/paint lifecycle.
+Map data rendering, backend selection, CPU rendering, and OpenGL remain
+unimplemented and unverified.

@@ -77,6 +77,29 @@ try {
 
     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($control)
     $control = $null
+
+    $testExecutable = [System.IO.Path]::GetFullPath(
+        (Join-Path $PSScriptRoot "..\..\bin\$Configuration\$Platform\MapWinGIS.Core.Tests.exe")
+    )
+    if (-not (Test-Path -LiteralPath $testExecutable -PathType Leaf)) {
+        throw "The ActiveX hosting test executable was not found at '$testExecutable'. Build the solution first."
+    }
+
+    $previousHostTest = $env:MWG_TEST_ACTIVEX_HOST
+    $env:MWG_TEST_ACTIVEX_HOST = '1'
+    try {
+        & $testExecutable '--gtest_filter=ActiveXHosting.ResizesRepaintsAndRecreatesControl'
+        if ($LASTEXITCODE -ne 0) {
+            throw "The ActiveX hosting test failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        if ($null -eq $previousHostTest) {
+            Remove-Item Env:\MWG_TEST_ACTIVEX_HOST -ErrorAction SilentlyContinue
+        } else {
+            $env:MWG_TEST_ACTIVEX_HOST = $previousHostTest
+        }
+    }
 }
 finally {
     $unregisterResult = Start-Process -FilePath $registrationTool `
