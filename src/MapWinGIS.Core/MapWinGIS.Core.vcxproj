@@ -58,6 +58,7 @@
     <ClInclude Include="include\mapwingis\gdal\GdalRuntime.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalAlgorithmRunner.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalTypedOptions.h" />
+    <ClInclude Include="include\mapwingis\gdal\GdalModern.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalUtils.h" />
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />

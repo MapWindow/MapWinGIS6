@@ -51,6 +51,7 @@
     <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalAlgorithmRunner.h" />
     <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalTypedOptions.h" />
     <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalUtils.h" />
+    <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalModern.h" />
   </ItemGroup>
 
   <ItemGroup>
@@ -58,6 +59,7 @@
     <ClCompile Include="GdalAlgorithmRunner.cpp" />
     <ClCompile Include="GdalTypedOptions.cpp" />
     <ClCompile Include="GdalUtils.cpp" />
+    <ClCompile Include="GdalModern.cpp" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

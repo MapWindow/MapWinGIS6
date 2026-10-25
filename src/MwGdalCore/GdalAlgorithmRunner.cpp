@@ -239,6 +239,57 @@ namespace mwg
                                 _impl->configurationValid, name, value);
     }
 
+    bool GdalAlgorithmRunner::SetDatasetArgument(const std::string_view name,
+                                                 GDALDataset* value)
+    {
+        if (!CanConfigure(name))
+            return false;
+        if (value == nullptr)
+        {
+            AddError(_impl->errors, "GDAL dataset argument values must not be null.");
+            _impl->configurationValid = false;
+            return false;
+        }
+
+        GDALAlgorithmArg* argument =
+            _impl->algorithm != nullptr ? _impl->algorithm->GetArg(std::string(name)) : nullptr;
+        if (argument == nullptr ||
+            (argument->GetType() != GAAT_DATASET &&
+             argument->GetType() != GAAT_DATASET_LIST))
+        {
+            AddError(_impl->errors,
+                     "GDAL algorithm argument '" + std::string(name) +
+                         "' is not a dataset or dataset-list argument.");
+            _impl->configurationValid = false;
+            return false;
+        }
+
+        const std::size_t previousCount = _impl->errors.size();
+        GdalErrorScope scope;
+        bool succeeded = false;
+        if (argument->GetType() == GAAT_DATASET)
+        {
+            succeeded = argument->Set(value);
+        }
+        else
+        {
+            std::vector<GDALArgDatasetValue> datasets;
+            datasets.emplace_back(value);
+            succeeded = argument->Set(std::move(datasets));
+        }
+        AppendErrors(_impl->errors, scope);
+        scope.RethrowCaptureException();
+
+        if (!succeeded)
+        {
+            AddFailureIfNoDiagnostic(_impl->errors, previousCount,
+                                     "Could not set GDAL dataset argument '" +
+                                         std::string(name) + "'.");
+            _impl->configurationValid = false;
+        }
+        return succeeded;
+    }
+
     bool GdalAlgorithmRunner::ParseCommandLineArgs(const std::vector<std::string>& args)
     {
         if (_impl->algorithm == nullptr || !_impl->configurationValid || _impl->runAttempted)
