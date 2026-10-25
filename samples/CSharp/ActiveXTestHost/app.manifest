@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    type="win32"
+    name="MapWinGIS.ActiveXTestHost"
+    version="1.0.0.0" />
+  <file name="MapWinGIS.ocx">
+    <typelib
+      tlbid="{E3E35346-7259-41AB-B419-D87D0BEE867E}"
+      version="1.0"
+      helpdir="" />
+    <comClass
+      clsid="{2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F}"
+      threadingModel="Apartment"
+      progid="MapWinGIS6.Control.6"
+      tlbid="{E3E35346-7259-41AB-B419-D87D0BEE867E}" />
+  </file>
+</assembly>

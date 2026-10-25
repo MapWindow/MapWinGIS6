@@ -3,14 +3,12 @@
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using Microsoft.Win32;
 using System.Windows.Forms;
 
 namespace MapWinGIS.ActiveXTestHost;
 
 internal sealed class MainForm : Form
 {
-    private const string ClassId = "{2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F}";
     private const string ProgId = "MapWinGIS6.Control.6";
     private const int ColorWindow = 5;
 
@@ -195,31 +193,6 @@ internal sealed class MainForm : Form
                 throw new FileNotFoundException(
                     $"Required runtime data folder '{runtimeDirectory}' is missing beside the host.");
             }
-        }
-
-        RegistryView registryView = ExpectedMachine == 0x8664
-            ? RegistryView.Registry64
-            : RegistryView.Registry32;
-        using RegistryKey userClasses = RegistryKey.OpenBaseKey(
-            RegistryHive.CurrentUser,
-            registryView);
-        using RegistryKey? registration = userClasses.OpenSubKey(
-            $@"Software\Classes\CLSID\{ClassId}\InprocServer32");
-        if (registration is null)
-        {
-            throw new InvalidOperationException(
-                "The control is not registered for this process architecture. Run Run-ActiveXTestHost.ps1.");
-        }
-
-        string? registeredPath = registration.GetValue(null) as string;
-        if (string.IsNullOrWhiteSpace(registeredPath) ||
-            !string.Equals(
-                Path.GetFullPath(Environment.ExpandEnvironmentVariables(registeredPath.Trim('"'))),
-                Path.GetFullPath(controlPath),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                $"The registered control does not match this build. Expected '{controlPath}', found '{registeredPath ?? "(empty)"}'.");
         }
     }
 
@@ -489,7 +462,7 @@ internal sealed class MainForm : Form
             return comException.HResult switch
             {
                 unchecked((int)0x80040154) =>
-                    "The control is not registered for this process architecture. Run Run-ActiveXTestHost.ps1.",
+                    "The control is not available through the host manifest. Check the OCX CLSID and typelib entries in app.manifest.",
                 unchecked((int)0x8007007e) =>
                     "A native control dependency is missing. Rebuild the matching native platform and check the runtime files beside the host.",
                 _ => $"ActiveX activation failed (HRESULT 0x{comException.HResult:x8}): {comException.Message}"

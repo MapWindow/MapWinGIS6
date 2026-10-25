@@ -51,17 +51,18 @@ Build the solution for the same architecture as the native control. The host
 targets x64 explicitly by default and also defines a Win32/x86 configuration
 for use when the native Win32 build is available. Its executable is placed
 beside the OCX, core DLL, native dependencies, and GDAL/PROJ runtime data.
-The host uses `AxHost` directly with the control's CLSID, so no generated
-interop assembly or additional wrapper-generation tool is required.
+The host uses `AxHost` directly with the control's CLSID and an embedded
+application manifest that declares the OCX class and type library. This
+registration-free COM activation needs no generated interop assembly,
+wrapper-generation tool, `regsvr32`, or registry changes.
 
-Run the script from an interactive Windows desktop session. It checks that
-the control is not already registered, registers only the matching build for
-the current user, launches the host, and removes only that temporary
-per-user registration when the host exits. It refuses to overwrite an
-existing per-user or machine-wide registration.
+Run the launcher from an interactive Windows desktop session. It starts the
+host beside the native files; the manifest activates that OCX for the host
+process only. The launcher does not read, add, overwrite, or remove COM
+registration.
 
 ```powershell
-# Visible manual host. Close the window to unregister the control.
+# Visible manual host. Close the window to release the control.
 pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration Debug -Platform x64
 
 # Visible automated hosting checks; writes JSON and returns a nonzero code on failure.
@@ -71,7 +72,9 @@ pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration
 For Win32, use `-Platform Win32` after building the matching native binaries.
 Automated checks need Windows and an interactive desktop session. The host
 currently verifies background painting, activation, resize, repaint, and
-control recreation; it does not display map data.
+control recreation. It can activate the OCX without a registration and does
+not display map data. The separate native activation script above retains its
+own temporary registration-based test.
 
 ### Where vcpkg is found
 

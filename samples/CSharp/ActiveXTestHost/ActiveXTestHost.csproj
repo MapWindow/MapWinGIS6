@@ -6,6 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <MwgDeployRuntimeData>false</MwgDeployRuntimeData>
     <Platforms>Win32;x64</Platforms>
     <PlatformTarget Condition="'$(Platform)' == 'Win32'">x86</PlatformTarget>
@@ -23,6 +24,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\MapWinGIS.ActiveX\MapWinGIS.ActiveX.vcxproj"
                       ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="app.manifest" />
   </ItemGroup>
 
 </Project>
