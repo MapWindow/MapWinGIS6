@@ -4,19 +4,19 @@
 
 MapWinGIS6 splits the monolithic MapWinGIS 5 control into two layers:
 
-1. **MapWinGIS.Core.dll** — the mapping engine, a plain C++ DLL. All logic
-   for GIS behavior and backend-neutral rendering lives here. No COM, ATL,
-   MFC, windowing, or graphics API dependencies are allowed in this layer.
-2. **MapWinGIS.ocx** — an ActiveX/COM wrapper (not started yet). It exposes the
-   v5 COM API, translates between COM and core types, converts core exceptions
-   into MapWinGIS error codes, and integrates the core with the host control
-   surface and graphics backend.
+1. **MapWinGIS.Core.dll** — the mapping engine, a plain C++ DLL. GIS behavior
+   and backend-neutral render data live here. No COM, ATL, MFC, windowing, or
+   graphics API dependencies are allowed in this layer.
+2. **MapWinGIS.ocx** — an ActiveX/COM wrapper. It exposes the intentionally
+   implemented subset of the v5 COM API, translates between COM and core
+   types, converts core exceptions into COM errors, and integrates the core
+   with the host control surface and graphics backend.
 
 Core behavior must be testable through the core alone. OCX-specific
 host/rendering integration must also be testable as native components without
 COM activation; it must not contain GIS rules or core data ownership.
-Until the ActiveX wrapper exists, generic GDAL algorithms are exposed through
-the native `MapWinGIS.Core.dll` API; the COM façade is not yet available.
+Generic GDAL algorithms are exposed through the native `MapWinGIS.Core.dll`
+API; the COM façade currently exposes control lifecycle and vector loading.
 
 ## Module design
 
@@ -103,10 +103,11 @@ these responsibilities do not require separate DLLs.
 
 | Component | Responsibility | Must not depend on |
 |---|---|---|
-| `MapWinGIS.Core` | Own GIS data, reusable map/layer state, backend-neutral render data, and the CPU rendering backend. Keep its public API independent of windowing, COM, and graphics APIs. | COM, ATL, MFC, windowing APIs, OpenGL, OpenCL |
+| `MapWinGIS.Core` | Own GIS data, reusable map/layer state, and backend-neutral render data. Keep its public API independent of windowing, COM, and graphics APIs. | COM, ATL, MFC, windowing APIs, OpenGL, OpenCL |
 | `MapWinGIS.ocx` | Own COM activation, host-facing control lifecycle, and translation between the external API and core operations. Integrate core rendering with the host surface and selected backend. | GIS rules, core data ownership, rendering-specific types in its public COM contract |
 | Rendering coordinator (initially internal to the OCX) | Bind core render requests to the control's target; select a backend and coordinate host-specific drawing and recovery. Keep this native component independent of COM activation. | GIS rules, COM interface layout, backend-specific resource types outside the backend |
-| CPU backend (in Core) | Provide the supported rendering path when GPU rendering is unavailable or disabled. | GPU or OpenCL availability |
+| Initial GDI renderer (in the OCX) | Paint backend-neutral polygon scenes into the host drawing context. This is a first visible-map path, not the planned interchangeable backend abstraction. | Core dataset ownership, COM interface layout |
+| Future CPU backend (in Core) | Provide the supported rendering path when GPU rendering is unavailable or disabled. | GPU or OpenCL availability |
 | OpenGL backend (in the OCX) | Provide optional accelerated drawing and own its context and GPU resources. | Core GIS data ownership and public COM interfaces |
 | Future compute work | Host optional compute acceleration only for workloads justified by profiling. | OpenGL being installed or selected |
 
@@ -123,11 +124,11 @@ backend or its control surface is destroyed. Resizing updates the render
 target and viewport without changing ownership of the map data.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
-coordinator nor a backend loads datasets or implements GIS rules. The
-existing vector API exposes feature geometry as WKT, but the core does not yet
-provide a map scene or render-ready geometry. A later rendering slice must
-choose the smallest appropriate conversion path without adding graphics
-dependencies to the core or retaining `VectorLayer` internals in a backend.
+coordinator nor a backend loads datasets or implements GIS rules. Core now
+converts Polygon and MultiPolygon features into an owned vector scene. The
+initial OCX GDI painter consumes that scene without retaining layer-owned
+objects. This vertical slice renders source coordinates directly and does not
+reproject data. Scene preparation currently supports polygon layers only.
 
 Backend choice is internal to the rendering coordinator and is observable
 through diagnostics, not through a graphics-specific COM API. A caller or
@@ -157,10 +158,9 @@ introduced.
 ## Current state
 
 The tree is early: GDAL environment setup and vector reading/editing
-(`VectorDataset`, `VectorLayer`, backed by OGR) are the first slices. Areas
-still to be ported (map control, rendering, raster, tiles, ...) get new
-`<area>` folders under both `include/mapwingis/` and `src/`. The ActiveX and
-rendering design is only partially implemented: the OCX now supports COM
-activation, an opaque client-area draw, and the ATL resize/paint lifecycle.
-Map data rendering, backend selection, CPU rendering, and OpenGL remain
-unimplemented and unverified.
+(`VectorDataset`, `VectorLayer`, backed by OGR) are the first core slices.
+The OCX supports COM activation and the ATL resize/paint lifecycle. It can
+load the first polygon layer from a vector dataset through Core and display
+its geometry with a simple GDI painter. An interchangeable rendering
+abstraction, CPU fallback backend, backend selection, and OpenGL remain
+unimplemented.

@@ -3,13 +3,22 @@
 /**
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
+ *
+ * Provides automation for loading a vector dataset and painting its initial
+ * polygon layer into the host drawing surface.
  */
 #pragma once
 
 #include "ActiveXModule.h"
 #include "resource.h"
 
+#include <memory>
+#include <optional>
+
 #include <atlctl.h>
+
+#include "mapwingis/rendering/VectorRenderScene.h"
+#include "mapwingis/vector/VectorDataset.h"
 
 class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
@@ -60,9 +69,17 @@ public:
     DECLARE_VIEW_STATUS(VIEWSTATUS_SOLIDBKGND | VIEWSTATUS_OPAQUE)
 
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
+    STDMETHOD(LoadVectorDataset)(BSTR path) override;
+    STDMETHOD(get_LayerLoaded)(VARIANT_BOOL* loaded) override;
+    STDMETHOD(get_FeatureCount)(LONGLONG* count) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
     HRESULT OnDraw(ATL_DRAWINFO& drawInfo);
+
+private:
+    std::unique_ptr<mwg::VectorDataset> _dataset;
+    std::optional<mwg::rendering::VectorRenderScene> _scene;
+    LONGLONG _featureCount = 0;
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

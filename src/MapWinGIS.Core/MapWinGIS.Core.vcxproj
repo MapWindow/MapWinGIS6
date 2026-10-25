@@ -62,12 +62,14 @@
     <ClInclude Include="include\mapwingis\gdal\GdalUtils.h" />
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
+    <ClInclude Include="include\mapwingis\rendering\VectorRenderScene.h" />
     <ClInclude Include="src\internal\Utf8.h" />
   </ItemGroup>
 
   <ItemGroup>
     <ClCompile Include="src\gdal\GdalEnvironment.cpp" />
     <ClCompile Include="src\vector\VectorDataset.cpp" />
+    <ClCompile Include="src\rendering\VectorRenderScene.cpp" />
   </ItemGroup>
 
   <ItemGroup>

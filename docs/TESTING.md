@@ -31,13 +31,13 @@ pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration
 
 The launcher makes no COM registration changes. Automated mode creates a
 visible window and runs the UI message loop, checks the `CoreInitialized`
-automation property, resizes the host, samples the actual on-screen control
-background after repaint, recreates the control, and writes individual
-outcomes to `bin\Debug\x64\ActiveXTestHost-results.json`. A watchdog enforces
-a 30-second default timeout; `-TimeoutSeconds` changes it from 5 to 300 seconds.
-These integration checks require Windows and an interactive desktop session;
-they are not currently part of CI. The control paints only its background, so
-this host does not yet verify map rendering.
+automation property, loads a generated two-polygon GeoJSON dataset through the
+control, resizes the host, samples rendered polygon and background pixels,
+recreates the control, reloads the layer, and writes individual outcomes to
+`bin\Debug\x64\ActiveXTestHost-results.json`. A watchdog enforces a 30-second
+default timeout; `-TimeoutSeconds` changes it from 5 to 300 seconds. These
+integration checks require Windows and an interactive desktop session; they
+are not currently part of CI.
 
 The host executable accepts `--automated`, `--results <path>`, and
 `--timeout-seconds <5-300>`. The PowerShell launcher supplies these options
@@ -55,10 +55,20 @@ opened visibly and closed through the normal window-close path. The managed
 host also compiles for Win32/x86; matching native x86 hosting remains for
 Phase 7.
 
+### Phase 4 validation
+
+The Debug x64 native suite ran 137 tests: 135 passed and 2 were skipped. Both
+polygon scene tests passed for Shapefile and GeoPackage fixtures. The
+registration-free C# host passed all 12 checks, including loading a generated
+GeoJSON layer, sampling both polygon fills and the gap between them, and
+reloading and repainting after control recreation. These integration checks
+require an interactive Windows desktop and are not currently part of CI.
+
 ## Conventions
 
 - One test file per area under test (`VectorDatasetTests.cpp`,
-  `VectorLayerTests.cpp`, `GdalEnvironmentTests.cpp`).
+  `VectorLayerTests.cpp`, `VectorRenderSceneTests.cpp`,
+  `GdalEnvironmentTests.cpp`).
 - Fixture classes go in an anonymous namespace and derive from `testing::Test`
   or `testing::TestWithParam<T>` for parameterized cases. Use `protected:`
   `SetUp()` and production member naming (`_camelCase`).

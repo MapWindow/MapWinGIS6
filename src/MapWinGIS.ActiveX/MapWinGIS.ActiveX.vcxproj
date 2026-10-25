@@ -67,12 +67,14 @@
   <ItemGroup>
     <ClInclude Include="ActiveXModule.h" />
     <ClInclude Include="MapWinGISControl.h" />
+    <ClInclude Include="VectorLayerRenderer.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
 
   <ItemGroup>
     <ClCompile Include="ActiveXModule.cpp" />
     <ClCompile Include="MapWinGISControl.cpp" />
+    <ClCompile Include="VectorLayerRenderer.cpp" />
     <ClCompile Include="$(IntDir)MapWinGIS.ActiveX_i.c" />
   </ItemGroup>
 

@@ -11,6 +11,7 @@ internal sealed class MainForm : Form
 {
     private const string ProgId = "MapWinGIS6.Control.6";
     private const int ColorWindow = 5;
+    private static readonly Color MapFillColor = Color.FromArgb(61, 122, 169);
 
 #if MWG_X64
     private const ushort ExpectedMachine = 0x8664;
@@ -29,6 +30,9 @@ internal sealed class MainForm : Form
     private readonly object _resultsLock = new();
     private readonly object _reportLock = new();
     private readonly CancellationTokenSource _watchdogCancellation = new();
+    private readonly string _testDatasetDirectory =
+        Path.Combine(Path.GetTempPath(), $"MapWinGIS.ActiveXTestHost-{Guid.NewGuid():N}");
+    private string TestDatasetPath => Path.Combine(_testDatasetDirectory, "sample.geojson");
     private ActiveXHostControl? _host;
     private Exception? _reportWriteError;
 
@@ -70,6 +74,7 @@ internal sealed class MainForm : Form
         Controls.Add(toolbar);
         Controls.Add(statusStrip);
         Shown += OnShown;
+        CreateTestDataset();
     }
 
     public int ExitCode { get; private set; }
@@ -94,8 +99,10 @@ internal sealed class MainForm : Form
             VerifyPrerequisites();
             DisposeHostedControl();
             CreateHostedControl();
+            LoadTestLayer();
             bool initialized = ReadCoreInitialized();
-            _statusLabel.Text = $"Active: {ProgId}; CoreInitialized={initialized}";
+            _statusLabel.Text =
+                $"Active: {ProgId}; CoreInitialized={initialized}; polygon features loaded";
         }
         catch (Exception exception)
         {
@@ -132,9 +139,10 @@ internal sealed class MainForm : Form
             RecordCheck("Activation and creation", CreateHostedControl);
             RecordCheck("Automation contract", () =>
             {
-                VerifyCoreInitialized("initial activation");
-                _statusLabel.Text = $"Active: {ProgId}; CoreInitialized=true";
+                bool initialized = ReadCoreInitialized();
+                _statusLabel.Text = $"Active: {ProgId}; CoreInitialized={initialized}";
             });
+            RecordCheck("Load vector layer", LoadTestLayer);
 
             RecordCheck("Resize", VerifyResize);
             await RecordCheckAsync("Repaint", VerifyRepaintAsync);
@@ -142,9 +150,11 @@ internal sealed class MainForm : Form
             RecordCheck("Recreation", CreateHostedControl);
             RecordCheck("Recreated automation contract", () =>
             {
-                VerifyCoreInitialized("recreated activation");
-                _statusLabel.Text = $"Recreated: {ProgId}; CoreInitialized=true";
+                bool initialized = ReadCoreInitialized();
+                _statusLabel.Text =
+                    $"Recreated: {ProgId}; CoreInitialized={initialized}";
             });
+            RecordCheck("Reload vector layer", LoadTestLayer);
             await RecordCheckAsync("Recreated repaint", VerifyRepaintAsync);
             RecordCheck("Final dispose", VerifyDispose);
 
@@ -195,6 +205,45 @@ internal sealed class MainForm : Form
                     $"Required runtime data folder '{runtimeDirectory}' is missing beside the host.");
             }
         }
+
+        if (!File.Exists(TestDatasetPath))
+        {
+            throw new FileNotFoundException(
+                "The generated vector test dataset is missing.",
+                TestDatasetPath);
+        }
+    }
+
+    private void CreateTestDataset()
+    {
+        Directory.CreateDirectory(_testDatasetDirectory);
+        File.WriteAllText(
+            TestDatasetPath,
+            """
+            {
+              "type": "FeatureCollection",
+              "name": "sample",
+              "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+              "features": [
+                {
+                  "type": "Feature",
+                  "properties": { "id": 1, "name": "west" },
+                  "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [1.5, 0], [1.5, 2], [0, 2], [0, 0]]]
+                  }
+                },
+                {
+                  "type": "Feature",
+                  "properties": { "id": 2, "name": "east" },
+                  "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[2.5, 0], [4, 0], [4, 2], [2.5, 2], [2.5, 0]]]
+                  }
+                }
+              ]
+            }
+            """);
     }
 
     private static void VerifyFileArchitecture(string path)
@@ -269,6 +318,24 @@ internal sealed class MainForm : Form
         return (bool)automation.CoreInitialized;
     }
 
+    private void LoadTestLayer()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+        }
+
+        dynamic automation = automationObject;
+        automation.LoadVectorDataset(TestDatasetPath);
+        if (!(bool)automation.LayerLoaded || (long)automation.FeatureCount != 2)
+        {
+            throw new InvalidOperationException(
+                "The control did not load the two-feature polygon test layer.");
+        }
+
+        VerifyCoreInitialized("vector dataset load");
+    }
+
     private void VerifyCoreInitialized(string activation)
     {
         if (!ReadCoreInitialized())
@@ -314,16 +381,19 @@ internal sealed class MainForm : Form
         await Task.Delay(150);
         Application.DoEvents();
 
-        uint expected = GetSysColor(ColorWindow);
-        if (ColorToColorRef(_surfacePanel.BackColor) == expected)
-        {
-            _surfacePanel.BackColor = Color.Cyan;
-        }
-
-        Point center = _host.PointToScreen(new Point(_host.Width / 2, _host.Height / 2));
-        Point lowerRight = _host.PointToScreen(new Point(_host.Width - 8, _host.Height - 8));
-        VerifyPaintPixel(center, expected, "center");
-        VerifyPaintPixel(lowerRight, expected, "lower-right");
+        uint background = GetSysColor(ColorWindow);
+        VerifyPaintPixel(
+            _host.PointToScreen(new Point(_host.Width / 5, _host.Height / 2)),
+            ColorToColorRef(MapFillColor),
+            "first polygon");
+        VerifyPaintPixel(
+            _host.PointToScreen(new Point(_host.Width / 2, _host.Height / 2)),
+            background,
+            "empty space between polygons");
+        VerifyPaintPixel(
+            _host.PointToScreen(new Point(_host.Width * 4 / 5, _host.Height / 2)),
+            ColorToColorRef(MapFillColor),
+            "second polygon");
     }
 
     private static void VerifyPaintPixel(Point point, uint expected, string location)
@@ -346,7 +416,7 @@ internal sealed class MainForm : Form
             if (actual != expected)
             {
                 throw new InvalidOperationException(
-                    $"Native painting was not visible at the {location} of the control. Expected COLOR_WINDOW 0x{expected:x6}, got 0x{actual:x6}.");
+                    $"Expected color 0x{expected:x6} at the {location} of the control, got 0x{actual:x6}.");
             }
         }
         finally
@@ -510,6 +580,10 @@ internal sealed class MainForm : Form
         {
             DisposeHostedControl();
             _watchdogCancellation.Dispose();
+            if (Directory.Exists(_testDatasetDirectory))
+            {
+                Directory.Delete(_testDatasetDirectory, recursive: true);
+            }
         }
         base.Dispose(disposing);
     }
