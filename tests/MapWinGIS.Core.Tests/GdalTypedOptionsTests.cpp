@@ -351,6 +351,7 @@ TEST(GdalTypedOptions, ConvertsRasterToPngAndReturnsTheOutputDataset)
 TEST(GdalTypedOptions, RejectsUnknownAndMutuallyExclusiveArguments)
 {
     GdalEnvironment::Initialize();
+    test::TempDirectory directory;
 
     GdalAlgorithmRunner unknown("raster convert");
     EXPECT_FALSE(ConfigureGdalAlgorithm(
@@ -358,8 +359,8 @@ TEST(GdalTypedOptions, RejectsUnknownAndMutuallyExclusiveArguments)
     ASSERT_FALSE(unknown.Errors().empty());
 
     RasterConvertOptions conflicting;
-    conflicting.input = "input.tif";
-    conflicting.output = "output.tif";
+    conflicting.input = MakeRaster(directory.Path());
+    conflicting.output = directory.Path() / "conflicting.tif";
     conflicting.overwrite = true;
     conflicting.append = true;
     GdalAlgorithmRunner invalid("raster convert");

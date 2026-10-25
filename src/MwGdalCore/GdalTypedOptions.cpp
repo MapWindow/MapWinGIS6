@@ -99,30 +99,6 @@ namespace mwg
             arguments.push_back({std::string(name), std::move(strings)});
         }
 
-        void AddResolution(GdalAlgorithmArguments& arguments,
-                           const std::optional<std::variant<std::string,
-                                                            std::array<double, 2>>>& resolution)
-        {
-            if (!resolution.has_value())
-                return;
-
-            std::visit(
-                [&arguments](const auto& value)
-                {
-                    using Value = std::decay_t<decltype(value)>;
-                    if constexpr (std::is_same_v<Value, std::string>)
-                    {
-                        arguments.push_back({"resolution", value});
-                    }
-                    else
-                    {
-                        arguments.push_back(
-                            {"resolution", std::vector<double>(value.begin(), value.end())});
-                    }
-                },
-                *resolution);
-        }
-
         void AddMosaicResolution(
             GdalAlgorithmArguments& arguments,
             const std::optional<std::variant<std::string,
