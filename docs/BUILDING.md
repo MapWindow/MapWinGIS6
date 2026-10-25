@@ -71,10 +71,11 @@ pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration
 
 For Win32, use `-Platform Win32` after building the matching native binaries.
 Automated checks need Windows and an interactive desktop session. The host
-currently verifies background painting, activation, resize, repaint, and
-control recreation. It can activate the OCX without a registration and does
-not display map data. The separate native activation script above retains its
-own temporary registration-based test.
+creates a temporary two-polygon GeoJSON dataset, loads it through the control,
+and verifies visible polygon fills and the background gap after repaint and
+control recreation. It can activate the OCX without a registration. The
+separate native activation script above retains its own temporary
+registration-based test.
 
 ### Where vcpkg is found
 

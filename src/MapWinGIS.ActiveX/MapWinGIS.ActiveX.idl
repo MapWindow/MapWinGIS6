@@ -22,6 +22,15 @@ library MapWinGISActiveXLib
     {
         [propget, id(1)]
         HRESULT CoreInitialized([out, retval] VARIANT_BOOL* initialized);
+
+        [id(2)]
+        HRESULT LoadVectorDataset([in] BSTR path);
+
+        [propget, id(3)]
+        HRESULT LayerLoaded([out, retval] VARIANT_BOOL* loaded);
+
+        [propget, id(4)]
+        HRESULT FeatureCount([out, retval] hyper* count);
     };
 
     [

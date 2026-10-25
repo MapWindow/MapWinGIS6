@@ -64,6 +64,7 @@
     <ClCompile Include="TestData.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
     <ClCompile Include="VectorLayerTests.cpp" />
+    <ClCompile Include="VectorRenderSceneTests.cpp" />
   </ItemGroup>
 
   <ItemGroup>
