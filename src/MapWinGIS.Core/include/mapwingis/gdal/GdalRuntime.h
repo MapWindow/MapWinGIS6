@@ -86,6 +86,8 @@ namespace mwg
     /// The scope uses GDAL's thread-local error-handler stack and must be
     /// destroyed on the same thread on which it was constructed. Call
     /// RethrowCaptureException() after the operation to report capture failures.
+    /// Diagnostics also reach GdalEnvironment's logger. Logger exceptions are
+    /// preserved by the scope and rethrown by RethrowCaptureException().
     class MWG_CORE_API GdalErrorScope
     {
     public:

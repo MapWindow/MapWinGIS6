@@ -8,6 +8,8 @@
  * error capture, and cancellation-aware progress callbacks.
  */
 #include "mapwingis/gdal/GdalRuntime.h"
+#include "mapwingis/gdal/GdalEnvironment.h"
+#include "internal/GdalExecution.h"
 
 #include <mutex>
 #include <stdexcept>
@@ -20,6 +22,21 @@
 
 namespace mwg
 {
+    namespace detail
+    {
+        std::recursive_mutex& GdalExecutionMutex()
+        {
+            static std::recursive_mutex mutex;
+            return mutex;
+        }
+
+        bool& GdalCallbackActive()
+        {
+            static thread_local bool active = false;
+            return active;
+        }
+    }
+
     namespace
     {
         std::once_flag g_registrationFlag;
@@ -58,6 +75,9 @@ namespace mwg
             {
                 scope.errors.push_back(
                     {static_cast<GdalErrorClass>(errorClass), static_cast<int>(errorCode), message});
+                const LogLevel level = errorClass >= CE_Failure ? LogLevel::Error
+                    : errorClass == CE_Warning ? LogLevel::Warning : LogLevel::Debug;
+                GdalEnvironment::ReportDiagnostic(level, message);
             }
             catch (...)
             {
@@ -196,6 +216,8 @@ namespace mwg
             return 0;
 
         auto& adapter = *static_cast<GdalProgressAdapter*>(userData);
+        if (adapter._cancelled)
+            return 0;
         if (adapter._cancellationToken != nullptr && adapter._cancellationToken->IsCancellationRequested())
         {
             adapter._cancelled = true;
@@ -204,7 +226,14 @@ namespace mwg
 
         try
         {
+            const detail::GdalCallbackScope callbackScope;
             if (adapter._callback && !adapter._callback(progress, message != nullptr ? message : ""))
+            {
+                adapter._cancelled = true;
+                return 0;
+            }
+            if (adapter._cancellationToken != nullptr &&
+                adapter._cancellationToken->IsCancellationRequested())
             {
                 adapter._cancelled = true;
                 return 0;

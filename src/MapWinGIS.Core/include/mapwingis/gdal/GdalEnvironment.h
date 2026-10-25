@@ -25,7 +25,10 @@ namespace mwg
         Error,
     };
 
-    /// Receives GDAL diagnostics. Called on the thread that raised them.
+    /// Receives GDAL diagnostics on the thread that raised them.
+    /// Must not re-enter GDAL or wait for GDAL work on another thread.
+    /// Capture owned/shared state rather than borrowed
+    /// state when other threads can log concurrently.
     using LogHandler = std::function<void(LogLevel level, std::string_view message)>;
 
     /// Process-wide GDAL setup.
@@ -49,7 +52,18 @@ namespace mwg
         [[nodiscard]] static bool IsInitialized() noexcept;
 
         /// Installs a handler for GDAL diagnostics. Pass {} to remove it.
+        /// An invocation already in progress retains its copy of the handler.
         static void SetLogHandler(LogHandler handler);
+
+        /// Routes a captured diagnostic through the installed logger and updates
+        /// the calling thread's last error for Error level. Handler exceptions
+        /// propagate; GdalErrorScope preserves them until GDAL returns.
+        static void ReportDiagnostic(LogLevel level, std::string_view message);
+
+        /// Rethrows and clears the first logger exception captured by the
+        /// default GDAL error handler on this thread. Call after direct GDAL
+        /// use outside GdalErrorScope. Exceptions never cross GDAL's callback ABI.
+        static void RethrowLogException();
 
         /// Last GDAL error raised on the calling thread, or "" if there was none.
         [[nodiscard]] static std::string LastErrorMessage();

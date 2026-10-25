@@ -29,6 +29,41 @@
 
 using namespace mwg;
 
+TEST(GdalModernCapabilities, ExposesStructuredCancellationForCogAndPipelineOperations)
+{
+    GdalEnvironment::Initialize();
+    test::TempDirectory directory;
+    const auto input = test::MakeRaster(directory.Path());
+    RasterCogOptions options;
+    options.input = input;
+    options.output = directory.Path() / "cancelled.tif";
+    GdalCancellationToken token;
+    token.Cancel();
+    const auto cog = WriteCog(options, {}, &token);
+    EXPECT_FALSE(cog.Succeeded());
+    EXPECT_TRUE(cog.WasCancelled());
+    EXPECT_NE(cog.LastErrorCode(), 0);
+    EXPECT_FALSE(cog.ErrorMsg().empty());
+    EXPECT_EQ(cog.outputDataset, nullptr);
+    EXPECT_FALSE(std::filesystem::exists(options.output));
+
+    RasterConvertOptions convert;
+    convert.input = input;
+    convert.outputFormat = "MEM";
+    const auto pipeline = RunPipeline(
+        {{{"raster", "convert"}, convert.ToArgs()}}, {}, &token);
+    EXPECT_FALSE(pipeline.Succeeded());
+    EXPECT_TRUE(pipeline.WasCancelled());
+    EXPECT_NE(pipeline.LastErrorCode(), 0);
+    EXPECT_EQ(pipeline.outputDataset, nullptr);
+    EXPECT_TRUE(pipeline.retainedDatasets.empty());
+
+    const auto invalid = RunPipeline({});
+    EXPECT_FALSE(invalid.Succeeded());
+    EXPECT_FALSE(invalid.WasCancelled());
+    EXPECT_NE(invalid.ErrorMsg().find("at least one step"), std::string::npos);
+}
+
 namespace
 {
     std::string ToUtf8(const std::filesystem::path& path)

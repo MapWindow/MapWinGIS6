@@ -10,6 +10,7 @@
 #include "mapwingis/gdal/GdalUtils.h"
 
 #include "internal/Utf8.h"
+#include "internal/GdalExecution.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/gdal/GdalTypedOptions.h"
@@ -147,22 +148,55 @@ namespace mwg
         }
 
         template <typename Operation>
-        bool RunUtilityOperation(std::vector<GdalError>& errors, Operation&& operation)
+        bool RunUtilityOperation(std::vector<GdalError>& errors, bool& cancelled,
+                                 GdalProgressAdapter::Callback progress,
+                                 const GdalCancellationToken* cancellationToken,
+                                 Operation&& operation)
         {
+            const detail::GdalExecutionLock lock;
             errors.clear();
             GdalEnvironment::Initialize();
+            if (cancellationToken != nullptr && cancellationToken->IsCancellationRequested())
+            {
+                cancelled = true;
+                return RecordFailure(errors, "GDAL compatibility operation was cancelled.");
+            }
 
+            GdalProgressAdapter adapter(std::move(progress), cancellationToken);
             GdalErrorScope scope;
-            const bool succeeded = operation();
+            const bool succeeded = operation(adapter);
             errors = scope.Errors();
             scope.RethrowCaptureException();
 
+            try
+            {
+                adapter.RethrowCallbackException();
+            }
+            catch (const std::exception& error)
+            {
+                errors.push_back({GdalErrorClass::Failure, kCompatibilityErrorCode,
+                                  "GDAL progress callback failed: " + std::string(error.what())});
+                return false;
+            }
+            catch (...)
+            {
+                errors.push_back({GdalErrorClass::Failure, kCompatibilityErrorCode,
+                                  "GDAL progress callback failed with a non-standard exception."});
+                return false;
+            }
+            cancelled = adapter.WasCancelled();
+            if (cancelled)
+            {
+                errors.push_back({GdalErrorClass::Failure, kCompatibilityErrorCode,
+                                  "GDAL compatibility operation was cancelled."});
+                return false;
+            }
             if (!succeeded && !HasFailure(errors))
             {
                 errors.push_back({GdalErrorClass::Failure, kCompatibilityErrorCode,
                                   "The GDAL compatibility operation failed."});
             }
-            return succeeded;
+            return succeeded && !HasFailure(errors);
         }
 
         std::string JoinErrors(const std::vector<GdalError>& errors)
@@ -180,7 +214,9 @@ namespace mwg
         bool RunClipAlgorithm(std::vector<GdalError>& errors,
                               const std::filesystem::path& subjectFilename,
                               const std::filesystem::path& overlayFilename,
-                              const std::filesystem::path& destinationFilename)
+                              const std::filesystem::path& destinationFilename,
+                              bool& cancelled, GdalProgressAdapter::Callback progress,
+                              const GdalCancellationToken* cancellationToken)
         {
             GdalAlgorithmRunner runner("vector clip");
             VectorClipOptions options;
@@ -190,8 +226,9 @@ namespace mwg
             options.overwrite = true;
 
             const bool configured = ConfigureGdalAlgorithm(runner, options.ToArgs());
-            const bool succeeded = configured && runner.Run();
+            const bool succeeded = configured && runner.Run(std::move(progress), cancellationToken);
             errors = runner.Errors();
+            cancelled = runner.Result().WasCancelled();
             if (!succeeded && !HasFailure(errors))
             {
                 errors.push_back({GdalErrorClass::Failure, kCompatibilityErrorCode,
@@ -204,11 +241,13 @@ namespace mwg
             std::vector<GdalError>& errors,
             const std::filesystem::path& sourceFilename,
             const std::filesystem::path& destinationFilename,
-            const std::vector<std::string>& options)
+            const std::vector<std::string>& options, bool& cancelled,
+            GdalProgressAdapter::Callback progress,
+            const GdalCancellationToken* cancellationToken)
         {
             return RunUtilityOperation(
-                errors,
-                [&]()
+                errors, cancelled, std::move(progress), cancellationToken,
+                [&](GdalProgressAdapter& adapter)
                 {
                     const std::string destination = detail::ToUtf8(destinationFilename);
                     DatasetPtr input =
@@ -221,6 +260,8 @@ namespace mwg
                         GDALVectorTranslateOptionsNew(arguments.pointers.data(), nullptr));
                     if (translateOptions == nullptr)
                         return false;
+                    GDALVectorTranslateOptionsSetProgress(
+                        translateOptions.get(), adapter.Function(), adapter.UserData());
 
                     GDALDatasetH sources[] = {input.get()};
                     int usageError = FALSE;
@@ -237,6 +278,8 @@ namespace mwg
     struct GdalUtils::Impl
     {
         std::vector<GdalError> errors;
+        bool succeeded = false;
+        bool cancelled = false;
     };
 
     GdalUtils::GdalUtils()
@@ -250,6 +293,50 @@ namespace mwg
     }
 
     GdalUtils::~GdalUtils() = default;
+
+    bool GdalUtils::GdalRasterTranslate(
+        const std::filesystem::path& source, const std::filesystem::path& destination,
+        const std::vector<std::string>& options)
+    {
+        return GdalRasterTranslate(source, destination, options, {}, nullptr);
+    }
+
+    bool GdalUtils::GdalRasterWarp(
+        const std::filesystem::path& source, const std::filesystem::path& destination,
+        const std::vector<std::string>& options)
+    {
+        return GdalRasterWarp(source, destination, options, {}, nullptr);
+    }
+
+    bool GdalUtils::GdalVectorTranslate(
+        const std::filesystem::path& source, const std::filesystem::path& destination,
+        const std::vector<std::string>& options, const bool useSharedConnection)
+    {
+        return GdalVectorTranslate(source, destination, options, useSharedConnection, {}, nullptr);
+    }
+
+    bool GdalUtils::GdalVectorReproject(
+        const std::filesystem::path& source, const std::filesystem::path& destination,
+        const int sourceEpsgCode, const int destinationEpsgCode, const bool useSharedConnection)
+    {
+        return GdalVectorReproject(source, destination, sourceEpsgCode, destinationEpsgCode,
+                                   useSharedConnection, {}, nullptr);
+    }
+
+    bool GdalUtils::GdalBuildOverviews(
+        const std::filesystem::path& source, const std::string_view resampling,
+        const std::vector<int>& overviews, const std::vector<int>& bands,
+        const std::vector<std::pair<std::string, std::string>>& configOptions)
+    {
+        return GdalBuildOverviews(source, resampling, overviews, bands, configOptions, {}, nullptr);
+    }
+
+    bool GdalUtils::ClipVectorWithVector(
+        const std::filesystem::path& subject, const std::filesystem::path& overlay,
+        const std::filesystem::path& destination, const bool useSharedConnection)
+    {
+        return ClipVectorWithVector(subject, overlay, destination, useSharedConnection, {}, nullptr);
+    }
 
     int GdalUtils::LastErrorCode() const noexcept
     {
@@ -284,17 +371,31 @@ namespace mwg
         return _impl->errors;
     }
 
+    GdalOperationResult GdalUtils::Result() const
+    {
+        GdalOperationResult result;
+        result.succeeded = _impl->succeeded;
+        result.cancelled = _impl->cancelled;
+        result.errors = _impl->errors;
+        return result;
+    }
+
     bool GdalUtils::GdalRasterTranslate(
         const std::filesystem::path& sourceFilename,
         const std::filesystem::path& destinationFilename,
-        const std::vector<std::string>& options)
+        const std::vector<std::string>& options,
+        GdalProgressAdapter::Callback progress,
+        const GdalCancellationToken* cancellationToken)
     {
+        const detail::GdalExecutionLock lock;
+        _impl->succeeded = false;
+        _impl->cancelled = false;
         if (HasNullByte(options))
             return RecordFailure(_impl->errors, "GDAL utility options must not contain null bytes.");
 
-        return RunUtilityOperation(
-            _impl->errors,
-            [&]()
+        return _impl->succeeded = RunUtilityOperation(
+            _impl->errors, _impl->cancelled, std::move(progress), cancellationToken,
+            [&](GdalProgressAdapter& adapter)
             {
                 const std::string destination = detail::ToUtf8(destinationFilename);
                 DatasetPtr input = OpenDataset(sourceFilename, GDAL_OF_RASTER | GDAL_OF_READONLY);
@@ -306,6 +407,8 @@ namespace mwg
                     GDALTranslateOptionsNew(arguments.pointers.data(), nullptr));
                 if (translateOptions == nullptr)
                     return false;
+                GDALTranslateOptionsSetProgress(
+                    translateOptions.get(), adapter.Function(), adapter.UserData());
 
                 int usageError = FALSE;
                 DatasetPtr output(static_cast<GDALDataset*>(
@@ -320,14 +423,19 @@ namespace mwg
     bool GdalUtils::GdalRasterWarp(
         const std::filesystem::path& sourceFilename,
         const std::filesystem::path& destinationFilename,
-        const std::vector<std::string>& options)
+        const std::vector<std::string>& options,
+        GdalProgressAdapter::Callback progress,
+        const GdalCancellationToken* cancellationToken)
     {
+        const detail::GdalExecutionLock lock;
+        _impl->succeeded = false;
+        _impl->cancelled = false;
         if (HasNullByte(options))
             return RecordFailure(_impl->errors, "GDAL utility options must not contain null bytes.");
 
-        return RunUtilityOperation(
-            _impl->errors,
-            [&]()
+        return _impl->succeeded = RunUtilityOperation(
+            _impl->errors, _impl->cancelled, std::move(progress), cancellationToken,
+            [&](GdalProgressAdapter& adapter)
             {
                 const std::string destination = detail::ToUtf8(destinationFilename);
                 DatasetPtr input = OpenDataset(sourceFilename, GDAL_OF_RASTER | GDAL_OF_READONLY);
@@ -339,6 +447,8 @@ namespace mwg
                     GDALWarpAppOptionsNew(arguments.pointers.data(), nullptr));
                 if (warpOptions == nullptr)
                     return false;
+                GDALWarpAppOptionsSetProgress(
+                    warpOptions.get(), adapter.Function(), adapter.UserData());
 
                 GDALDatasetH sources[] = {input.get()};
                 int usageError = FALSE;
@@ -355,14 +465,20 @@ namespace mwg
         const std::filesystem::path& sourceFilename,
         const std::filesystem::path& destinationFilename,
         const std::vector<std::string>& options,
-        const bool useSharedConnection)
+        const bool useSharedConnection,
+        GdalProgressAdapter::Callback progress,
+        const GdalCancellationToken* cancellationToken)
     {
+        const detail::GdalExecutionLock lock;
+        _impl->succeeded = false;
+        _impl->cancelled = false;
         (void)useSharedConnection;
         if (HasNullByte(options))
             return RecordFailure(_impl->errors, "GDAL utility options must not contain null bytes.");
 
-        return RunVectorTranslateOperation(_impl->errors, sourceFilename,
-                                           destinationFilename, options);
+        return _impl->succeeded = RunVectorTranslateOperation(
+            _impl->errors, sourceFilename, destinationFilename, options, _impl->cancelled,
+            std::move(progress), cancellationToken);
     }
 
     bool GdalUtils::GdalVectorReproject(
@@ -370,15 +486,21 @@ namespace mwg
         const std::filesystem::path& destinationFilename,
         const int sourceEpsgCode,
         const int destinationEpsgCode,
-        const bool useSharedConnection)
+        const bool useSharedConnection,
+        GdalProgressAdapter::Callback progress,
+        const GdalCancellationToken* cancellationToken)
     {
+        const detail::GdalExecutionLock lock;
+        _impl->succeeded = false;
+        _impl->cancelled = false;
         (void)useSharedConnection;
         const std::vector<std::string> options{
             "-overwrite",
             "-s_srs", "EPSG:" + std::to_string(sourceEpsgCode),
             "-t_srs", "EPSG:" + std::to_string(destinationEpsgCode)};
-        return RunVectorTranslateOperation(_impl->errors, sourceFilename,
-                                           destinationFilename, options);
+        return _impl->succeeded = RunVectorTranslateOperation(
+            _impl->errors, sourceFilename, destinationFilename, options, _impl->cancelled,
+            std::move(progress), cancellationToken);
     }
 
     bool GdalUtils::GdalBuildOverviews(
@@ -386,8 +508,13 @@ namespace mwg
         const std::string_view resamplingMethod,
         const std::vector<int>& overviewList,
         const std::vector<int>& bandList,
-        const std::vector<std::pair<std::string, std::string>>& configOptions)
+        const std::vector<std::pair<std::string, std::string>>& configOptions,
+        GdalProgressAdapter::Callback progress,
+        const GdalCancellationToken* cancellationToken)
     {
+        const detail::GdalExecutionLock lock;
+        _impl->succeeded = false;
+        _impl->cancelled = false;
         if (resamplingMethod.find('\0') != std::string_view::npos)
             return RecordFailure(_impl->errors, "GDAL resampling method must not contain null bytes.");
         if (overviewList.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
@@ -404,9 +531,9 @@ namespace mwg
             }
         }
 
-        return RunUtilityOperation(
-            _impl->errors,
-            [&]()
+        return _impl->succeeded = RunUtilityOperation(
+            _impl->errors, _impl->cancelled, std::move(progress), cancellationToken,
+            [&](GdalProgressAdapter& adapter)
             {
                 ScopedGdalConfigOptions scopedOptions;
                 for (const auto& [name, value] : configOptions)
@@ -436,11 +563,13 @@ namespace mwg
                         return true;
                 }
 
-                const int result = GDALBuildOverviews(
+                const CPLErr result = GDALBuildOverviews(
                     dataset.get(), resampling.c_str(), static_cast<int>(overviewLevels->size()),
                     overviewLevels->data(),
-                    static_cast<int>(bandList.size()), bandList.data(), nullptr, nullptr);
-                return result == CE_None;
+                    static_cast<int>(bandList.size()), bandList.data(),
+                    adapter.Function(), adapter.UserData());
+                const bool closed = CloseDataset(dataset);
+                return result == CE_None && closed;
             });
     }
 
@@ -448,12 +577,18 @@ namespace mwg
         const std::filesystem::path& subjectFilename,
         const std::filesystem::path& overlayFilename,
         const std::filesystem::path& destinationFilename,
-        const bool useSharedConnection)
+        const bool useSharedConnection,
+        GdalProgressAdapter::Callback progress,
+        const GdalCancellationToken* cancellationToken)
     {
+        const detail::GdalExecutionLock lock;
+        _impl->succeeded = false;
+        _impl->cancelled = false;
         (void)useSharedConnection;
         _impl->errors.clear();
         GdalEnvironment::Initialize();
-        return RunClipAlgorithm(_impl->errors, subjectFilename, overlayFilename,
-                                destinationFilename);
+        return _impl->succeeded = RunClipAlgorithm(
+            _impl->errors, subjectFilename, overlayFilename, destinationFilename,
+            _impl->cancelled, std::move(progress), cancellationToken);
     }
 }

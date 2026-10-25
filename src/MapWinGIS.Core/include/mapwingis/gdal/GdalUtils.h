@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "mapwingis/core/Api.h"
-#include "mapwingis/gdal/GdalRuntime.h"
+#include "mapwingis/gdal/GdalAlgorithmRunner.h"
 
 namespace mwg
 {
@@ -35,6 +35,12 @@ namespace mwg
      * operation. LastErrorCode returns the last GDAL error code for a failure,
      * or zero when the last operation succeeded. ErrorMsg searches diagnostics
      * from that operation.
+     *
+     * Progress overloads use the same synchronous callback contract as
+     * GdalAlgorithmRunner::Run(). Existing signatures remain available.
+     * Result().WasCancelled() distinguishes token/callback cancellation from
+     * callback exceptions and other failures. GDAL execution is serialized
+     * with runners and convenience operations, not with direct dataset access.
      */
     class MWG_CORE_API GdalUtils
     {
@@ -57,17 +63,36 @@ namespace mwg
         /// Returns all warning and failure diagnostics from the most recent operation.
         [[nodiscard]] std::vector<GdalError> Errors() const;
 
+        /// Snapshots the most recent operation, including cancellation state.
+        [[nodiscard]] GdalOperationResult Result() const;
+
         /// Converts a raster with legacy GDALTranslate command-line options.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool GdalRasterTranslate(const std::filesystem::path& sourceFilename,
                                  const std::filesystem::path& destinationFilename,
                                  const std::vector<std::string>& options);
 
+        /// Legacy translation with synchronous progress and cancellation.
+        [[nodiscard]] bool GdalRasterTranslate(
+                                 const std::filesystem::path& sourceFilename,
+                                 const std::filesystem::path& destinationFilename,
+                                 const std::vector<std::string>& options,
+                                 GdalProgressAdapter::Callback progress,
+                                 const GdalCancellationToken* cancellationToken = nullptr);
+
         /// Reprojects a raster with legacy GDALWarp command-line options.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool GdalRasterWarp(const std::filesystem::path& sourceFilename,
                             const std::filesystem::path& destinationFilename,
                             const std::vector<std::string>& options);
+
+        /// Legacy warp with synchronous progress and cancellation.
+        [[nodiscard]] bool GdalRasterWarp(
+                            const std::filesystem::path& sourceFilename,
+                            const std::filesystem::path& destinationFilename,
+                            const std::vector<std::string>& options,
+                            GdalProgressAdapter::Callback progress,
+                            const GdalCancellationToken* cancellationToken = nullptr);
 
         /// Converts vector data with legacy GDALVectorTranslate command-line options.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
@@ -76,6 +101,15 @@ namespace mwg
                                  const std::vector<std::string>& options,
                                  bool useSharedConnection = false);
 
+        /// Legacy vector translation with synchronous progress and cancellation.
+        [[nodiscard]] bool GdalVectorTranslate(
+                                 const std::filesystem::path& sourceFilename,
+                                 const std::filesystem::path& destinationFilename,
+                                 const std::vector<std::string>& options,
+                                 bool useSharedConnection,
+                                 GdalProgressAdapter::Callback progress,
+                                 const GdalCancellationToken* cancellationToken = nullptr);
+
         /// Reprojects vector data from one EPSG code to another.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool GdalVectorReproject(const std::filesystem::path& sourceFilename,
@@ -83,6 +117,16 @@ namespace mwg
                                  int sourceEpsgCode,
                                  int destinationEpsgCode,
                                  bool useSharedConnection = false);
+
+        /// Legacy vector reprojection with synchronous progress and cancellation.
+        [[nodiscard]] bool GdalVectorReproject(
+                                 const std::filesystem::path& sourceFilename,
+                                 const std::filesystem::path& destinationFilename,
+                                 int sourceEpsgCode,
+                                 int destinationEpsgCode,
+                                 bool useSharedConnection,
+                                 GdalProgressAdapter::Callback progress,
+                                 const GdalCancellationToken* cancellationToken = nullptr);
 
         /// Builds overview levels; band indexes are one-based, and an empty list selects all bands.
         /// Configuration options are scoped to this call and restored afterward.
@@ -95,12 +139,31 @@ namespace mwg
                                 const std::vector<std::pair<std::string, std::string>>&
                                     configOptions = {});
 
+        /// Legacy overview building with synchronous progress and cancellation.
+        [[nodiscard]] bool GdalBuildOverviews(
+                                const std::filesystem::path& sourceFilename,
+                                std::string_view resamplingMethod,
+                                const std::vector<int>& overviewList,
+                                const std::vector<int>& bandList,
+                                const std::vector<std::pair<std::string, std::string>>& configOptions,
+                                GdalProgressAdapter::Callback progress,
+                                const GdalCancellationToken* cancellationToken = nullptr);
+
         /// Clips subject features by the overlay dataset's geometry.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool ClipVectorWithVector(const std::filesystem::path& subjectFilename,
                                   const std::filesystem::path& overlayFilename,
                                   const std::filesystem::path& destinationFilename,
                                   bool useSharedConnection = true);
+
+        /// Legacy clipping with synchronous progress and cancellation.
+        [[nodiscard]] bool ClipVectorWithVector(
+                                  const std::filesystem::path& subjectFilename,
+                                  const std::filesystem::path& overlayFilename,
+                                  const std::filesystem::path& destinationFilename,
+                                  bool useSharedConnection,
+                                  GdalProgressAdapter::Callback progress,
+                                  const GdalCancellationToken* cancellationToken = nullptr);
 
     private:
         struct Impl;

@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <stdexcept>
 #include <thread>
 
 #include <cpl_error.h>
@@ -133,4 +134,33 @@ TEST(GdalEnvironment, QuietScopeDoesNotSuppressOtherThreads)
     GdalEnvironment::SetLogHandler({});
     EXPECT_EQ(seen.load(), 1);
     GdalEnvironment::ClearLastError();
+}
+
+TEST(GdalEnvironment, DefersLoggerExceptionsUntilAfterTheNativeCallback)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    {
+        throw std::runtime_error("logger failed");
+    });
+    EXPECT_NO_THROW(CPLError(CE_Warning, CPLE_AppDefined, "%s", "test warning"));
+    GdalEnvironment::SetLogHandler({});
+    EXPECT_THROW(GdalEnvironment::RethrowLogException(), std::runtime_error);
+    EXPECT_NO_THROW(GdalEnvironment::RethrowLogException());
+}
+
+TEST(GdalEnvironment, RejectsRecursiveLoggingWithoutCrossingTheCallbackBoundary)
+{
+    GdalEnvironment::Initialize();
+    int calls = 0;
+    GdalEnvironment::SetLogHandler([&](LogLevel, std::string_view)
+    {
+        ++calls;
+        CPLError(CE_Warning, CPLE_AppDefined, "%s", "nested warning");
+    });
+    EXPECT_NO_THROW(CPLError(CE_Warning, CPLE_AppDefined, "%s", "outer warning"));
+    GdalEnvironment::SetLogHandler({});
+    EXPECT_EQ(calls, 1);
+    EXPECT_THROW(GdalEnvironment::RethrowLogException(), std::runtime_error);
+    EXPECT_NO_THROW(GdalEnvironment::RethrowLogException());
 }
