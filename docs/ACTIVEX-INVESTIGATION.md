@@ -31,6 +31,13 @@ dispatch IDs and event IDs. Those names, IDs, and observable behaviors are
 compatibility references; the GDI+/buffering implementation is not a
 requirement for the new renderer.
 
+These observations can be checked against the MapWinGIS 5 source at commit
+[`c08894b`](https://github.com/MapWindow/MapWinGIS/tree/c08894b481fdc3c0184de1e29a12f45701f62e02):
+the [`CMapView` declaration](https://github.com/MapWindow/MapWinGIS/blob/c08894b481fdc3c0184de1e29a12f45701f62e02/src/MapControl/Map.h#L44-L77),
+the [drawing implementation](https://github.com/MapWindow/MapWinGIS/blob/c08894b481fdc3c0184de1e29a12f45701f62e02/src/MapControl/Map_Drawing.cpp#L23),
+the [`_DMap` and `_DMapEvents` type-library definitions](https://github.com/MapWindow/MapWinGIS/blob/c08894b481fdc3c0184de1e29a12f45701f62e02/src/MapWinGIS.idl#L6779-L7253),
+and the [legacy project settings](https://github.com/MapWindow/MapWinGIS/blob/c08894b481fdc3c0184de1e29a12f45701f62e02/src/MapWinGIS.vcxproj#L38-L39).
+
 The legacy `.vcxproj` declares `UseOfMfc` and `UseOfAtl` as false even though
 the control derives from `COleControl`. Do not copy its project settings
 without reconciling that configuration against the chosen modern COM
@@ -49,6 +56,11 @@ scope; add COM activation; establish paint, resize, and cleanup; expose the
 geometry needed by a CPU renderer and display a real vector layer; then add
 OpenGL and capability selection, strengthen fallback and resource policies,
 validate platforms and hosts, and document the implementation.
+
+The CPU-first vertical slice is complete when a repeatable test activates the
+control in a supported host, resize/repaint/cleanup behavior is covered, and a
+rendering test draws a real vector fixture. Complete these checks before
+starting OpenGL work.
 
 The plan establishes that COM belongs outside the core and that OpenGL and
 CPU rendering need a replaceable boundary. It does not settle whether the
