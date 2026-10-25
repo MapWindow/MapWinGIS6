@@ -20,11 +20,18 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            MessageBox.Show(
-                exception.Message,
-                "MapWinGIS ActiveX Test Host",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            if (args.Contains("--automated", StringComparer.Ordinal))
+            {
+                Console.Error.WriteLine(exception);
+            }
+            else
+            {
+                MessageBox.Show(
+                    exception.Message,
+                    "MapWinGIS ActiveX Test Host",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
             return 1;
         }
     }

@@ -35,6 +35,7 @@ internal sealed class MainForm : Form
     public MainForm(HostOptions options)
     {
         _options = options;
+        ExitCode = options.Automated ? 1 : 0;
         Text = "MapWinGIS ActiveX Test Host";
         ClientSize = new Size(720, 480);
         MinimumSize = new Size(360, 260);
