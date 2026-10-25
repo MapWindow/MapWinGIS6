@@ -84,7 +84,7 @@ namespace mwg::rendering
 
     VectorRenderScene CreateVectorRenderScene(const VectorLayer& layer)
     {
-        if (layer.Type() != ShapeType::Polygon)
+        if (BaseShapeType(layer.Type()) != ShapeType::Polygon)
         {
             throw CoreError("Vector rendering supports polygon layers only");
         }

@@ -184,7 +184,6 @@ namespace mwg::activex
                     }
 
                     ringCounts.push_back(static_cast<int>(ring.size()));
-                    points.reserve(points.size() + ring.size());
                     for (const rendering::Point& point : ring)
                     {
                         points.push_back(ToPoint(point, scene, scale, left, top));
