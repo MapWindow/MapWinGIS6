@@ -42,8 +42,10 @@ following true:
 - Do not copy the v5 file organization (flat folders, `stdafx.h`, COM maps).
 - Do not port MFC containers (`CString`, `CArray`, `CMap`) — use
   `std::string`, `std::vector`, `std::map`.
-- Do not port GDI rendering or window-message logic into the core. Rendering
-  gets its own core area designed for it; the COM control merely forwards.
+- Do not port GDI rendering or window-message logic into the core. Put
+  reusable map rendering and GIS behavior in the core rendering area. Keep
+  host-surface, graphics-context, and backend integration in native OCX
+  components; they forward render requests without implementing GIS rules.
 - Do not "improve" behavior silently. Differences from v5 must be deliberate
   and recorded in the header's doc comment so the ActiveX implementation and
   future maintainers can see the decision.
