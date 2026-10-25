@@ -11,6 +11,7 @@
 
 #include <array>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -368,6 +369,28 @@ TEST(GdalUtils, MapsFailureDiagnosticsToLegacyErrorProperties)
     EXPECT_EQ(utils.LastErrorCode(), 0);
 }
 
+TEST(GdalUtils, PreservesClipDiagnosticsWhenLoggerThrows)
+{
+    GdalEnvironment::Initialize();
+    test::TempDirectory directory;
+    GdalUtils utils;
+    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    {
+        throw std::runtime_error("logger failure");
+    });
+
+    EXPECT_THROW((void)utils.ClipVectorWithVector(
+        directory.Path() / "missing-subject.gpkg",
+        directory.Path() / "missing-overlay.gpkg",
+        directory.Path() / "clipped.gpkg"), std::runtime_error);
+    GdalEnvironment::SetLogHandler({});
+
+    const GdalOperationResult result = utils.Result();
+    EXPECT_FALSE(result.Succeeded());
+    EXPECT_FALSE(result.AllErrors().empty());
+    EXPECT_NE(result.LastErrorCode(), 0);
+}
+
 TEST(GdalUtils, RejectsOptionStringsContainingNullBytes)
 {
     GdalUtils utils;
@@ -378,6 +401,92 @@ TEST(GdalUtils, RejectsOptionStringsContainingNullBytes)
     EXPECT_FALSE(utils.GdalRasterTranslate("input.tif", "output.tif", {invalidOption}));
     EXPECT_NE(utils.LastErrorCode(), 0);
     EXPECT_NE(utils.DetailedErrorMsg().find("null bytes"), std::string::npos);
+}
+
+TEST(GdalUtils, ReportsProgressCancellationAndResetsOperationState)
+{
+    GdalEnvironment::Initialize();
+    test::TempDirectory directory;
+    const auto input = test::MakeRaster(directory.Path());
+    GdalUtils utils;
+    EXPECT_FALSE(utils.Result().Succeeded());
+    EXPECT_FALSE(utils.GdalRasterTranslate(
+        input, directory.Path() / "cancelled.tif", {},
+        [](double, std::string_view) { return false; }));
+    auto cancelled = utils.Result();
+    EXPECT_FALSE(cancelled.Succeeded());
+    EXPECT_TRUE(cancelled.WasCancelled());
+    EXPECT_NE(cancelled.ErrorMsg().find("cancelled"), std::string::npos);
+    EXPECT_EQ(cancelled.LastErrorCode(), utils.LastErrorCode());
+
+    std::vector<double> progress;
+    EXPECT_TRUE(utils.GdalRasterTranslate(
+        input, directory.Path() / "success.tif", {},
+        [&](const double value, std::string_view)
+        {
+            progress.push_back(value);
+            return true;
+        }));
+    EXPECT_TRUE(utils.Result().Succeeded());
+    EXPECT_FALSE(utils.Result().WasCancelled());
+    EXPECT_EQ(utils.Result().LastErrorCode(), 0);
+    EXPECT_TRUE(utils.Result().AllErrors().empty());
+    EXPECT_TRUE(cancelled.WasCancelled());
+    ASSERT_FALSE(progress.empty());
+    EXPECT_DOUBLE_EQ(progress.back(), 1.0);
+    auto output = OpenDataset(directory.Path() / "success.tif", GDAL_OF_RASTER);
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->GetRasterXSize(), 12);
+    std::uint8_t pixel = 0;
+    EXPECT_EQ(output->GetRasterBand(1)->RasterIO(
+        GF_Read, 0, 0, 1, 1, &pixel, 1, 1, GDT_Byte, 0, 0), CE_None);
+    EXPECT_EQ(pixel, 42);
+}
+
+TEST(GdalUtils, RejectsPreCancelledOperationsAndReportsCallbackExceptionsAsFailures)
+{
+    GdalEnvironment::Initialize();
+    test::TempDirectory directory;
+    const auto input = test::MakeRaster(directory.Path());
+    GdalUtils utils;
+    GdalCancellationToken token;
+    token.Cancel();
+    EXPECT_FALSE(utils.GdalRasterWarp(
+        input, directory.Path() / "cancelled.tif", {}, {}, &token));
+    EXPECT_TRUE(utils.Result().WasCancelled());
+    EXPECT_FALSE(std::filesystem::exists(directory.Path() / "cancelled.tif"));
+    EXPECT_FALSE(utils.GdalRasterTranslate(
+        input, directory.Path() / "failed.tif", {},
+        [](double, std::string_view) -> bool { throw std::runtime_error("callback failed"); }));
+    EXPECT_FALSE(utils.Result().WasCancelled());
+    EXPECT_NE(utils.Result().ErrorMsg().find("callback failed"), std::string::npos);
+}
+
+TEST(GdalUtils, PropagatesCancellationThroughVectorAndOverviewOperations)
+{
+    GdalEnvironment::Initialize();
+    test::TempDirectory directory;
+    const auto raster = test::MakeRaster(directory.Path());
+    const auto vector = test::MakeProvincesDataset(directory.Path(), "source.gpkg");
+    const auto overlay = MakeClipOverlay(directory.Path());
+    GdalCancellationToken token;
+    token.Cancel();
+    GdalUtils utils;
+
+    EXPECT_FALSE(utils.GdalVectorTranslate(
+        vector, directory.Path() / "translated.gpkg", {}, false, {}, &token));
+    EXPECT_TRUE(utils.Result().WasCancelled());
+    EXPECT_FALSE(utils.GdalVectorReproject(
+        vector, directory.Path() / "reprojected.gpkg", 28992, 4326, false, {}, &token));
+    EXPECT_TRUE(utils.Result().WasCancelled());
+    EXPECT_FALSE(utils.GdalBuildOverviews(raster, "NEAREST", {2}, {}, {}, {}, &token));
+    EXPECT_TRUE(utils.Result().WasCancelled());
+    EXPECT_FALSE(utils.ClipVectorWithVector(
+        vector, overlay, directory.Path() / "clipped.gpkg", false, {}, &token));
+    EXPECT_TRUE(utils.Result().WasCancelled());
+    EXPECT_FALSE(std::filesystem::exists(directory.Path() / "translated.gpkg"));
+    EXPECT_FALSE(std::filesystem::exists(directory.Path() / "reprojected.gpkg"));
+    EXPECT_FALSE(std::filesystem::exists(directory.Path() / "clipped.gpkg"));
 }
 
 #pragma warning(pop)

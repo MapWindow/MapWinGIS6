@@ -8,6 +8,7 @@
  * cancellation, finalization, and dataset ownership.
  */
 #include "mapwingis/gdal/GdalModern.h"
+#include "internal/GdalExecution.h"
 
 #include <algorithm>
 #include <cpl_error.h>
@@ -22,6 +23,7 @@ namespace mwg
         {
             const auto& errors = runner.Errors();
             result.errors.insert(result.errors.end(), errors.begin(), errors.end());
+            result.cancelled = result.cancelled || runner.Result().WasCancelled();
         }
 
         void AddOperationError(GdalOperationResult& result, std::string message)
@@ -44,6 +46,7 @@ namespace mwg
                                  GdalProgressAdapter::Callback progress,
                                  const GdalCancellationToken* cancellationToken)
     {
+        const detail::GdalExecutionLock lock;
         RasterConvertOptions conversion;
         conversion.input = options.input;
         conversion.output = options.output;
@@ -61,10 +64,10 @@ namespace mwg
             return result;
         }
 
-        result.succeeded = runner.Run(std::move(progress), cancellationToken);
+        (void)runner.Run(std::move(progress), cancellationToken);
+        result = runner.Result();
         if (result.succeeded)
             result.outputDataset = runner.TakeOutputDataset();
-        AppendRunnerErrors(result, runner);
         return result;
     }
 
@@ -72,6 +75,7 @@ namespace mwg
                                     GdalProgressAdapter::Callback progress,
                                     const GdalCancellationToken* cancellationToken)
     {
+        const detail::GdalExecutionLock lock;
         GdalOperationResult result;
         if (steps.empty())
         {

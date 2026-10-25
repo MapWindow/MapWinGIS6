@@ -10,6 +10,8 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <array>
+#include <barrier>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -141,6 +143,29 @@ TEST(GdalRuntime, CapturesStructuredGdalErrors)
     EXPECT_NE(errors.DetailedErrorMessage().find("forced failure"), std::string::npos);
 }
 
+TEST(GdalRuntime, ContinuesCapturingDiagnosticsAfterLoggerException)
+{
+    GdalEnvironment::Initialize();
+    int logCalls = 0;
+    GdalEnvironment::SetLogHandler([&logCalls](LogLevel, std::string_view)
+    {
+        if (++logCalls == 1)
+            throw std::runtime_error("logger failure");
+    });
+
+    GdalErrorScope errors;
+    CPLError(CE_Warning, CPLE_AppDefined, "%s", "warning before failure");
+    CPLError(CE_Failure, CPLE_AppDefined, "%s", "failure after warning");
+    GdalEnvironment::SetLogHandler({});
+
+    ASSERT_EQ(errors.Errors().size(), 2);
+    EXPECT_EQ(errors.Errors()[0].message, "warning before failure");
+    EXPECT_EQ(errors.Errors()[1].message, "failure after warning");
+    EXPECT_EQ(errors.LastErrorCode(), CPLE_AppDefined);
+    EXPECT_EQ(logCalls, 2);
+    EXPECT_THROW(errors.RethrowCaptureException(), std::runtime_error);
+}
+
 TEST(GdalRuntime, ReportsProgressFromStartToCompletion)
 {
     GdalEnvironment::Initialize();
@@ -224,4 +249,43 @@ TEST(GdalRuntime, RethrowsProgressCallbackExceptionAfterGdalReturns)
     EXPECT_EQ(adapter.Function()(0.0, "", adapter.UserData()), 0);
     EXPECT_TRUE(adapter.WasCancelled());
     EXPECT_THROW(adapter.RethrowCallbackException(), std::runtime_error);
+}
+
+TEST(GdalRuntime, KeepsCancellationLatchedAndChecksTokenAfterTheCallback)
+{
+    GdalCancellationToken token;
+    int calls = 0;
+    GdalProgressAdapter adapter([&](double, std::string_view)
+    {
+        ++calls;
+        token.Cancel();
+        return true;
+    }, &token);
+    EXPECT_EQ(adapter.Function()(1.0, "", adapter.UserData()), 0);
+    EXPECT_TRUE(adapter.WasCancelled());
+    EXPECT_EQ(adapter.Function()(1.0, "", adapter.UserData()), 0);
+    EXPECT_EQ(calls, 1);
+}
+
+TEST(GdalRuntime, IsolatesOverlappingErrorScopesOnDifferentThreads)
+{
+    GdalEnvironment::Initialize();
+    std::barrier start(2);
+    std::array<std::vector<GdalError>, 2> results;
+    const auto capture = [&](const std::size_t index)
+    {
+        GdalErrorScope scope;
+        start.arrive_and_wait();
+        CPLError(CE_Failure, CPLE_AppDefined, "%s", index == 0 ? "first" : "second");
+        start.arrive_and_wait();
+        results[index] = scope.Errors();
+    };
+    std::thread first(capture, 0);
+    std::thread second(capture, 1);
+    first.join();
+    second.join();
+    ASSERT_EQ(results[0].size(), 1);
+    ASSERT_EQ(results[1].size(), 1);
+    EXPECT_EQ(results[0].front().message, "first");
+    EXPECT_EQ(results[1].front().message, "second");
 }

@@ -47,6 +47,7 @@
   </ItemDefinitionGroup>
 
   <ItemGroup>
+    <ClInclude Include="..\MapWinGIS.Core\src\internal\GdalExecution.h" />
     <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalRuntime.h" />
     <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalAlgorithmRunner.h" />
     <ClInclude Include="..\MapWinGIS.Core\include\mapwingis\gdal\GdalTypedOptions.h" />

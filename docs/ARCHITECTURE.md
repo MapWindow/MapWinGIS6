@@ -78,6 +78,11 @@ expect.
 - Observe GDAL errors through the thread-local `LastErrorMessage()` /
   `SetLogHandler()`. Never write to stderr and never show message boxes from
   the core.
+- Algorithm runners, compatibility utilities, and pipelines share an execution
+  lock. Their callbacks run on the calling thread and cannot re-enter these
+  operations. Direct dataset access still needs caller synchronization.
+  See [operation results and threading](gdal-modern-capabilities.md#operation-results-logging-and-cancellation)
+  for result, cancellation, and callback lifetime contracts.
 - The supported GDAL version and dependency pin are documented in
   `docs/gdal-version.md`.
 

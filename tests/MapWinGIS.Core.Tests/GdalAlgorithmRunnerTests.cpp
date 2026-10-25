@@ -10,11 +10,16 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <array>
+#include <atomic>
+#include <barrier>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gdal_priv.h>
@@ -157,6 +162,63 @@ namespace
 
     int InvocationTrackingAlgorithm::runCount = 0;
 
+    class DiagnosticsAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static inline std::atomic_int active{0};
+        static inline std::atomic_bool overlapped{false};
+
+        DiagnosticsAlgorithm()
+            : GDALAlgorithm("mwg-test-diagnostics", "Test isolated operation diagnostics", "")
+        {
+            AddArg("message", 0, "Diagnostic text", &_message);
+            AddArg("fail", 0, "Fail after warning", &_fail);
+            AddArg("failure-diagnostic", 0, "Emit a failure diagnostic", &_failureDiagnostic);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            if (active.fetch_add(1) != 0)
+                overlapped.store(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            ReportError(_failureDiagnostic ? CE_Failure : CE_Warning,
+                        CPLE_AppDefined, "%s", _message.c_str());
+            active.fetch_sub(1);
+            return !_fail;
+        }
+
+    private:
+        std::string _message = "test warning";
+        bool _fail = false;
+        bool _failureDiagnostic = false;
+    };
+
+    class CallbackLifecycleAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static inline int finalizeCount = 0;
+
+        CallbackLifecycleAlgorithm()
+            : GDALAlgorithm("mwg-test-callback-lifecycle", "Test callback cleanup", "")
+        {
+        }
+
+        bool Finalize() override
+        {
+            ++finalizeCount;
+            return true;
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc progress, void* userData) override
+        {
+            if (progress != nullptr)
+                (void)progress(1.0, "complete", userData);
+            return true;
+        }
+    };
+
     void RegisterTestAlgorithms()
     {
         static std::once_flag registrationFlag;
@@ -171,6 +233,10 @@ namespace
                                       [] { return std::make_unique<ProgressAlgorithm>(); });
             registry.DeclareAlgorithm({"mwg-test", "invocation-tracking"},
                                       [] { return std::make_unique<InvocationTrackingAlgorithm>(); });
+            registry.DeclareAlgorithm({"mwg-test", "diagnostics"},
+                                      [] { return std::make_unique<DiagnosticsAlgorithm>(); });
+            registry.DeclareAlgorithm({"mwg-test", "callback-lifecycle"},
+                                      [] { return std::make_unique<CallbackLifecycleAlgorithm>(); });
         });
     }
 
@@ -250,6 +316,12 @@ TEST(GdalAlgorithmRunner, ReportsFinalizationFailures)
     EXPECT_FALSE(runner.Run());
     ASSERT_FALSE(runner.Errors().empty());
     EXPECT_NE(runner.Errors().back().message.find("forced finalization failure"), std::string::npos);
+    const auto result = runner.Result();
+    EXPECT_FALSE(result.Succeeded());
+    EXPECT_FALSE(result.WasCancelled());
+    EXPECT_EQ(result.LastErrorCode(), CPLE_AppDefined);
+    EXPECT_NE(result.ErrorMsg().find("forced finalization failure"), std::string::npos);
+    EXPECT_NE(result.DetailedErrorMsg().find("class 3, code 1"), std::string::npos);
 }
 
 TEST(GdalAlgorithmRunner, ReportsProgressAndCancellation)
@@ -277,8 +349,157 @@ TEST(GdalAlgorithmRunner, ReportsProgressAndCancellation)
     GdalCancellationToken cancellation;
     cancellation.Cancel();
     EXPECT_FALSE(cancelled.Run({}, &cancellation));
+    EXPECT_TRUE(cancelled.Result().WasCancelled());
     ASSERT_FALSE(cancelled.Errors().empty());
     EXPECT_NE(cancelled.Errors().back().message.find("cancelled"), std::string::npos);
+}
+
+TEST(GdalAlgorithmRunner, LogsWarningsWithoutTurningSuccessIntoFailure)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    std::vector<std::string> warnings;
+    GdalEnvironment::SetLogHandler([&](const LogLevel level, const std::string_view message)
+    {
+        if (level == LogLevel::Warning)
+            warnings.emplace_back(message);
+    });
+
+    GdalAlgorithmRunner runner("mwg-test diagnostics");
+    const bool succeeded = runner.Run();
+    GdalEnvironment::SetLogHandler({});
+
+    EXPECT_TRUE(succeeded);
+    const auto result = runner.Result();
+    EXPECT_TRUE(result.Succeeded());
+    EXPECT_FALSE(result.WasCancelled());
+    EXPECT_EQ(result.LastErrorCode(), 0);
+    EXPECT_TRUE(result.ErrorMsg().empty());
+    ASSERT_EQ(result.AllErrors().size(), 1);
+    EXPECT_EQ(result.AllErrors().front().errorClass, GdalErrorClass::Warning);
+    ASSERT_EQ(warnings.size(), 1);
+    EXPECT_NE(warnings.front().find("test warning"), std::string::npos);
+}
+
+TEST(GdalAlgorithmRunner, AddsFailureDiagnosticWhenGdalOnlyEmitsWarnings)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    GdalAlgorithmRunner runner("mwg-test diagnostics");
+    ASSERT_TRUE(runner.SetArgument("fail", true));
+    EXPECT_FALSE(runner.Run());
+    const auto result = runner.Result();
+    EXPECT_EQ(result.LastErrorCode(), CPLE_AppDefined);
+    EXPECT_NE(result.ErrorMsg().find("execution failed"), std::string::npos);
+    ASSERT_EQ(result.AllErrors().size(), 2);
+    EXPECT_EQ(result.AllErrors().front().errorClass, GdalErrorClass::Warning);
+}
+
+TEST(GdalAlgorithmRunner, DoesNotReportSuccessWithFailureDiagnostics)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    GdalAlgorithmRunner runner("mwg-test diagnostics");
+    ASSERT_TRUE(runner.SetArgument("failure-diagnostic", true));
+    EXPECT_FALSE(runner.Run());
+    EXPECT_TRUE(runner.Finalize());
+    EXPECT_FALSE(runner.Result().Succeeded());
+    EXPECT_EQ(runner.Result().LastErrorCode(), CPLE_AppDefined);
+}
+
+TEST(GdalAlgorithmRunner, FinalizesSuccessfulGdalRunEvenWhenCallbackCancelsOrThrows)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    CallbackLifecycleAlgorithm::finalizeCount = 0;
+
+    GdalAlgorithmRunner cancelled("mwg-test callback-lifecycle");
+    EXPECT_FALSE(cancelled.Run([](double, std::string_view) { return false; }));
+    EXPECT_TRUE(cancelled.Result().WasCancelled());
+    EXPECT_EQ(CallbackLifecycleAlgorithm::finalizeCount, 1);
+    EXPECT_TRUE(cancelled.Finalize());
+    EXPECT_EQ(CallbackLifecycleAlgorithm::finalizeCount, 1);
+
+    GdalAlgorithmRunner failed("mwg-test callback-lifecycle");
+    EXPECT_FALSE(failed.Run([](double, std::string_view) -> bool
+    {
+        throw std::runtime_error("progress failed");
+    }));
+    EXPECT_FALSE(failed.Result().WasCancelled());
+    EXPECT_NE(failed.Result().ErrorMsg().find("progress failed"), std::string::npos);
+    EXPECT_EQ(CallbackLifecycleAlgorithm::finalizeCount, 2);
+
+    GdalAlgorithmRunner nonStandard("mwg-test callback-lifecycle");
+    EXPECT_FALSE(nonStandard.Run([](double, std::string_view) -> bool { throw 42; }));
+    EXPECT_FALSE(nonStandard.Result().WasCancelled());
+    EXPECT_NE(nonStandard.Result().ErrorMsg().find("non-standard exception"), std::string::npos);
+    EXPECT_EQ(CallbackLifecycleAlgorithm::finalizeCount, 3);
+}
+
+TEST(GdalAlgorithmRunner, RejectsCallbackReentryAndKeepsCallbacksOnTheExecutingThread)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    GdalAlgorithmRunner outer("mwg-test progress");
+    GdalAlgorithmRunner nested("mwg-test progress");
+    const auto caller = std::this_thread::get_id();
+    std::thread::id callbackThread;
+    EXPECT_FALSE(outer.Run([&](double, std::string_view)
+    {
+        callbackThread = std::this_thread::get_id();
+        return nested.Run();
+    }));
+    EXPECT_EQ(callbackThread, caller);
+    EXPECT_FALSE(outer.Result().WasCancelled());
+    EXPECT_NE(outer.Result().ErrorMsg().find("cannot be called from a GDAL callback"),
+              std::string::npos);
+    EXPECT_TRUE(nested.Run());
+}
+
+TEST(GdalAlgorithmRunner, SerializesConcurrentRunnersAndIsolatesTheirResults)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    DiagnosticsAlgorithm::overlapped.store(false);
+    std::barrier start(2);
+    std::array<GdalOperationResult, 2> results;
+    const auto execute = [&](const std::size_t index)
+    {
+        GdalAlgorithmRunner runner("mwg-test diagnostics");
+        (void)runner.SetArgument("message", index == 0 ? "first operation" : "second operation");
+        (void)runner.SetArgument("fail", index == 1);
+        start.arrive_and_wait();
+        (void)runner.Run();
+        results[index] = runner.Result();
+    };
+    std::thread first(execute, 0);
+    std::thread second(execute, 1);
+    first.join();
+    second.join();
+
+    EXPECT_FALSE(DiagnosticsAlgorithm::overlapped.load());
+    EXPECT_TRUE(results[0].Succeeded());
+    EXPECT_FALSE(results[1].Succeeded());
+    EXPECT_EQ(results[0].AllErrors().size(), 1);
+    EXPECT_EQ(results[1].AllErrors().size(), 2);
+    EXPECT_EQ(results[0].DetailedErrorMsg().find("second operation"), std::string::npos);
+    EXPECT_EQ(results[1].DetailedErrorMsg().find("first operation"), std::string::npos);
+}
+
+TEST(GdalAlgorithmRunner, PreservesLoggerExceptionsUntilAfterFinalization)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    {
+        throw std::runtime_error("logger failed");
+    });
+    GdalAlgorithmRunner runner("mwg-test diagnostics");
+    EXPECT_THROW((void)runner.Run(), std::runtime_error);
+    GdalEnvironment::SetLogHandler({});
+    EXPECT_TRUE(runner.Finalize());
+    EXPECT_FALSE(runner.Result().Succeeded());
+    EXPECT_FALSE(runner.Result().AllErrors().empty());
 }
 
 TEST(GdalAlgorithmRunner, RejectsPreCancelledRunBeforeInvokingAlgorithm)

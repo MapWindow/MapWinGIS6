@@ -30,11 +30,35 @@ namespace mwg
     /// Owns a GDAL dataset transferred from a GdalAlgorithmRunner.
     using GdalDatasetPtr = std::unique_ptr<GDALDataset, GdalDatasetDeleter>;
 
+    /// Owns an operation's diagnostics and any returned datasets.
+    /// Keep the result alive while using outputs that depend on retained datasets.
+    /// Not thread-safe for shared instances. Diagnostic queries copy strings.
+    struct MWG_CORE_API GdalOperationResult
+    {
+        bool succeeded = false;
+        GdalDatasetPtr outputDataset;
+        std::vector<GdalDatasetPtr> retainedDatasets;
+        std::vector<GdalError> errors;
+        bool cancelled = false;
+
+        [[nodiscard]] bool Succeeded() const noexcept { return succeeded; }
+        [[nodiscard]] bool WasCancelled() const noexcept { return cancelled; }
+        /// Last failure/fatal code, or zero when there are only warnings.
+        [[nodiscard]] int LastErrorCode() const noexcept;
+        /// Last failure/fatal message, or an empty string.
+        [[nodiscard]] std::string ErrorMsg() const;
+        /// All diagnostics with severity and code, one per line.
+        [[nodiscard]] std::string DetailedErrorMsg() const;
+        [[nodiscard]] const std::vector<GdalError>& AllErrors() const noexcept { return errors; }
+    };
+
     /// Configures and runs one GDAL algorithm instance.
     ///
     /// Construct a new runner for each execution. Run() may be called once and
     /// finalizes successful executions before returning. The runner is not
-    /// thread-safe.
+    /// thread-safe. GDAL calls from independent runners are serialized with
+    /// convenience and compatibility operations. Direct dataset access still
+    /// requires caller synchronization.
     class MWG_CORE_API GdalAlgorithmRunner
     {
     public:
@@ -74,6 +98,11 @@ namespace mwg
 
         /// Runs and finalizes the configured algorithm, reporting progress and
         /// cancellation through the existing GDAL callback adapter.
+        /// Callbacks run on this thread and must not start GDAL operations or
+        /// wait for other threads that need GDAL. Callback exceptions become
+        /// failure diagnostics, not user cancellation. Token/callback lifetimes
+        /// must cover this call. Capture/logger exceptions propagate after
+        /// finalization of a successful GDAL run.
         [[nodiscard]] bool Run(GdalProgressAdapter::Callback progress = {},
                                const GdalCancellationToken* cancellationToken = nullptr);
 
@@ -87,6 +116,10 @@ namespace mwg
 
         /// Returns all diagnostics captured since construction.
         [[nodiscard]] const std::vector<GdalError>& Errors() const noexcept;
+
+        /// Snapshots execution state and diagnostics without transferring datasets.
+        /// Succeeded() is true only after execution and finalization succeed.
+        [[nodiscard]] GdalOperationResult Result() const;
 
         /// Returns the GDAL usage metadata as JSON, or an empty string when
         /// the algorithm path could not be instantiated.

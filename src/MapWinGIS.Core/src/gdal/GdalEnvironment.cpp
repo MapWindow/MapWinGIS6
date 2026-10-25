@@ -10,7 +10,9 @@
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 #include <atomic>
+#include <exception>
 #include <mutex>
+#include <utility>
 
 #include <cpl_conv.h>
 #include <cpl_error.h>
@@ -23,6 +25,7 @@
 #include <windows.h>
 
 #include "internal/Utf8.h"
+#include "internal/GdalExecution.h"
 #include "mapwingis/gdal/GdalRuntime.h"
 
 namespace mwg
@@ -38,6 +41,7 @@ namespace mwg
         LogHandler g_logHandler;
 
         thread_local std::string t_lastError;
+        thread_local std::exception_ptr t_logException;
 
         LogLevel ToLogLevel(const CPLErr severity) noexcept
         {
@@ -53,19 +57,19 @@ namespace mwg
             }
         }
 
-        void CPL_STDCALL ErrorHandler(const CPLErr severity, CPLErrorNum, const char* message)
+        void CPL_STDCALL ErrorHandler(const CPLErr severity, CPLErrorNum, const char* message) noexcept
         {
             if (message == nullptr) return;
 
-            if (severity == CE_Failure || severity == CE_Fatal)
-                t_lastError = message;
-
-            LogHandler handler;
+            try
             {
-                std::lock_guard lock(g_logHandlerMutex);
-                handler = g_logHandler;
+                GdalEnvironment::ReportDiagnostic(ToLogLevel(severity), message);
             }
-            if (handler) handler(ToLogLevel(severity), message);
+            catch (...)
+            {
+                if (!t_logException)
+                    t_logException = std::current_exception();
+            }
         }
 
         void DoInitialize(const std::filesystem::path& gdalDataDir, const std::filesystem::path& projDataDir)
@@ -134,6 +138,31 @@ namespace mwg
     {
         std::lock_guard lock(g_logHandlerMutex);
         g_logHandler = std::move(handler);
+    }
+
+    void GdalEnvironment::ReportDiagnostic(const LogLevel level, const std::string_view message)
+    {
+        if (level == LogLevel::Error)
+            t_lastError = message;
+
+        LogHandler handler;
+        {
+            std::lock_guard lock(g_logHandlerMutex);
+            handler = g_logHandler;
+        }
+        if (handler)
+        {
+            if (detail::GdalCallbackActive())
+                throw CoreError("GDAL diagnostic callbacks cannot be re-entered.");
+            const detail::GdalCallbackScope callbackScope;
+            handler(level, message);
+        }
+    }
+
+    void GdalEnvironment::RethrowLogException()
+    {
+        if (const auto exception = std::exchange(t_logException, {}))
+            std::rethrow_exception(exception);
     }
 
     std::string GdalEnvironment::LastErrorMessage()

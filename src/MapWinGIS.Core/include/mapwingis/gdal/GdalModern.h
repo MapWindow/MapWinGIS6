@@ -20,18 +20,6 @@
 
 namespace mwg
 {
-    /// Result of a GDAL convenience operation.
-    struct MWG_CORE_API GdalOperationResult
-    {
-        bool succeeded = false;
-        GdalDatasetPtr outputDataset;
-        std::vector<GdalDatasetPtr> retainedDatasets;
-        std::vector<GdalError> errors;
-
-        /// Indicates whether the operation completed successfully.
-        [[nodiscard]] bool Succeeded() const noexcept { return succeeded; }
-    };
-
     /// Options for creating a Cloud-Optimized GeoTIFF.
     ///
     /// GDAL 3.12.4 COG driver defaults are used unless overridden through
@@ -62,7 +50,9 @@ namespace mwg
      * not return an output dataset. Errors are returned in the result.
      *
      * Not thread-safe when callers concurrently modify process-wide GDAL
-     * configuration. Allocation failures propagate.
+     * configuration. Execution is serialized with other GDAL operations.
+     * Uses GdalAlgorithmRunner::Run()'s synchronous callback contract.
+     * Allocation and diagnostic-capture failures propagate.
      */
     [[nodiscard]] MWG_CORE_API GdalOperationResult WriteCog(
         const RasterCogOptions& options,
@@ -82,7 +72,8 @@ namespace mwg
      * remain valid. Keep the result alive while using its output dataset.
      *
      * Not thread-safe for shared GDAL datasets or runners. Allocation failures
-     * propagate.
+     * propagate. The entire pipeline is serialized with other GDAL operations.
+     * Uses GdalAlgorithmRunner::Run()'s synchronous callback contract.
      */
     [[nodiscard]] MWG_CORE_API GdalOperationResult RunPipeline(
         const std::vector<GdalPipelineStep>& steps,

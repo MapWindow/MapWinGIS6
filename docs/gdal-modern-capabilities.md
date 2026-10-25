@@ -46,3 +46,55 @@ GDAL's registered `mdim` algorithms and multidimensional drivers are available
 through `GdalAlgorithmRunner` only when included in the GDAL build. Zarr driver
 availability is build-dependent; this phase does not add a separate
 multidimensional API.
+
+## Operation results, logging, and cancellation
+
+`GdalOperationResult` contains the status, diagnostics, and returned datasets.
+`WriteCog()` and `RunPipeline()` return this result directly.
+`GdalAlgorithmRunner::Result()` and `GdalUtils::Result()` return snapshots without datasets.
+`TakeOutputDataset()` remains the runner's ownership-transfer method.
+Snapshots keep their diagnostics when a later compatibility operation changes the object's state.
+
+`Succeeded()` is true only after execution and finalization succeed.
+`LastErrorCode()` and `ErrorMsg()` select the last failure or fatal diagnostic.
+They return zero and an empty string when the diagnostics contain only warnings.
+`DetailedErrorMsg()` includes every diagnostic with its severity and GDAL code.
+`AllErrors()` exposes the full diagnostic list.
+An unsuccessful GDAL call that emits only warnings also receives a failure diagnostic.
+
+`WasCancelled()` distinguishes cancellation from other failures.
+A cancelled token or a progress callback that returns false cancels the operation.
+A callback exception produces a failure diagnostic instead.
+Cancellation does not guarantee removal of partial output files.
+GDAL algorithms that do not report progress cannot respond promptly to cancellation during execution.
+
+`GdalErrorScope` forwards captured warnings to the handler installed through `GdalEnvironment::SetLogHandler()`.
+It also forwards other diagnostic levels and retains the diagnostics in the operation result.
+Logger exceptions remain inside the error scope until GDAL returns.
+They propagate to the caller through `RethrowCaptureException()`.
+The runner still finalizes a successful GDAL execution before it reports a callback or logger failure.
+For direct GDAL calls outside an error scope, the default handler retains logger exceptions on the calling thread.
+Call `GdalEnvironment::RethrowLogException()` after those calls to report and clear the first exception.
+Neither handler lets an exception cross the native GDAL callback boundary.
+
+## Execution and thread ownership
+
+The native runner, compatibility utilities, and convenience operations share one recursive mutex, a lock that permits internal nested calls.
+A pipeline holds the lock across all steps.
+Independent operations can run on different threads, but their GDAL calls run one at a time.
+Their diagnostic lists remain separate.
+This lock does not cover direct GDAL calls, returned datasets, or the vector dataset API.
+Callers must still serialize access to shared datasets and process-wide configuration.
+
+Progress and logging callbacks run synchronously on the thread that executes the operation.
+Callbacks must not start another GDAL operation or wait for a thread that needs the execution lock.
+The native operation APIs reject same-thread callback re-entry with `CoreError`.
+A callback must remain valid until the operation returns.
+Removing a logger does not stop a callback that already holds a copy of that logger.
+Use owned state or shared ownership for captures that other threads can access.
+
+The merged ActiveX work defines architecture, not a control implementation.
+It introduces no COM interfaces, callback dispatcher, or asynchronous operation model.
+The completed GDAL phases therefore retain their native API and dataset ownership contracts.
+`BeginGdalOperation` and `EndGdalOperation` are not added.
+A future ActiveX wrapper must dispatch worker progress to its owning COM/UI thread without blocking the worker on another GDAL operation.
