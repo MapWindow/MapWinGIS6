@@ -11,6 +11,9 @@
   <Folder Name="/tests/">
     <Project Path="tests/MapWinGIS.Core.Tests/MapWinGIS.Core.Tests.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c02" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Cpp/Translate.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c03" />
+  </Folder>
   <Folder Name="/build/">
     <File Path="Directory.Build.props" />
     <File Path="Directory.Build.targets" />
