@@ -1,0 +1,27 @@
+HKCR
+{
+    NoRemove CLSID
+    {
+        ForceRemove {2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F} = s 'MapWinGIS6 Control'
+        {
+            ProgID = s 'MapWinGIS6.Control.6'
+            VersionIndependentProgID = s 'MapWinGIS6.Control'
+            InprocServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Apartment'
+            }
+            TypeLib = s '{E3E35346-7259-41AB-B419-D87D0BEE867E}'
+            Version = s '1.0'
+            Control
+        }
+    }
+    ForceRemove 'MapWinGIS6.Control.6' = s 'MapWinGIS6 Control'
+    {
+        CLSID = s '{2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F}'
+    }
+    ForceRemove 'MapWinGIS6.Control' = s 'MapWinGIS6 Control'
+    {
+        CLSID = s '{2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F}'
+        CurVer = s 'MapWinGIS6.Control.6'
+    }
+}

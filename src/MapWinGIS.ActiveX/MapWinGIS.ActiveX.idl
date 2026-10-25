@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: MPL-2.0
+
+import "oaidl.idl";
+import "ocidl.idl";
+
+[
+    uuid(E3E35346-7259-41AB-B419-D87D0BEE867E),
+    version(1.0)
+]
+library MapWinGISActiveXLib
+{
+    importlib("stdole2.tlb");
+
+    [
+        object,
+        dual,
+        oleautomation,
+        uuid(1B6D4167-B2D7-4AE4-8F88-92C575BF4AF7),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl : IDispatch
+    {
+        [propget, id(1)]
+        HRESULT CoreInitialized([out, retval] VARIANT_BOOL* initialized);
+    };
+
+    [
+        uuid(2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F),
+        control
+    ]
+    coclass MapWinGISControl
+    {
+        [default] interface IMapWinGISControl;
+    };
+};

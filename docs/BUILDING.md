@@ -10,8 +10,7 @@
 | Git | any recent version | Needed to clone vcpkg |
 | Disk space | about 15 GB | vcpkg sources, build trees and binaries |
 
-The ActiveX layer is not part of the solution yet. When it arrives it will also
-need the **C++ MFC** and **C++ ATL** components.
+The ActiveX project uses ATL and statically links it. MFC is not required.
 
 ## First build
 
@@ -25,6 +24,20 @@ msbuild MapWinGIS6.slnx -p:Configuration=Debug -p:Platform=x64 -m
 ```
 
 Or just open `MapWinGIS6.slnx` in Visual Studio after step 1 and build.
+
+### ActiveX activation
+
+The solution builds `MapWinGIS.ocx` beside `MapWinGIS.Core.dll`. To verify
+COM activation without machine-wide registration, run the activation check
+from a PowerShell process that matches the target architecture:
+
+```powershell
+pwsh -File tests\MapWinGIS.Core.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
+```
+
+The script registers the control for the current user, creates it through its
+ProgID, checks the automation boundary, and removes the per-user registration.
+Use 32-bit PowerShell with `-Platform Win32`.
 
 ### Where vcpkg is found
 

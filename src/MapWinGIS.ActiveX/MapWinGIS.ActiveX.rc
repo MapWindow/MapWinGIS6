@@ -1,0 +1,4 @@
+#include "resource.h"
+
+IDR_MAPWINGISCONTROL REGISTRY "MapWinGISControl.rgs"
+1 TYPELIB "MapWinGIS.ActiveX.tlb"
