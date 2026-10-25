@@ -61,6 +61,9 @@ namespace mwg
         [[nodiscard]] bool SetArgument(std::string_view name, const std::vector<int>& value);
         /// Sets a list of string-valued algorithm argument values.
         [[nodiscard]] bool SetArgument(std::string_view name, const std::vector<std::string>& value);
+        /// Sets a dataset or dataset-list argument and retains a reference.
+        /// Dataset lists receive one value. The input pointer is borrowed.
+        [[nodiscard]] bool SetDatasetArgument(std::string_view name, GDALDataset* value);
 
         /// Validates configured values using the instantiated GDAL algorithm's
         /// argument metadata and constraints.
