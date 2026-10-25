@@ -53,17 +53,16 @@ public:
     END_PROP_MAP()
 
     BEGIN_MSG_MAP(CMapWinGISControl)
+        MESSAGE_HANDLER(WM_SIZE, OnSize)
         CHAIN_MSG_MAP(ATL::CComControl<CMapWinGISControl>)
     END_MSG_MAP()
 
-    DECLARE_VIEW_STATUS(0)
+    DECLARE_VIEW_STATUS(VIEWSTATUS_SOLIDBKGND | VIEWSTATUS_OPAQUE)
 
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
 
-    HRESULT OnDraw(ATL_DRAWINFO&)
-    {
-        return S_OK;
-    }
+    LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
+    HRESULT OnDraw(ATL_DRAWINFO& drawInfo);
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

@@ -39,7 +39,9 @@ The script registers the control for the current user, creates it through its
 ProgID, checks the automation boundary, and removes the per-user registration.
 It checks both per-user registry views first and refuses to run if the control's
 CLSID or either ProgID is already registered, so it cannot overwrite another
-build's registration. Use 32-bit PowerShell with `-Platform Win32`.
+build's registration. It also embeds the control in an ATL OLE host, resizes
+the host, repaints, and recreates the control. Use 32-bit PowerShell with
+`-Platform Win32`.
 
 ### Where vcpkg is found
 
