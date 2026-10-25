@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{731D2046-E5DE-4079-8044-790245634856}</ProjectGuid>
+    <RootNamespace>MapWinGISActiveX</RootNamespace>
+    <ProjectName>MapWinGIS.ActiveX</ProjectName>
+    <TargetName>MapWinGIS</TargetName>
+    <TargetExt>.ocx</TargetExt>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseOfAtl>Static</UseOfAtl>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <TargetExt>.ocx</TargetExt>
+  </PropertyGroup>
+
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_ATL_APARTMENT_THREADED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Midl>
+      <TypeLibraryName>$(OutDir)MapWinGIS.ActiveX.tlb</TypeLibraryName>
+      <HeaderFileName>$(IntDir)MapWinGIS.ActiveX_i.h</HeaderFileName>
+      <InterfaceIdentifierFileName>$(IntDir)MapWinGIS.ActiveX_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>$(IntDir)MapWinGIS.ActiveX_p.c</ProxyFileName>
+    </Midl>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(IntDir);$(OutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <ModuleDefinitionFile>MapWinGIS.ActiveX.def</ModuleDefinitionFile>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClInclude Include="ActiveXModule.h" />
+    <ClInclude Include="MapWinGISControl.h" />
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClCompile Include="ActiveXModule.cpp" />
+    <ClCompile Include="MapWinGISControl.cpp" />
+    <ClCompile Include="$(IntDir)MapWinGIS.ActiveX_i.c" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Midl Include="MapWinGIS.ActiveX.idl" />
+    <ResourceCompile Include="MapWinGIS.ActiveX.rc" />
+    <None Include="MapWinGIS.ActiveX.def" />
+    <None Include="MapWinGISControl.rgs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MapWinGIS.Core\MapWinGIS.Core.vcxproj">
+      <Project>{2B6A9A3B-0C5E-4E6E-9E31-3E8F5A2D1C01}</Project>
+    </ProjectReference>
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+</Project>

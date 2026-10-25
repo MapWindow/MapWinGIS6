@@ -41,7 +41,7 @@
 
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;$(MwgRepoRoot)obj\MapWinGIS.ActiveX\$(Configuration)\$(Platform);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -59,6 +59,7 @@
     <ClCompile Include="GdalTypedOptionsTests.cpp" />
     <ClCompile Include="GdalModernCapabilitiesTests.cpp" />
     <ClCompile Include="GdalUtilsTests.cpp" />
+    <ClCompile Include="ActiveXActivationTests.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="TestData.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
@@ -67,6 +68,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MapWinGIS.Core\MapWinGIS.Core.vcxproj" />
+    <ProjectReference Include="..\..\src\MapWinGIS.ActiveX\MapWinGIS.ActiveX.vcxproj">
+      <Project>{731D2046-E5DE-4079-8044-790245634856}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
