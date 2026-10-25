@@ -13,10 +13,14 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
+#include <cpl_error.h>
 #include <gdal_priv.h>
+#include <gdalalgorithm.h>
 
 #include "TestData.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -49,6 +53,107 @@ namespace
     std::string LastError(const GdalAlgorithmRunner& runner)
     {
         return runner.Errors().empty() ? std::string{} : runner.Errors().back().message;
+    }
+
+    class PipelineOutputAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static constexpr const char* kName = "mwg-test-pipeline-output";
+        static GDALDataset* outputDataset;
+
+        PipelineOutputAlgorithm()
+            : GDALAlgorithm(kName, "Test pipeline intermediate dataset ownership", "")
+        {
+            AddArg("output", 0, "Output dataset", &_output);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            if (outputDataset == nullptr)
+            {
+                ReportError(CE_Failure, CPLE_AppDefined, "%s",
+                            "pipeline test output dataset was not configured");
+                return false;
+            }
+            _output.Set(outputDataset);
+            return true;
+        }
+
+    private:
+        GDALArgDatasetValue _output;
+    };
+
+    GDALDataset* PipelineOutputAlgorithm::outputDataset = nullptr;
+
+    class PipelineFailureAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static constexpr const char* kName = "mwg-test-pipeline-failure";
+        static int runCount;
+
+        PipelineFailureAlgorithm()
+            : GDALAlgorithm(kName, "Test pipeline failure diagnostics", "")
+        {
+            AddInputDatasetArg(&_input);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            ++runCount;
+            ReportError(CE_Failure, CPLE_AppDefined, "%s",
+                        "forced failure in later pipeline step");
+            return false;
+        }
+
+    private:
+        GDALArgDatasetValue _input;
+    };
+
+    int PipelineFailureAlgorithm::runCount = 0;
+
+    class PipelineAfterFailureAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static constexpr const char* kName = "mwg-test-pipeline-after-failure";
+        static int runCount;
+
+        PipelineAfterFailureAlgorithm()
+            : GDALAlgorithm(kName, "Test pipeline short-circuiting", "")
+        {
+            AddInputDatasetArg(&_input);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            ++runCount;
+            return true;
+        }
+
+    private:
+        GDALArgDatasetValue _input;
+    };
+
+    int PipelineAfterFailureAlgorithm::runCount = 0;
+
+    void RegisterPipelineTestAlgorithms()
+    {
+        static std::once_flag registrationFlag;
+        std::call_once(registrationFlag, []
+        {
+            auto& registry = GDALGlobalAlgorithmRegistry::GetSingleton();
+            registry.DeclareAlgorithm(
+                {"mwg-test", "pipeline-output"},
+                [] { return std::make_unique<PipelineOutputAlgorithm>(); });
+            registry.DeclareAlgorithm(
+                {"mwg-test", "pipeline-failure"},
+                [] { return std::make_unique<PipelineFailureAlgorithm>(); });
+            registry.DeclareAlgorithm(
+                {"mwg-test", "pipeline-after-failure"},
+                [] { return std::make_unique<PipelineAfterFailureAlgorithm>(); });
+        });
     }
 }
 
@@ -122,6 +227,115 @@ TEST(GdalModernCapabilities, PassesMemoryDatasetsBetweenPipelineSteps)
     EXPECT_EQ(std::distance(std::filesystem::directory_iterator(directory.Path()),
                             std::filesystem::directory_iterator{}),
               1);
+}
+
+TEST(GdalModernCapabilities, RunnerRetainsDatasetArgumentUntilRunAndReleasesIt)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+
+    GdalDatasetPtr source(static_cast<GDALDataset*>(
+        GDALOpen(ToUtf8(input).c_str(), GA_ReadOnly)));
+    ASSERT_NE(source, nullptr);
+    GDALDataset* retainedSource = source.get();
+    const int initialReferenceCount = retainedSource->GetRefCount();
+    retainedSource->Reference();
+    GdalDatasetPtr referenceGuard(retainedSource);
+
+    GdalDatasetPtr output;
+    {
+        GdalAlgorithmRunner runner("raster convert");
+        ASSERT_TRUE(runner.SetDatasetArgument("input", source.get()));
+        ASSERT_TRUE(runner.SetArgument("output-format", "MEM"));
+        EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount + 2);
+
+        source.reset();
+        EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount + 1);
+        ASSERT_TRUE(runner.Run()) << LastError(runner);
+        output = runner.TakeOutputDataset();
+    }
+
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(ReadPixel(output.get(), 0, 0), 42);
+    output.reset();
+    EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount);
+}
+
+TEST(GdalModernCapabilities, RunnerRetainsDatasetListArgumentUntilRunAndReleasesIt)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+
+    GdalDatasetPtr source(static_cast<GDALDataset*>(
+        GDALOpen(ToUtf8(input).c_str(), GA_ReadOnly)));
+    ASSERT_NE(source, nullptr);
+    GDALDataset* retainedSource = source.get();
+    const int initialReferenceCount = retainedSource->GetRefCount();
+    retainedSource->Reference();
+    GdalDatasetPtr referenceGuard(retainedSource);
+
+    const std::filesystem::path mosaicPath = directory.Path() / "mosaic.vrt";
+    GdalDatasetPtr output;
+    {
+        GdalAlgorithmRunner runner("raster mosaic");
+        ASSERT_TRUE(runner.SetDatasetArgument("input", source.get()));
+        ASSERT_TRUE(runner.SetArgument("output", ToUtf8(mosaicPath)));
+        ASSERT_TRUE(runner.SetArgument("output-format", "VRT"));
+        EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount + 2);
+
+        source.reset();
+        EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount + 1);
+        ASSERT_TRUE(runner.Run()) << LastError(runner);
+        output = runner.TakeOutputDataset();
+    }
+
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(ReadPixel(output.get(), 0, 0), 42);
+    output.reset();
+    EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount);
+}
+
+TEST(GdalModernCapabilities, PipelineFailureReportsDiagnosticsAndReleasesIntermediateDataset)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    RegisterPipelineTestAlgorithms();
+
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+    GdalDatasetPtr source(static_cast<GDALDataset*>(
+        GDALOpen(ToUtf8(input).c_str(), GA_ReadOnly)));
+    ASSERT_NE(source, nullptr);
+    GDALDataset* retainedSource = source.get();
+    retainedSource->Reference();
+    GdalDatasetPtr referenceGuard(retainedSource);
+    const int expectedReferenceCount = retainedSource->GetRefCount();
+
+    PipelineOutputAlgorithm::outputDataset = retainedSource;
+    PipelineFailureAlgorithm::runCount = 0;
+    PipelineAfterFailureAlgorithm::runCount = 0;
+
+    GdalPipelineStep first;
+    first.algorithmPath = {"mwg-test", "pipeline-output"};
+    GdalPipelineStep failure;
+    failure.algorithmPath = {"mwg-test", "pipeline-failure"};
+    GdalPipelineStep afterFailure;
+    afterFailure.algorithmPath = {"mwg-test", "pipeline-after-failure"};
+
+    const GdalOperationResult result = RunPipeline({first, failure, afterFailure});
+    PipelineOutputAlgorithm::outputDataset = nullptr;
+
+    EXPECT_FALSE(result.Succeeded());
+    EXPECT_EQ(PipelineFailureAlgorithm::runCount, 1);
+    EXPECT_EQ(PipelineAfterFailureAlgorithm::runCount, 0);
+    ASSERT_FALSE(result.errors.empty());
+    EXPECT_NE(LastError(result).find("forced failure in later pipeline step"),
+              std::string::npos);
+    EXPECT_EQ(retainedSource->GetRefCount(), expectedReferenceCount);
 }
 
 TEST(GdalModernCapabilities, MosaicsRastersIntoAVrtDataset)
