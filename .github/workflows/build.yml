@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Record runner image version
         id: runner_image
@@ -32,7 +32,7 @@ jobs:
         run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
 
       - name: Cache vcpkg binary packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vcpkg-binary-cache
           key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake', 'Directory.Build.props') }}
@@ -44,7 +44,7 @@ jobs:
         run: ./build/scripts/bootstrap-vcpkg.ps1
 
       - name: Set up MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
 
       - name: Build
         shell: pwsh
@@ -66,7 +66,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: testresults-${{ matrix.platform }}-${{ matrix.configuration }}
           path: testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml
@@ -74,7 +74,7 @@ jobs:
 
       - name: Upload binaries
         if: matrix.configuration == 'Release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MapWinGIS.Core-${{ matrix.platform }}
           path: bin/Release/${{ matrix.platform }}/

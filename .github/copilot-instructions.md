@@ -17,6 +17,54 @@ MapWinGIS 5 is the legacy COM/ActiveX library and the behavior reference.
 Port its functionality incrementally as modern C++20. Do not transliterate
 the legacy implementation.
 
+## Build and test
+
+Run these commands from the repository root:
+
+```powershell
+pwsh -File build\scripts\bootstrap-vcpkg.ps1
+msbuild MapWinGIS6.slnx -p:Configuration=Debug -p:Platform=x64 -m
+bin\Debug\x64\MapWinGIS.Core.Tests.exe
+```
+
+Run one GoogleTest case by adding its suite and test name:
+
+```powershell
+bin\Debug\x64\MapWinGIS.Core.Tests.exe --gtest_filter=VectorDatasetTest.ReportsTheDriverAndPath
+```
+
+Write a JUnit-style test report when needed:
+
+```powershell
+bin\Debug\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml
+```
+
+The test project uses GoogleTest. Shared generated data and temporary-directory
+helpers are in `tests/MapWinGIS.Core.Tests/TestData.h`. Keep fixtures in a
+temporary directory and do not commit generated shapefiles or databases.
+
+## Architecture across files
+
+`MapWinGIS.Core.dll` contains the public native API and application logic.
+`MwGdalCore` is a static library linked into it for GDAL execution support.
+Public headers live under `src/MapWinGIS.Core/include/mapwingis/<area>/`.
+Implementations mirror those areas under `src/MapWinGIS.Core/src/<area>/`.
+Put private shared code under `src/MapWinGIS.Core/src/internal/`.
+
+Call `GdalEnvironment::Initialize()` before normal GDAL use. The build deploys
+GDAL and PROJ data beside the DLL, and `GdalEnvironment` configures their paths.
+Do not depend on `GDAL_DATA` or `PROJ_LIB` environment variables. Core objects
+are not thread-safe unless their API documents otherwise.
+
+Use `CoreError` subclasses for operational failures. Use `TryX` companions
+when failure is a normal probe result. Use `std::optional` for absent values,
+not for operational failures.
+
+When porting behavior, use MapWinGIS 5 as the behavioral reference. Keep
+feature indexes 0-based and preserve numeric values for matching type-library
+enums. Preserve legacy value formatting and error information unless a change
+is deliberate and documented.
+
 When working in this repository, prioritize:
 
 * Correctness and preservation of existing MapWinGIS behavior.
