@@ -2,15 +2,16 @@
 
 /**
  * @file TestData.cpp
- * @brief Implements shared vector test fixture helpers.
+ * @brief Implements shared raster and vector test fixture helpers.
  *
- * Manages temporary directories and creates polygon datasets with attributes,
- * null values, and projections for the core tests.
+ * Manages temporary directories and creates georeferenced rasters and polygon
+ * datasets with attributes, null values, and projections for the core tests.
  */
 #include "TestData.h"
 
 #include <random>
 #include <stdexcept>
+#include <vector>
 
 #include <gdal_priv.h>
 #include <ogrsf_frmts.h>
@@ -45,6 +46,45 @@ namespace mwg::test
     {
         std::error_code ignored;
         std::filesystem::remove_all(_path, ignored);
+    }
+
+    std::filesystem::path MakeRaster(const std::filesystem::path& directory,
+                                     const std::filesystem::path& fileName,
+                                     const double originX,
+                                     const std::uint8_t pixelValue)
+    {
+        GdalEnvironment::Initialize();
+        constexpr int kWidth = 12;
+        constexpr int kHeight = 8;
+        const std::filesystem::path path = directory / fileName;
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+        if (driver == nullptr)
+            throw std::runtime_error("GTiff driver is not available");
+
+        GDALDatasetUniquePtr dataset(
+            driver->Create(ToUtf8(path).c_str(), kWidth, kHeight, 1, GDT_Byte, nullptr));
+        if (dataset == nullptr)
+            throw std::runtime_error("Could not create the test raster");
+
+        double transform[] = {originX, 1, 0, 8, 0, -1};
+        OGRSpatialReference srs;
+        if (srs.importFromEPSG(4326) != OGRERR_NONE ||
+            dataset->SetSpatialRef(&srs) != CE_None ||
+            dataset->SetGeoTransform(transform) != CE_None)
+        {
+            throw std::runtime_error("Could not georeference the test raster");
+        }
+
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(kWidth * kHeight), pixelValue);
+        if (dataset->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, kWidth, kHeight,
+                                                pixels.data(), kWidth, kHeight,
+                                                GDT_Byte, 0, 0) != CE_None)
+        {
+            throw std::runtime_error("Could not write the test raster");
+        }
+        if (dataset->FlushCache() != CE_None)
+            throw std::runtime_error("Could not flush the test raster");
+        return path;
     }
 
     std::filesystem::path MakeProvincesDataset(const std::filesystem::path& directory,
