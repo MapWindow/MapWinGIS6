@@ -129,6 +129,15 @@ TEST(ActiveXActivation, CreatesControlThroughClassFactory)
     ASSERT_TRUE(SUCCEEDED(result));
     EXPECT_TRUE(IsEqualCLSID(persistedClassId, classId));
 
+    ComPtr<IViewObjectEx> viewObject;
+    result = control.As(&viewObject);
+    ASSERT_TRUE(SUCCEEDED(result));
+
+    DWORD viewStatus{};
+    result = viewObject->GetViewStatus(&viewStatus);
+    ASSERT_TRUE(SUCCEEDED(result));
+    EXPECT_EQ(viewStatus & (VIEWSTATUS_SOLIDBKGND | VIEWSTATUS_OPAQUE), 0u);
+
     ComPtr<IMapWinGISControl> activeXControl;
     result = control.As(&activeXControl);
     ASSERT_TRUE(SUCCEEDED(result));

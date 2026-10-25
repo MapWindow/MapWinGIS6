@@ -56,7 +56,7 @@ public:
         CHAIN_MSG_MAP(ATL::CComControl<CMapWinGISControl>)
     END_MSG_MAP()
 
-    DECLARE_VIEW_STATUS(VIEWSTATUS_SOLIDBKGND | VIEWSTATUS_OPAQUE)
+    DECLARE_VIEW_STATUS(0)
 
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
 
