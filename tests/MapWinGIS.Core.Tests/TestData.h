@@ -2,18 +2,27 @@
 
 /**
  * @file TestData.h
- * @brief Declares shared vector test data and fixture helpers.
+ * @brief Declares shared raster and vector test data and fixture helpers.
  *
  * Provides generated dataset metadata, temporary-directory support, and
- * helpers for creating Shapefile and GeoPackage fixtures.
+ * helpers for creating GeoTIFF, Shapefile, and GeoPackage fixtures.
  */
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
 namespace mwg::test
 {
+    /// Writes a 12-by-8, single-band Byte GeoTIFF in EPSG:4326.
+    /// Pixels have the given value. Each pixel spans one degree, with the
+    /// top-left corner at (originX, 8) and rows running south.
+    std::filesystem::path MakeRaster(const std::filesystem::path& directory,
+                                     const std::filesystem::path& fileName = "raster.tif",
+                                     double originX = 0.0,
+                                     std::uint8_t pixelValue = 42);
+
     /// Describes the projected polygon layer written by MakeProvincesDataset().
     struct Provinces
     {
