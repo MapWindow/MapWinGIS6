@@ -13,6 +13,10 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Cpp/Translate.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c03" />
+    <Project Path="samples/CSharp/ActiveXTestHost/ActiveXTestHost.csproj" Id="6af10a21-d7fd-44f5-94b7-19c2d0973613">
+      <Platform Solution="*|Win32" Project="Win32" />
+      <Platform Solution="*|x64" Project="x64" />
+    </Project>
   </Folder>
   <Folder Name="/build/">
     <File Path="Directory.Build.props" />

@@ -28,6 +28,7 @@ and GeoPackage. The ActiveX layer has not been added yet.
 
 - Windows
 - Visual Studio 2026 (18.10 or later) with the **Desktop development with C++** workload, including MSVC v145 and Windows SDK 10.0.28000.0
+- .NET 10 SDK to build the C# ActiveX test host
 - Git and PowerShell 7 (`pwsh`)
 - About 15 GB of free disk space for dependencies and build outputs
 
@@ -37,7 +38,7 @@ From the repository root, bootstrap vcpkg and build the solution:
 
 ```powershell
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
-msbuild MapWinGIS6.slnx -p:Configuration=Debug -p:Platform=x64 -m
+msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 ```
 
 The bootstrap script clones and initializes vcpkg in a sibling `vcpkg` folder

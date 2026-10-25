@@ -17,6 +17,44 @@ bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml   # 
 Also runnable from Visual Studio Test Explorer (GoogleTest adapter picks it
 up automatically).
 
+## ActiveX host integration checks
+
+The .NET 10 WinForms host exercises the real registered ActiveX control through
+`AxHost`. It has a visible manual mode and an `--automated` mode that uses the
+same host, resize, repaint, and dispose paths. From an interactive Windows
+desktop session, run:
+
+```powershell
+pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration Debug -Platform x64 -Automated
+```
+
+The command temporarily registers only the matching OCX for the current user,
+refuses to replace existing registrations, and removes its registration after
+the host exits. Automated mode creates a visible window and runs the UI message
+loop, checks the `CoreInitialized` automation property, resizes the host,
+samples the actual on-screen control background after repaint, recreates the
+control, and writes individual outcomes to
+`bin\Debug\x64\ActiveXTestHost-results.json`. A watchdog enforces a 30-second
+default timeout; `-TimeoutSeconds` changes it from 5 to 300 seconds.
+These integration checks require Windows and an interactive desktop session;
+they are not currently part of CI. The control paints only its background, so
+this host does not yet verify map rendering.
+
+The host executable accepts `--automated`, `--results <path>`, and
+`--timeout-seconds <5-300>`. The PowerShell launcher supplies these options
+while it manages temporary COM registration.
+
+### Phase 3a validation
+
+On the Debug x64 build, the native test executable ran 135 tests: 133 passed
+and 2 were skipped (the opt-in network test and the separately exercised
+native hosting check). `Verify-ActiveXActivation.ps1` passed its registered
+COM hosting test. The C# automated host passed all 10 checks, including
+activation, automation access, resize, visible repaint, disposal, recreation,
+and a second paint. Manual mode opened visibly and closed through the normal
+window-close path. The managed host also compiles for Win32/x86; matching
+native x86 hosting remains for Phase 7.
+
 ## Conventions
 
 - One test file per area under test (`VectorDatasetTests.cpp`,

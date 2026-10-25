@@ -50,6 +50,7 @@ jobs:
         shell: pwsh
         run: |
           msbuild MapWinGIS6.slnx `
+            -restore `
             -p:Configuration=${{ matrix.configuration }} `
             -p:Platform=${{ matrix.platform }} `
             -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
