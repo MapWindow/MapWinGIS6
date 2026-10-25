@@ -360,8 +360,43 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
         ASSERT_TRUE(SUCCEEDED(queryResult));
         ASSERT_NE(hostedControl.p, nullptr);
 
+        ATL::CComQIPtr<IOleObject> oleObject(hostedControl);
+        ASSERT_NE(oleObject.p, nullptr);
+        ATL::CComPtr<IOleClientSite> clientSite;
+        ASSERT_TRUE(SUCCEEDED(oleObject->GetClientSite(&clientSite)));
+        ATL::CComQIPtr<IOleInPlaceSite> inPlaceSite(clientSite);
+        ASSERT_NE(inPlaceSite.p, nullptr);
+
+        RECT hostBounds{};
+        ASSERT_TRUE(GetClientRect(hostWindow.Get(), &hostBounds));
+        const HRESULT activateResult = oleObject->DoVerb(
+            OLEIVERB_INPLACEACTIVATE,
+            nullptr,
+            clientSite,
+            0,
+            hostWindow.Get(),
+            &hostBounds);
+        ASSERT_TRUE(SUCCEEDED(activateResult));
+
+        ComPtr<IViewObjectEx> viewObject;
+        const HRESULT viewResult = hostedControl->QueryInterface(
+            IID_PPV_ARGS(viewObject.GetAddressOf()));
+        ASSERT_TRUE(SUCCEEDED(viewResult));
+
+        ATL::CComPtr<IOleInPlaceFrame> inPlaceFrame;
+        ATL::CComPtr<IOleInPlaceUIWindow> documentWindow;
+        OLEINPLACEFRAMEINFO frameInfo{};
+        frameInfo.cb = sizeof(frameInfo);
         RECT initialBounds{};
-        ASSERT_TRUE(GetClientRect(hostWindow.Get(), &initialBounds));
+        RECT initialClip{};
+        ASSERT_TRUE(SUCCEEDED(inPlaceSite->GetWindowContext(
+            &inPlaceFrame,
+            &documentWindow,
+            &initialBounds,
+            &initialClip,
+            &frameInfo)));
+
+        UpdateWindow(hostWindow.Get());
         ASSERT_TRUE(SetWindowPos(
             hostWindow.Get(),
             nullptr,
@@ -369,19 +404,64 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             0,
             360,
             260,
-            SWP_NOZORDER | SWP_NOACTIVATE));
-
-        InvalidateRect(hostWindow.Get(), nullptr, FALSE);
-        UpdateWindow(hostWindow.Get());
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW));
 
         RECT resizedBounds{};
-        ASSERT_TRUE(GetClientRect(hostWindow.Get(), &resizedBounds));
+        RECT resizedClip{};
+        inPlaceFrame = nullptr;
+        documentWindow = nullptr;
+        ASSERT_TRUE(SUCCEEDED(inPlaceSite->GetWindowContext(
+            &inPlaceFrame,
+            &documentWindow,
+            &resizedBounds,
+            &resizedClip,
+            &frameInfo)));
         EXPECT_GT(resizedBounds.right - resizedBounds.left,
                   initialBounds.right - initialBounds.left);
         EXPECT_GT(resizedBounds.bottom - resizedBounds.top,
                   initialBounds.bottom - initialBounds.top);
+
+        RECT invalidatedBounds{};
+        EXPECT_TRUE(GetUpdateRect(hostWindow.Get(), &invalidatedBounds, FALSE));
+
+        UpdateWindow(hostWindow.Get());
         EXPECT_FALSE(GetUpdateRect(hostWindow.Get(), nullptr, FALSE));
 
+        const int resizedWidth = resizedBounds.right - resizedBounds.left;
+        const int resizedHeight = resizedBounds.bottom - resizedBounds.top;
+        BitmapSurface resizedSurface(resizedWidth, resizedHeight);
+        ASSERT_TRUE(resizedSurface.IsValid());
+        ASSERT_TRUE(PatBlt(
+            resizedSurface.Get(),
+            0,
+            0,
+            resizedWidth,
+            resizedHeight,
+            BLACKNESS));
+
+        const RECTL drawBounds{0, 0, resizedWidth, resizedHeight};
+        const HRESULT drawResult = viewObject->Draw(
+            DVASPECT_CONTENT,
+            -1,
+            nullptr,
+            nullptr,
+            nullptr,
+            resizedSurface.Get(),
+            &drawBounds,
+            nullptr,
+            nullptr,
+            0);
+        ASSERT_TRUE(SUCCEEDED(drawResult));
+        EXPECT_EQ(
+            GetPixel(resizedSurface.Get(), resizedWidth - 1, resizedHeight - 1),
+            GetSysColor(COLOR_WINDOW));
+
+        viewObject = nullptr;
+        documentWindow = nullptr;
+        inPlaceFrame = nullptr;
+        inPlaceSite = nullptr;
+        clientSite = nullptr;
+        oleObject = nullptr;
         hostedControl = nullptr;
         control = nullptr;
         host = nullptr;
