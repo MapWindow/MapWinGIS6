@@ -19,8 +19,10 @@ For GDAL-specific migration guidance, see [GDAL migration](gdal-migration.md).
    signatures.
 3. **Implement in the core and test against the spec.** Add GoogleTest
    coverage for the ported behavior, including edge cases and failures.
-4. **Leave COM mapping to the ActiveX layer.** Later, the wrapper maps core
-   types and exceptions onto the v5 COM API and error codes.
+4. **Leave COM mapping to the ActiveX layer.** The wrapper maps the
+   intentionally implemented subset of core types and exceptions onto the v5
+   COM API and error codes. Broader API compatibility is implemented
+   incrementally, not assumed.
 
 ## Behavioral contract to preserve
 
