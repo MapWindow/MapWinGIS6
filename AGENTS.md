@@ -18,8 +18,10 @@ ActiveX GIS control — as modern C++:
 
 - **`MapWinGIS.Core.dll`** — the mapping engine as a plain C++ DLL. No COM,
   ATL or MFC. Usable and testable on its own.
-- **`MapWinGIS.ocx`** — a thin ActiveX/COM wrapper over the core that keeps
-  the MapWinGIS 5 API. Not started yet.
+- **`MapWinGIS.ocx`** — a thin ActiveX/COM wrapper over the core. The initial
+  vertical slice supports COM activation, control lifecycle, vector loading, and
+  basic polygon rendering; broader MapWinGIS 5 API compatibility remains future
+  work.
 
 [MapWinGIS 5](https://github.com/MapWindow/MapWinGIS) is the reference
 implementation and the behavioral ground truth. Port its functionality; do
