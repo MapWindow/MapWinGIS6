@@ -23,9 +23,11 @@ ActiveX GIS control — as modern C++:
   basic polygon rendering; broader MapWinGIS 5 API compatibility remains future
   work.
 
-[MapWinGIS 5](https://github.com/MapWindow/MapWinGIS) is the reference
-implementation and the behavioral ground truth. Port its functionality; do
-not transliterate its code.
+[MapWinGIS 5](https://github.com/MapWindow/MapWinGIS) is a reference for
+functionality and established behavior, not a constraint on the new architecture.
+Optimize the structure and API for a maintainable modern version first; preserve
+backward compatibility second, where it fits that design without imposing undue
+complexity or limiting improvements. Do not transliterate the legacy code.
 
 ## Repository layout
 
@@ -53,12 +55,14 @@ and switches: [docs/BUILDING.md](docs/BUILDING.md).
 1. **Modernize, don't transliterate.** MapWinGIS 5 code is a behavior
    reference. Rewrite it as clean C++20 in the style already in this tree.
 2. **Core stays pure.** No COM, ATL or MFC in `MapWinGIS.Core`; COM concerns
-   belong to the future ActiveX layer.
-3. **Match existing conventions.** SPDX header, Doxygen file block, `mwg`
-   namespace, PImpl classes, `[[nodiscard]]`, exceptions with `TryX`
-   companions. Full list: [docs/CODING-STANDARDS.md](docs/CODING-STANDARDS.md).
-4. **Preserve the MapWinGIS 5 contract.** 0-based feature indexes, enum
-   values pinned to the v5 type library, error semantics.
+   belong to the ActiveX layer.
+3. **Modernize the structure first.** Prefer a clean, maintainable C++20 design
+   over matching the legacy architecture or signatures. Compatibility is a
+   secondary goal and must not burden the new design.
+4. **Preserve compatibility selectively and deliberately.** Keep established
+   behavior when it is valuable and fits the design; document intentional
+   differences. Treat 0-based indexes, legacy enum values, and error semantics
+   as compatibility requirements only where the relevant API contract needs them.
    See [docs/PORTING.md](docs/PORTING.md).
 5. **Tests with every feature.** GoogleTest with generated fixtures via
    `TestData.h`. Conventions: [docs/TESTING.md](docs/TESTING.md).
