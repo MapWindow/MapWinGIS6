@@ -1,43 +1,50 @@
 # Porting from MapWinGIS 5
 
-[MapWinGIS 5](https://github.com/MapWindow/MapWinGIS) is a single large
-MFC/ATL project (the `CMapView` control plus COM classes, with the type
-library in `MapWinGIS.odl`). It is the **reference implementation**: when
-re-creating a feature, its behavior is the specification. The goal is a
-modern rewrite, not a line-by-line translation.
+[MapWinGIS 5](https://github.com/MapWindow/MapWinGIS) is a large MFC/ATL
+project (the `CMapView` control plus COM classes, with the type library in
+`MapWinGIS.odl`). It is a source of behavioral knowledge, not the blueprint
+for the new architecture.
+
+**Design priority: optimize the new version first, preserve backward
+compatibility second.** Build clean modern APIs and architecture around the
+actual needs of MapWinGIS6. Retain legacy behavior or API compatibility when it
+provides value and fits the design; do not add complexity, preserve flawed
+structures, or constrain improvements solely for parity. Where compatibility
+is intentionally not retained, document the difference and rationale.
 
 For GDAL-specific migration guidance, see [GDAL migration](gdal-migration.md).
 
 ## What "port" means here
 
-1. **Study the v5 behavior.** Read the v5 sources for the feature: what the
-   public API accepts and returns, edge cases, error behavior, units,
-   coordinate order and defaults.
-2. **Design the core API first.** Express it with the current conventions
-   (PImpl class in `include/mapwingis/<area>/`, `std::optional`, exceptions
-   with `TryX` companions). Resist mirroring v5 class hierarchies and COM
-   signatures.
-3. **Implement in the core and test against the spec.** Add GoogleTest
-   coverage for the ported behavior, including edge cases and failures.
-4. **Leave COM mapping to the ActiveX layer.** The wrapper maps the
-   intentionally implemented subset of core types and exceptions onto the v5
-   COM API and error codes. Broader API compatibility is implemented
-   incrementally, not assumed.
+1. **Understand the legacy behavior.** Inspect v5 sources and tests to learn
+   expected semantics, edge cases, units, coordinate order, and defaults.
+2. **Design for MapWinGIS6 first.** Choose clean modern C++ APIs and modular
+   responsibilities. Do not mirror legacy class hierarchies or COM signatures
+   unless there is a concrete compatibility benefit.
+3. **Choose compatibility deliberately.** Preserve behavior that matters and
+   fits the new design. If parity would distort the architecture, add needless
+   complexity, or block a worthwhile improvement, prefer the better v6 design
+   and document the difference.
+4. **Implement and test.** Add GoogleTest coverage for intended behavior,
+   including edge cases and failures. Keep COM mapping in the ActiveX layer;
+   implement legacy API compatibility incrementally where justified.
 
-## Behavioral contract to preserve
+## Compatibility decisions
 
-The ActiveX layer will be a mechanical translation, so the core must keep the
-following true:
+Compatibility is a design consideration, not an absolute rule that overrides
+architecture or maintainability. For each legacy behavior or API surface,
+choose deliberately whether it belongs in v6 and document important departures.
 
-- **Feature/shape indexes are 0-based** and match v5 shape indexes exactly.
-- **Enums that correspond to v5 type-library enums keep identical numeric
-  values** (see `ShapeType`/`FieldType` in `mapwingis/core/Enums.h`). Add the
-  same pinning note to every new ported enum.
-- **Error semantics**: v5 reports failures via error codes and
-  `LastErrorMessage`-style state; the core throws or returns
-  `std::optional`, with the same information in the exception message.
-- **Formatting**: where v5 formats values for display (e.g. `CellValue`
-  text), the core keeps the same textual output.
+- **Indexes:** use 0-based feature/shape indexes where that remains the chosen
+  v6 API contract.
+- **Enums:** pin numeric values to the v5 type library when an enum is intended
+  to map directly to that COM contract; unrelated v6 enums need not inherit
+  legacy numbering.
+- **Errors:** prefer clear, structured core errors and modern result patterns.
+  Translate them to legacy error codes at the COM boundary only where needed
+  for a supported compatibility surface.
+- **Formatting:** preserve legacy display formatting when existing consumers
+  rely on it; otherwise prefer a consistent, documented v6 representation.
 
 ## Anti-patterns
 
