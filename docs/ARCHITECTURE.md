@@ -146,14 +146,16 @@ verify backend selection and failure recovery there. OpenGL-specific
 integration checks may require a real context, but they must not be required
 for core or CPU-rendering tests.
 
-At the COM boundary, preserve established MapWinGIS behavior where it is
-intentionally implemented, including the existing 0-based feature-index
-contract and error translation. Before implementing a legacy interface,
-inspect its type-library identifiers and signatures; retain identifiers only
-for compatible interfaces. Full legacy API parity, the historical MFC/ATL
-class hierarchy and rendering pipeline, and OpenCL integration are deferred.
-Document intentional compatibility gaps as the corresponding interfaces are
-introduced.
+Design the v6 architecture and APIs for clarity, maintainability, and
+performance first; backward compatibility is secondary and must not force the
+new version to reproduce legacy structure. At the COM boundary, preserve
+selected established behaviors where they fit the supported compatibility
+surface, including 0-based feature indexes where required and appropriate error
+translation. Before implementing a legacy interface, inspect its type-library
+identifiers and signatures; retain identifiers only when the interface is
+actually compatible. Full legacy API parity, the historical MFC/ATL class
+hierarchy and rendering pipeline, and OpenCL integration are deferred. Document
+intentional compatibility gaps and the rationale when interfaces are introduced.
 
 ## Current state
 

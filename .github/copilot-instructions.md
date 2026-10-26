@@ -6,8 +6,8 @@ Follow [AGENTS.md](../AGENTS.md) and the detailed standards linked there.
 They take precedence over the general guidance below.
 
 `MapWinGIS.Core` is a C++20 DLL. It must not use COM, ATL, or MFC.
-The ActiveX wrapper is not implemented yet. COM/ActiveX guidance below
-applies only to that future wrapper and to preserving the MapWinGIS 5 contract.
+The ActiveX wrapper has an initial implementation. COM/ActiveX guidance below
+applies to the implemented subset and any future compatibility work.
 
 ## Project Context
 
@@ -60,21 +60,23 @@ Use `CoreError` subclasses for operational failures. Use `TryX` companions
 when failure is a normal probe result. Use `std::optional` for absent values,
 not for operational failures.
 
-When porting behavior, use MapWinGIS 5 as the behavioral reference. Keep
-feature indexes 0-based and preserve numeric values for matching type-library
-enums. Preserve legacy value formatting and error information unless a change
-is deliberate and documented.
+Use MapWinGIS 5 to understand established behavior, but optimize the v6
+structure and APIs first. Backward compatibility is desirable only where it
+fits the new design without undue complexity or limiting meaningful improvements.
+Document intentional behavior/API differences and their rationale. Keep
+compatibility at the appropriate boundary rather than importing legacy
+architecture into the core.
 
 When working in this repository, prioritize:
 
-* Correctness and preservation of existing MapWinGIS behavior.
-* API and backwards compatibility where applicable.
-* Clear, maintainable modern C++.
-* Small, focused changes.
-* Understanding existing code before changing it.
-* Avoiding unnecessary changes outside the requested scope.
+* Clear, maintainable, performant modern C++ and a sound architecture.
+* Correctness and tests for the intended v6 behavior.
+* Selective, explicitly considered backward compatibility.
+* Small, focused changes with evidence for the chosen design.
+* Understanding related code before changing it.
+* Avoiding unrelated changes outside the requested scope.
 
-Do not assume that a modernization task is an opportunity to redesign unrelated functionality.
+Do not redesign unrelated functionality, but do not preserve a poor design solely for compatibility.
 
 ---
 
@@ -85,7 +87,7 @@ Before changing code:
 1. Understand the responsibility of the relevant class, component, or subsystem.
 2. Inspect related declarations, implementations, and call sites when necessary.
 3. Consider whether the code is part of the public COM/ActiveX API.
-4. Preserve existing behavior unless the task explicitly requests a behavioral change.
+4. Preserve existing behavior when it fits the v6 design and requirements; do not treat legacy behavior as immutable when modernization justifies a deliberate, documented change.
 5. Identify compatibility implications before changing public APIs.
 
 When making changes:
@@ -314,8 +316,8 @@ MapWinGIS exposes a long-lived COM/ActiveX API.
 
 When modifying code that is part of the public API:
 
-* Treat compatibility as an important consideration.
-* Avoid changing public interfaces without an explicit requirement.
+* Consider compatibility, but do not let it dictate the internal architecture.
+* Avoid accidental public-interface changes; deliberate design improvements may justify a documented API difference.
 * Be careful with COM-visible types, interfaces, methods, properties, enums, DISPIDs, and related contracts.
 * Consider existing external applications that may depend on legacy behavior.
 * Document compatibility constraints when they are important to understanding the implementation.
@@ -349,9 +351,9 @@ However:
 * Do not introduce abstractions without a clear benefit.
 * Do not change behavior unintentionally.
 * Consider COM/ActiveX ownership and lifetime semantics carefully before replacing existing pointer-based patterns.
-* Consider ABI/API compatibility before changing public types or interfaces.
+* Consider ABI/API compatibility, while prioritizing a sound v6 design over legacy parity when the two conflict.
 
-When migrating a legacy component, preserve externally observable behavior unless the modernization task explicitly calls for a change.
+When migrating a legacy component, preserve externally observable behavior when it fits the v6 design. If compatibility would impose undue complexity or block a worthwhile improvement, prefer the better design and document the difference.
 
 ---
 
