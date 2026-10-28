@@ -12,6 +12,7 @@
 #include <Windows.h>
 
 #include <optional>
+#include <string_view>
 
 #include "GdiVectorLayerRenderer.h"
 #include "OpenGlVectorLayerRenderer.h"
@@ -23,6 +24,16 @@ namespace mwg::activex
     class VectorLayerRenderer final
     {
     public:
+        void SetPreference(VectorRenderBackendPreference preference) noexcept
+        {
+            _preference = preference;
+        }
+
+        [[nodiscard]] VectorRenderBackendPreference GetPreference() const noexcept
+        {
+            return _preference;
+        }
+
         [[nodiscard]] HRESULT Draw(
             HDC deviceContext,
             const RECT& bounds,
@@ -33,9 +44,17 @@ namespace mwg::activex
             return _activeBackend;
         }
 
+        [[nodiscard]] std::wstring_view GetDiagnostic() const noexcept
+        {
+            return _diagnostic;
+        }
+
     private:
         OpenGlVectorLayerRenderer _openGlRenderer;
         GdiVectorLayerRenderer _gdiRenderer;
+        VectorRenderBackendPreference _preference =
+            VectorRenderBackendPreference::Automatic;
         std::optional<VectorRenderBackendKind> _activeBackend;
+        std::wstring_view _diagnostic = L"Rendering has not been attempted.";
     };
 }

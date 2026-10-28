@@ -31,6 +31,18 @@ library MapWinGISActiveXLib
 
         [propget, id(4)]
         HRESULT FeatureCount([out, retval] hyper* count);
+
+        [propget, id(5)]
+        HRESULT RenderingBackend([out, retval] BSTR* backend);
+
+        [propget, id(6)]
+        HRESULT RenderingStatus([out, retval] BSTR* status);
+
+        [propget, id(7)]
+        HRESULT RenderingBackendPreference([out, retval] BSTR* preference);
+
+        [propput, id(7)]
+        HRESULT RenderingBackendPreference([in] BSTR preference);
     };
 
     [

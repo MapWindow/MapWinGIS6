@@ -13,6 +13,7 @@
 #include <Windows.h>
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "VectorRenderBackend.h"
@@ -28,6 +29,12 @@ namespace mwg::activex
         OpenGlVectorLayerRenderer(const OpenGlVectorLayerRenderer&) = delete;
         OpenGlVectorLayerRenderer& operator=(const OpenGlVectorLayerRenderer&) = delete;
 
+        [[nodiscard]] static bool IsTargetWithinLimits(
+            int width,
+            int height,
+            int maximumFramebufferSize,
+            std::wstring_view& rejectionReason) noexcept;
+
         /**
          * @brief Draws a scene of simple convex single-ring polygons.
          *
@@ -39,6 +46,11 @@ namespace mwg::activex
             HDC deviceContext,
             const RECT& bounds,
             const rendering::VectorRenderScene& scene) noexcept override;
+
+        [[nodiscard]] std::wstring_view GetLastFailureReason() const noexcept
+        {
+            return _lastFailureReason;
+        }
 
     private:
         struct FramebufferFunctions;
@@ -56,8 +68,12 @@ namespace mwg::activex
         unsigned int _renderbuffer{};
         int _framebufferWidth{};
         int _framebufferHeight{};
+        int _maximumFramebufferSize{};
         bool _initializationFailed = false;
+        bool _contextInvalid = false;
+        std::wstring_view _lastFailureReason =
+            L"OpenGL was not selected for this frame.";
+        std::wstring_view _initializationFailureReason;
         std::vector<unsigned char> _rgbaPixels;
-        std::vector<unsigned char> _dibPixels;
     };
 }

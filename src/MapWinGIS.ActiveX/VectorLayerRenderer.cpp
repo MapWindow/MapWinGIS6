@@ -18,23 +18,36 @@ namespace mwg::activex
     {
         _activeBackend.reset();
 
-        const HRESULT openGlResult = _openGlRenderer.Draw(deviceContext, bounds, scene);
-        if (openGlResult == S_OK)
+        if (_preference != VectorRenderBackendPreference::Gdi)
         {
-            _activeBackend = VectorRenderBackendKind::OpenGL;
-            return S_OK;
-        }
+            const HRESULT openGlResult = _openGlRenderer.Draw(deviceContext, bounds, scene);
+            if (openGlResult == S_OK)
+            {
+                _activeBackend = VectorRenderBackendKind::OpenGL;
+                _diagnostic = L"OpenGL rendered the frame successfully.";
+                return S_OK;
+            }
 
-        if (FAILED(openGlResult))
+            _diagnostic = _openGlRenderer.GetLastFailureReason();
+            if (FAILED(openGlResult))
+            {
+                ::OutputDebugStringW(
+                    L"MapWinGIS: OpenGL rendering failed; using the GDI backend.\n");
+            }
+        }
+        else
         {
-            ::OutputDebugStringW(
-                L"MapWinGIS: OpenGL rendering failed; using the GDI backend.\n");
+            _diagnostic = L"GDI was selected by the rendering preference.";
         }
 
         const HRESULT gdiResult = _gdiRenderer.Draw(deviceContext, bounds, scene);
         if (SUCCEEDED(gdiResult))
         {
             _activeBackend = VectorRenderBackendKind::Gdi;
+        }
+        else
+        {
+            _diagnostic = L"The selected CPU renderer could not draw this frame.";
         }
 
         return gdiResult;
