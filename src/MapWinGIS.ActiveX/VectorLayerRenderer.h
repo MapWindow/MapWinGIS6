@@ -2,21 +2,40 @@
 
 /**
  * @file VectorLayerRenderer.h
- * @brief Declares the initial GDI renderer for backend-neutral vector scenes.
+ * @brief Declares the backend coordinator for vector scene rendering.
  *
- * The renderer paints polygon scene data into the ActiveX control's host
- * drawing context and does not access vector datasets.
+ * Tries OpenGL rendering first and uses the GDI backend for unsupported
+ * geometry or when OpenGL cannot be initialized.
  */
 #pragma once
 
 #include <Windows.h>
 
+#include <optional>
+
+#include "GdiVectorLayerRenderer.h"
+#include "OpenGlVectorLayerRenderer.h"
+#include "VectorRenderBackend.h"
 #include "mapwingis/rendering/VectorRenderScene.h"
 
 namespace mwg::activex
 {
-    [[nodiscard]] HRESULT DrawVectorRenderScene(
-        HDC deviceContext,
-        const RECT& bounds,
-        const rendering::VectorRenderScene& scene) noexcept;
+    class VectorLayerRenderer final
+    {
+    public:
+        [[nodiscard]] HRESULT Draw(
+            HDC deviceContext,
+            const RECT& bounds,
+            const rendering::VectorRenderScene& scene) noexcept;
+
+        [[nodiscard]] std::optional<VectorRenderBackendKind> GetActiveBackend() const noexcept
+        {
+            return _activeBackend;
+        }
+
+    private:
+        OpenGlVectorLayerRenderer _openGlRenderer;
+        GdiVectorLayerRenderer _gdiRenderer;
+        std::optional<VectorRenderBackendKind> _activeBackend;
+    };
 }

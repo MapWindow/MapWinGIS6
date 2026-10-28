@@ -13,7 +13,6 @@
 #include <string>
 #include <utility>
 
-#include "VectorLayerRenderer.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
@@ -132,6 +131,6 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
     }
 
     return _scene.has_value()
-        ? mwg::activex::DrawVectorRenderScene(drawInfo.hdcDraw, bounds, *_scene)
+        ? _renderer.Draw(drawInfo.hdcDraw, bounds, *_scene)
         : S_OK;
 }

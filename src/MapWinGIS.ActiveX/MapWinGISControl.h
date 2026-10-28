@@ -19,6 +19,7 @@
 
 #include "mapwingis/rendering/VectorRenderScene.h"
 #include "mapwingis/vector/VectorDataset.h"
+#include "VectorLayerRenderer.h"
 
 class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
@@ -79,6 +80,7 @@ public:
 private:
     std::unique_ptr<mwg::VectorDataset> _dataset;
     std::optional<mwg::rendering::VectorRenderScene> _scene;
+    mwg::activex::VectorLayerRenderer _renderer;
     LONGLONG _featureCount = 0;
 };
 
