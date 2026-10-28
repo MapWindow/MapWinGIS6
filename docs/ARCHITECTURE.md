@@ -8,7 +8,7 @@ MapWinGIS6 splits the monolithic MapWinGIS 5 control into two layers:
    and backend-neutral render data live here. No COM, ATL, MFC, windowing, or
    graphics API dependencies are allowed in this layer.
 2. **MapWinGIS.ocx** — an ActiveX/COM wrapper. It exposes the intentionally
-   implemented subset of the v5 COM API, translates between COM and core
+   implemented v6 automation surface, translates between COM and core
    types, converts core exceptions into COM errors, and integrates the core
    with the host control surface and graphics backend.
 
@@ -177,8 +177,10 @@ intentional compatibility gaps and the rationale when interfaces are introduced.
 The control exposes a small v6 COM surface: Core initialization, vector
 dataset loading, layer-loaded state, feature count, and renderer preference,
 active backend, and status. It does not claim MapWinGIS 5 API compatibility.
-Only the first Polygon or MultiPolygon layer is prepared; raster layers and
-other geometry types are not rendered. There is no map navigation or
+Only the first vector layer in a dataset is considered, and it must be a
+Polygon or MultiPolygon layer; a dataset whose first layer has another geometry
+type fails to load even if a later layer is polygonal. Raster layers and other
+geometry types are not rendered. There is no map navigation or
 reprojection, so coordinates remain in the source coordinate system.
 
 Core prepares and retains the complete supported polygon scene in memory.

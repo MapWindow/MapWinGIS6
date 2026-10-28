@@ -86,8 +86,9 @@ desktop. Rerun that check from an interactive Windows desktop.
 ### Phase 6 and 7 validation
 
 The renderer coordinator tests cover runtime backend preferences, hardware
-capability rejection, GDI fallback, and recreation after a failed OpenGL
-context. Phase 7 passed Debug and Release solution builds and native test runs
+capability rejection, and GDI fallback. Recreation of a failed OpenGL context
+on later draws is not yet covered by an automated test; the ActiveX hosting
+test recreates the entire control, not a failed WGL context. Phase 7 passed Debug and Release solution builds and native test runs
 on Win32 and x64, with no Level 4 compiler warnings. Each test run reported
 146 tests: 144 passed and 2 were skipped (the opt-in network test and the
 separately exercised registered-host check). The native registration and
