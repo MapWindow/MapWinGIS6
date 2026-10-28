@@ -4,8 +4,10 @@
  * @file OpenGlVectorLayerRenderer.cpp
  * @brief Renders convex polygon scenes with WGL and copies pixels to GDI.
  *
- * Owns one reusable OpenGL 1.1 context. Scenes that need unsupported polygon
- * features return S_FALSE so the coordinator can use its GDI backend.
+ * Owns one reusable OpenGL context and draws into a framebuffer object so
+ * pixel readback is not subject to window pixel-ownership rules. Scenes that
+ * need unsupported polygon features, or systems without framebuffer objects,
+ * return S_FALSE so the coordinator can use its GDI backend.
  */
 #include "OpenGlVectorLayerRenderer.h"
 
@@ -15,14 +17,88 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <vector>
 
 #pragma comment(lib, "opengl32.lib")
 
 namespace mwg::activex
 {
+    // OpenGL 3.0 and GL_EXT_framebuffer_object share these enum values.
+    namespace
+    {
+        constexpr GLenum kFramebuffer = 0x8D40;
+        constexpr GLenum kRenderbuffer = 0x8D41;
+        constexpr GLenum kColorAttachment0 = 0x8CE0;
+        constexpr GLenum kFramebufferComplete = 0x8CD5;
+        constexpr GLenum kRgba8 = 0x8058;
+    }
+
+    struct OpenGlVectorLayerRenderer::FramebufferFunctions final
+    {
+        using GenObjects = void(APIENTRY*)(GLsizei, GLuint*);
+        using BindObject = void(APIENTRY*)(GLenum, GLuint);
+        using RenderbufferStorage = void(APIENTRY*)(GLenum, GLenum, GLsizei, GLsizei);
+        using FramebufferRenderbuffer = void(APIENTRY*)(GLenum, GLenum, GLenum, GLuint);
+        using CheckFramebufferStatus = GLenum(APIENTRY*)(GLenum);
+
+        GenObjects genFramebuffers{};
+        BindObject bindFramebuffer{};
+        GenObjects genRenderbuffers{};
+        BindObject bindRenderbuffer{};
+        RenderbufferStorage renderbufferStorage{};
+        FramebufferRenderbuffer framebufferRenderbuffer{};
+        CheckFramebufferStatus checkFramebufferStatus{};
+
+        /// Loads the core entry points or, failing that, the EXT ones.
+        /// Requires the owning context to be current.
+        [[nodiscard]] bool Load() noexcept
+        {
+            return LoadSet("") || LoadSet("EXT");
+        }
+
+    private:
+        template <typename Function>
+        [[nodiscard]] static bool LoadFunction(
+            Function& function,
+            const char* name,
+            const char* suffix) noexcept
+        {
+            char fullName[64]{};
+            const int written = std::snprintf(fullName, sizeof(fullName), "%s%s", name, suffix);
+            if (written <= 0 || static_cast<std::size_t>(written) >= sizeof(fullName))
+            {
+                return false;
+            }
+
+            const PROC address = wglGetProcAddress(fullName);
+            // Some drivers report failure with small sentinel values instead of null.
+            const auto value = reinterpret_cast<std::intptr_t>(address);
+            if (value == 0 || value == 1 || value == 2 || value == 3 || value == -1)
+            {
+                function = nullptr;
+                return false;
+            }
+
+            function = reinterpret_cast<Function>(address);
+            return true;
+        }
+
+        [[nodiscard]] bool LoadSet(const char* suffix) noexcept
+        {
+            return LoadFunction(genFramebuffers, "glGenFramebuffers", suffix) &&
+                LoadFunction(bindFramebuffer, "glBindFramebuffer", suffix) &&
+                LoadFunction(genRenderbuffers, "glGenRenderbuffers", suffix) &&
+                LoadFunction(bindRenderbuffer, "glBindRenderbuffer", suffix) &&
+                LoadFunction(renderbufferStorage, "glRenderbufferStorage", suffix) &&
+                LoadFunction(framebufferRenderbuffer, "glFramebufferRenderbuffer", suffix) &&
+                LoadFunction(checkFramebufferStatus, "glCheckFramebufferStatus", suffix);
+        }
+    };
+
     namespace
     {
         constexpr int kMargin = 12;
@@ -39,10 +115,9 @@ namespace mwg::activex
 
             ~ScopedCurrentContext()
             {
-                if (_valid)
-                {
-                    wglMakeCurrent(_previousDeviceContext, _previousRenderingContext);
-                }
+                // A failed wglMakeCurrent still detaches the caller's context,
+                // so restore it even when activation did not succeed.
+                wglMakeCurrent(_previousDeviceContext, _previousRenderingContext);
             }
 
             [[nodiscard]] bool IsValid() const noexcept { return _valid; }
@@ -53,37 +128,74 @@ namespace mwg::activex
             bool _valid;
         };
 
+        [[nodiscard]] bool IsSamePoint(
+            const rendering::Point& first,
+            const rendering::Point& second) noexcept
+        {
+            return first.x == second.x && first.y == second.y;
+        }
+
+        /// Returns true when the ring is a simple, strictly convex polygon.
+        /// Consecutive duplicate vertices are ignored so they cannot hide a
+        /// concave corner, and the total turning angle must be one full turn
+        /// so self-intersecting rings with consistent turns are rejected.
         [[nodiscard]] bool IsConvex(const rendering::Ring& ring) noexcept
         {
-            std::size_t count = ring.size();
-            if (count > 1 &&
-                ring.front().x == ring.back().x &&
-                ring.front().y == ring.back().y)
+            std::vector<rendering::Point> vertices;
+            try
             {
-                --count;
+                vertices.reserve(ring.size());
+                for (const rendering::Point& point : ring)
+                {
+                    if (vertices.empty() || !IsSamePoint(vertices.back(), point))
+                    {
+                        vertices.push_back(point);
+                    }
+                }
+            }
+            catch (const std::bad_alloc&)
+            {
+                return false;
             }
 
+            while (vertices.size() > 1 && IsSamePoint(vertices.front(), vertices.back()))
+            {
+                vertices.pop_back();
+            }
+
+            const std::size_t count = vertices.size();
             if (count < 3)
             {
                 return false;
             }
 
+            constexpr double kPi = 3.14159265358979323846;
             double orientation = 0.0;
+            double totalTurn = 0.0;
             for (std::size_t index = 0; index < count; ++index)
             {
-                const rendering::Point& first = ring[index];
-                const rendering::Point& second = ring[(index + 1) % count];
-                const rendering::Point& third = ring[(index + 2) % count];
+                const rendering::Point& first = vertices[index];
+                const rendering::Point& second = vertices[(index + 1) % count];
+                const rendering::Point& third = vertices[(index + 2) % count];
                 const double cross =
                     (second.x - first.x) * (third.y - second.y) -
                     (second.y - first.y) * (third.x - second.x);
-                if (!std::isfinite(cross))
+                const double dot =
+                    (second.x - first.x) * (third.x - second.x) +
+                    (second.y - first.y) * (third.y - second.y);
+                if (!std::isfinite(cross) || !std::isfinite(dot))
                 {
                     return false;
                 }
 
                 if (cross == 0.0)
                 {
+                    // Collinear vertices are fine, but a reversal is a spike
+                    // whose overlapping edges GL_POLYGON cannot represent.
+                    if (dot < 0.0)
+                    {
+                        return false;
+                    }
                     continue;
                 }
 
@@ -95,9 +207,13 @@ namespace mwg::activex
                 {
                     return false;
                 }
+
+                totalTurn += std::atan2(cross, dot);
             }
 
-            return orientation != 0.0;
+            // With consistent turn signs the total is a multiple of 2*pi;
+            // only a single full turn describes a simple ring.
+            return orientation != 0.0 && std::abs(totalTurn) < 3.0 * kPi;
         }
 
         [[nodiscard]] bool IsSupported(const rendering::VectorRenderScene& scene) noexcept
@@ -131,6 +247,8 @@ namespace mwg::activex
             return static_cast<std::int64_t>(bounds.bottom) - bounds.top;
         }
     }
+
+    OpenGlVectorLayerRenderer::OpenGlVectorLayerRenderer() noexcept = default;
 
     OpenGlVectorLayerRenderer::~OpenGlVectorLayerRenderer()
     {
@@ -205,11 +323,83 @@ namespace mwg::activex
             return false;
         }
 
+        if (!InitializeFramebuffer())
+        {
+            _initializationFailed = true;
+            OutputDebugStringW(L"MapWinGIS: OpenGL framebuffer objects are unavailable.\n");
+            Release();
+            return false;
+        }
+
         return true;
+    }
+
+    bool OpenGlVectorLayerRenderer::InitializeFramebuffer() noexcept
+    {
+        const ScopedCurrentContext currentContext(_deviceContext, _renderingContext);
+        if (!currentContext.IsValid())
+        {
+            return false;
+        }
+
+        _framebufferFunctions.reset(new (std::nothrow) FramebufferFunctions{});
+        if (_framebufferFunctions == nullptr || !_framebufferFunctions->Load())
+        {
+            _framebufferFunctions.reset();
+            return false;
+        }
+
+        while (glGetError() != GL_NO_ERROR)
+        {
+        }
+
+        _framebufferFunctions->genFramebuffers(1, &_framebuffer);
+        _framebufferFunctions->genRenderbuffers(1, &_renderbuffer);
+        _framebufferFunctions->bindRenderbuffer(kRenderbuffer, _renderbuffer);
+        _framebufferFunctions->bindFramebuffer(kFramebuffer, _framebuffer);
+        _framebufferFunctions->framebufferRenderbuffer(
+            kFramebuffer,
+            kColorAttachment0,
+            kRenderbuffer,
+            _renderbuffer);
+        return glGetError() == GL_NO_ERROR && _framebuffer != 0 && _renderbuffer != 0;
+    }
+
+    bool OpenGlVectorLayerRenderer::ResizeFramebuffer(const int width, const int height) noexcept
+    {
+        _framebufferFunctions->bindFramebuffer(kFramebuffer, _framebuffer);
+        _framebufferFunctions->bindRenderbuffer(kRenderbuffer, _renderbuffer);
+        if (width != _framebufferWidth || height != _framebufferHeight)
+        {
+            _framebufferWidth = 0;
+            _framebufferHeight = 0;
+            while (glGetError() != GL_NO_ERROR)
+            {
+            }
+
+            _framebufferFunctions->renderbufferStorage(kRenderbuffer, kRgba8, width, height);
+            if (glGetError() != GL_NO_ERROR)
+            {
+                return false;
+            }
+
+            _framebufferWidth = width;
+            _framebufferHeight = height;
+        }
+
+        return _framebufferFunctions->checkFramebufferStatus(kFramebuffer) == kFramebufferComplete;
     }
 
     void OpenGlVectorLayerRenderer::Release() noexcept
     {
+        // The context is not shared, so deleting it also frees the
+        // framebuffer and renderbuffer objects.
+        _framebufferFunctions.reset();
+        _framebuffer = 0;
+        _renderbuffer = 0;
+        _framebufferWidth = 0;
+        _framebufferHeight = 0;
+
         if (_renderingContext != nullptr)
         {
             if (wglGetCurrentContext() == _renderingContext)
@@ -277,19 +467,6 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        if (SetWindowPos(
-                _window,
-                nullptr,
-                0,
-                0,
-                static_cast<int>(width),
-                static_cast<int>(height),
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE) == FALSE)
-        {
-            OutputDebugStringW(L"MapWinGIS: could not resize the OpenGL render target.\n");
-            return E_FAIL;
-        }
-
         try
         {
             const std::size_t pixelCount = pixelWidth * pixelHeight;
@@ -314,6 +491,12 @@ namespace mwg::activex
 
         const int viewportWidth = static_cast<int>(width);
         const int viewportHeight = static_cast<int>(height);
+        if (!ResizeFramebuffer(viewportWidth, viewportHeight))
+        {
+            OutputDebugStringW(L"MapWinGIS: no complete OpenGL framebuffer for this size.\n");
+            return S_FALSE;
+        }
+
         const double availableWidth = static_cast<double>(width - 2 * kMargin);
         const double availableHeight = static_cast<double>(height - 2 * kMargin);
         const double scale = std::min(
@@ -342,7 +525,7 @@ namespace mwg::activex
         glDisable(GL_DITHER);
         glDisable(GL_TEXTURE_2D);
         glDisable(GL_BLEND);
-        glDrawBuffer(GL_FRONT);
+        glDrawBuffer(kColorAttachment0);
 
         const COLORREF background = GetSysColor(COLOR_WINDOW);
         glClearColor(
@@ -387,7 +570,7 @@ namespace mwg::activex
         }
 
         glFlush();
-        glReadBuffer(GL_FRONT);
+        glReadBuffer(kColorAttachment0);
         glReadPixels(
             0,
             0,

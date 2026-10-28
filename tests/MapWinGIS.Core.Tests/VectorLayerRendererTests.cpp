@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "OpenGlVectorLayerRenderer.h"
 #include "VectorLayerRenderer.h"
 
 namespace
@@ -92,20 +93,57 @@ TEST(VectorLayerRenderer, UsesOpenGlForConvexPolygonWhenAvailable)
     ASSERT_TRUE(surface.IsValid());
     ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
 
-    mwg::activex::VectorLayerRenderer renderer;
     const RECT bounds{0, 0, 120, 100};
     const mwg::rendering::VectorRenderScene scene = MakeConvexPolygonScene();
-    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene), S_OK);
 
-    const auto backend = renderer.GetActiveBackend();
-    ASSERT_TRUE(backend.has_value());
-    if (*backend != mwg::activex::VectorRenderBackendKind::OpenGL)
+    // Only an unavailable OpenGL target may skip; drawing, readback or
+    // presentation failures in the backend must fail the test.
+    mwg::activex::OpenGlVectorLayerRenderer openGlRenderer;
+    const HRESULT openGlResult = openGlRenderer.Draw(surface.Get(), bounds, scene);
+    if (openGlResult == S_FALSE)
     {
-        GTEST_SKIP() << "OpenGL context is unavailable; GDI fallback is tested separately.";
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
     }
-
+    ASSERT_EQ(openGlResult, S_OK);
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
     EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
+
+    ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene), S_OK);
+    EXPECT_EQ(
+        renderer.GetActiveBackend(),
+        mwg::activex::VectorRenderBackendKind::OpenGL);
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
+    EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
+}
+
+TEST(VectorLayerRenderer, OpenGlRejectsConcaveCornerHiddenByDuplicateVertex)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+
+    mwg::rendering::VectorRenderScene scene = MakeConvexPolygonScene();
+    scene.polygons.front().front() = {
+        {0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}, {5.0, 5.0}, {5.0, 5.0}, {0.0, 10.0}, {0.0, 0.0}};
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene), S_FALSE);
+}
+
+TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+
+    mwg::rendering::VectorRenderScene scene{
+        mwg::Extent{-3.0, -3.0, 3.0, 3.0},
+        {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}};
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene), S_FALSE);
 }
 
 TEST(VectorLayerRenderer, UsesGdiForPolygonWithInteriorRing)

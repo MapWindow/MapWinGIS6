@@ -66,12 +66,16 @@ require an interactive Windows desktop and are not currently part of CI.
 
 ### Phase 5 validation
 
-The native renderer tests exercise OpenGL rendering when a WGL context is
-available and verify that polygons with interior rings use the GDI fallback.
-The OpenGL-specific test skips when the machine cannot create a context; the
-GDI fallback test does not require OpenGL. The Debug x64 build completed
-without compiler warnings, and the native suite ran 140 tests: 138 passed and
-2 were skipped (the opt-in network test and registered-host check). The
+The native renderer tests exercise the OpenGL backend directly when a WGL
+context with framebuffer objects is available, then verify that the
+coordinator selects it. They also verify that polygons with interior rings use
+the GDI fallback and that concave rings hidden by duplicate vertices and
+self-intersecting rings are rejected by OpenGL. The OpenGL drawing test skips
+only when the backend reports that no suitable target is available (`S_FALSE`);
+drawing, readback, or presentation failures fail it. The GDI fallback test
+does not require OpenGL. The Debug x64 build completed without compiler
+warnings, and the native suite ran 142 tests: 140 passed and 2 were skipped
+(the opt-in network test and registered-host check). The
 registration-free C# host activated the control, loaded the test layer, and
 resized it, but its screen-pixel checks could not be verified in this
 noninteractive session because the host window was absent from the captured

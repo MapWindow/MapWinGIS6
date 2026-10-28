@@ -126,11 +126,15 @@ buffers without changing ownership of map data.
 Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. Core
 converts Polygon and MultiPolygon features into an owned vector scene. The
-coordinator tries the OpenGL backend for convex polygons with one ring. OpenGL
-uses fixed-function OpenGL 1.1 and reads pixels back into a reusable CPU buffer
+coordinator tries the OpenGL backend for simple convex polygons with one ring.
+OpenGL uses a context created on a hidden, never-presented window, draws with
+fixed-function calls into a framebuffer object (OpenGL 3.0 or
+`GL_EXT_framebuffer_object`), and reads pixels back into a reusable CPU buffer
 before copying them to the host device context; this is a working backend
-boundary, not an end-to-end accelerated presentation path. Interior rings,
-concave polygons, initialization failures, and drawing failures use the GDI
+boundary, not an end-to-end accelerated presentation path. Rendering into a
+framebuffer object avoids undefined pixels from window pixel-ownership rules.
+Interior rings, concave or self-intersecting rings, missing framebuffer-object
+support, initialization failures, and drawing failures use the GDI
 backend. The GDI backend can draw the scene's existing polygon and interior
 ring structure. Both backends render source coordinates directly without
 reprojection, and scene preparation currently supports polygon layers only.
