@@ -8,19 +8,20 @@ splits that into two layers:
 
 - **`MapWinGIS.Core.dll`** — the mapping engine as a normal C++ DLL, with no
   COM, ATL or MFC. It can be used and tested on its own.
-- **`MapWinGIS.ocx`** — a thin ActiveX/COM wrapper over the core, keeping the
-  existing API so that current C#, VB.NET, WPF, Delphi and VB6 applications
-  keep working.
+- **`MapWinGIS.ocx`** — a thin ActiveX/COM wrapper over the core, exposing
+  selected legacy API compatibility where it fits the v6 design.
 
-MapWinGIS 5.x stays available and remains the reference implementation during
-the migration.
+MapWinGIS 5.x remains available as a behavioral reference. MapWinGIS6 prioritizes
+a clean, maintainable modern architecture; backward compatibility is pursued
+selectively and must not prevent structural improvements.
 
 ## Status
 
 Early. The core currently includes GDAL setup and OGR-backed vector dataset
 and layer access, including feature and field reading and updates. Available
 formats depend on the GDAL drivers enabled in the build; tests cover shapefiles
-and GeoPackage. The ActiveX layer has not been added yet.
+and GeoPackage. The ActiveX layer supports an initial slice of COM activation,
+control lifecycle, vector loading, and basic polygon rendering.
 
 ## Build and test
 

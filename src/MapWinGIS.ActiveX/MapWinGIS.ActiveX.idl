@@ -33,12 +33,36 @@ library MapWinGISActiveXLib
         HRESULT FeatureCount([out, retval] hyper* count);
     };
 
+    // Published interfaces are immutable; new members go on a derived
+    // interface with its own IID so clients never call missing vtable slots.
+    [
+        object,
+        dual,
+        oleautomation,
+        uuid(2C386A29-C378-45C1-B8D5-5624500CCFF2),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl2 : IMapWinGISControl
+    {
+        [propget, id(5)]
+        HRESULT RenderingBackend([out, retval] BSTR* backend);
+
+        [propget, id(6)]
+        HRESULT RenderingStatus([out, retval] BSTR* status);
+
+        [propget, id(7)]
+        HRESULT RenderingBackendPreference([out, retval] BSTR* preference);
+
+        [propput, id(7)]
+        HRESULT RenderingBackendPreference([in] BSTR preference);
+    };
+
     [
         uuid(2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F),
         control
     ]
     coclass MapWinGISControl
     {
-        [default] interface IMapWinGISControl;
+        [default] interface IMapWinGISControl2;
     };
 };

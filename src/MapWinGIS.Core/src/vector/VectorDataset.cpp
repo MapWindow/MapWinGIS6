@@ -209,7 +209,16 @@ namespace mwg
             const IgnoreAllButIds ignoreScope(*_layer, _fields);
 
             _featureIds.clear();
-            _featureIds.reserve(static_cast<std::size_t>(std::max<std::int64_t>(FeatureCount(), 0)));
+
+            // Do not force a full count before scanning every feature for its
+            // ID. Some drivers implement GetFeatureCount(TRUE) by scanning the
+            // entire layer, which would make this index build perform two passes.
+            // Reserve only when the driver can provide a count without forcing it.
+            const GIntBig count = _layer->GetFeatureCount(FALSE);
+            if (count > 0 && std::cmp_less_equal(count, _featureIds.max_size()))
+            {
+                _featureIds.reserve(static_cast<std::size_t>(count));
+            }
 
             _layer->ResetReading();
             while (const OGRFeatureUniquePtr feature{_layer->GetNextFeature()})
