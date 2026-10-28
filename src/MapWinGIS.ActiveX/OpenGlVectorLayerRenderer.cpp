@@ -499,6 +499,22 @@ namespace mwg::activex
         }
     }
 
+#ifdef MWG_ENABLE_RENDERER_TEST_HOOKS
+    void OpenGlVectorLayerRenderer::SimulateContextLossForTesting() noexcept
+    {
+        // Keep the stale handles so Draw observes the failure itself; Release
+        // later tolerates the already-released DC and destroyed window.
+        if (_window != nullptr)
+        {
+            if (_deviceContext != nullptr)
+            {
+                ReleaseDC(_window, _deviceContext);
+            }
+            DestroyWindow(_window);
+        }
+    }
+#endif
+
     HRESULT OpenGlVectorLayerRenderer::Draw(
         const HDC deviceContext,
         const RECT& bounds,

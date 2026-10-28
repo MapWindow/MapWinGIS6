@@ -60,6 +60,19 @@ namespace mwg::activex
             return _lastFailureReason;
         }
 
+#ifdef MWG_ENABLE_RENDERER_TEST_HOOKS
+        /**
+         * @brief Test hook: destroys the hidden render-target window while the
+         * backend still holds its handles.
+         *
+         * The next draw then fails to activate the context, as after a lost
+         * device context, which lets tests verify recreation on later draws.
+         * Compiled only into the native test build, which defines
+         * MWG_ENABLE_RENDERER_TEST_HOOKS; the ActiveX control does not expose it.
+         */
+        void SimulateContextLossForTesting() noexcept;
+#endif
+
     private:
         struct FramebufferFunctions;
 

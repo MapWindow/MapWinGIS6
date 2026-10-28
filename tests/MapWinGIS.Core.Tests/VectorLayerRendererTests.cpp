@@ -122,6 +122,33 @@ TEST(VectorLayerRenderer, UsesOpenGlForConvexPolygonWhenAvailable)
     EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
 }
 
+TEST(VectorLayerRenderer, OpenGlRecreatesLostContextOnLaterDraw)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    const mwg::rendering::VectorRenderScene scene = MakeConvexPolygonScene();
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT firstResult = renderer.Draw(surface.Get(), bounds, scene);
+    if (firstResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(firstResult, S_OK);
+
+    renderer.SimulateContextLossForTesting();
+    EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene), E_FAIL);
+    EXPECT_EQ(
+        renderer.GetLastFailureReason(),
+        L"OpenGL could not activate its rendering context.");
+
+    ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene), S_OK);
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
+    EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
+}
+
 TEST(VectorLayerRenderer, OpenGlRejectsConcaveCornerHiddenByDuplicateVertex)
 {
     BitmapSurface surface(120, 100);
