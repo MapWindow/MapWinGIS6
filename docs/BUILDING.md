@@ -77,6 +77,26 @@ control recreation. It can activate the OCX without a registration. The
 separate native activation script above retains its own temporary
 registration-based test.
 
+### Validating both native architectures
+
+Build and run the native tests for each platform. Use `-restore` when
+alternating architectures so the matching vcpkg triplet and managed host
+assets are restored:
+
+```powershell
+msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
+bin\Debug\x64\MapWinGIS.Core.Tests.exe
+
+msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=Win32 -m
+bin\Debug\Win32\MapWinGIS.Core.Tests.exe
+```
+
+The native activation check uses a PowerShell process with the same bitness as
+the target. The registration-free C# host also needs matching native binaries.
+The host can be built for Win32 and x64, but its visible pixel assertions
+require an interactive desktop. Debug and Release native builds are supported;
+registration and activation have only been verified in Debug.
+
 ### Where vcpkg is found
 
 `Directory.Build.props` and `bootstrap-vcpkg.ps1` look in this order:

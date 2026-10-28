@@ -52,8 +52,8 @@ registration-based native COM hosting test. The C# automated host passed all
 10 checks without COM registration, including activation, automation access,
 resize, visible repaint, disposal, recreation, and a second paint. Manual mode
 opened visibly and closed through the normal window-close path. The managed
-host also compiles for Win32/x86; matching native x86 hosting remains for
-Phase 7.
+host also compiles for Win32/x86; matching native x86 hosting was verified
+during Phase 7.
 
 ### Phase 4 validation
 
@@ -82,6 +82,21 @@ registration-free C# host activated the control, loaded the test layer, and
 resized it, but its screen-pixel checks could not be verified in this
 noninteractive session because the host window was absent from the captured
 desktop. Rerun that check from an interactive Windows desktop.
+
+### Phase 6 and 7 validation
+
+The renderer coordinator tests cover runtime backend preferences, hardware
+capability rejection, GDI fallback, and recreation after a failed OpenGL
+context. Phase 7 passed Debug and Release solution builds and native test runs
+on Win32 and x64, with no Level 4 compiler warnings. Each test run reported
+146 tests: 144 passed and 2 were skipped (the opt-in network test and the
+separately exercised registered-host check). The native registration and
+host-lifecycle check passed for both architectures in Debug.
+
+The managed host builds for both architectures, but has not been run against
+both native controls in an interactive desktop session. Its pixel assertions
+remain unverified for the current phase baseline. Release packaging with the
+`full-drivers` feature has not been verified for Win32.
 
 ## Conventions
 
