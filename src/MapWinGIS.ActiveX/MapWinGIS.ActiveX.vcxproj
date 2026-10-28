@@ -66,14 +66,19 @@
 
   <ItemGroup>
     <ClInclude Include="ActiveXModule.h" />
+    <ClInclude Include="GdiVectorLayerRenderer.h" />
     <ClInclude Include="MapWinGISControl.h" />
+    <ClInclude Include="OpenGlVectorLayerRenderer.h" />
     <ClInclude Include="VectorLayerRenderer.h" />
+    <ClInclude Include="VectorRenderBackend.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
 
   <ItemGroup>
     <ClCompile Include="ActiveXModule.cpp" />
+    <ClCompile Include="GdiVectorLayerRenderer.cpp" />
     <ClCompile Include="MapWinGISControl.cpp" />
+    <ClCompile Include="OpenGlVectorLayerRenderer.cpp" />
     <ClCompile Include="VectorLayerRenderer.cpp" />
     <ClCompile Include="$(IntDir)MapWinGIS.ActiveX_i.c" />
   </ItemGroup>

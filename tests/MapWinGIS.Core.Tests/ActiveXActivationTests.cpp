@@ -309,14 +309,53 @@ TEST(ActiveXActivation, CreatesControlThroughClassFactory)
     ASSERT_TRUE(SUCCEEDED(result));
     EXPECT_EQ(GetPixel(surface.Get(), 79, 59), GetSysColor(COLOR_WINDOW));
 
-    ComPtr<IMapWinGISControl> activeXControl;
+    ComPtr<IMapWinGISControl> originalInterface;
+    result = control.As(&originalInterface);
+    ASSERT_TRUE(SUCCEEDED(result));
+
+    ComPtr<IMapWinGISControl2> activeXControl;
     result = control.As(&activeXControl);
     ASSERT_TRUE(SUCCEEDED(result));
 
     VARIANT_BOOL initialized = VARIANT_FALSE;
-    result = activeXControl->get_CoreInitialized(&initialized);
+    result = originalInterface->get_CoreInitialized(&initialized);
     ASSERT_TRUE(SUCCEEDED(result));
     EXPECT_EQ(initialized == VARIANT_TRUE, mwg::GdalEnvironment::IsInitialized());
+
+    BSTR backendPreference{};
+    result = activeXControl->get_RenderingBackendPreference(&backendPreference);
+    ASSERT_TRUE(SUCCEEDED(result));
+    EXPECT_STREQ(backendPreference, L"Automatic");
+    SysFreeString(backendPreference);
+
+    backendPreference = SysAllocString(L"SoftwareOnly");
+    ASSERT_NE(backendPreference, nullptr);
+    EXPECT_EQ(
+        activeXControl->put_RenderingBackendPreference(backendPreference),
+        E_INVALIDARG);
+    SysFreeString(backendPreference);
+
+    backendPreference = SysAllocString(L"gdi");
+    ASSERT_NE(backendPreference, nullptr);
+    result = activeXControl->put_RenderingBackendPreference(backendPreference);
+    SysFreeString(backendPreference);
+    ASSERT_TRUE(SUCCEEDED(result));
+    result = activeXControl->get_RenderingBackendPreference(&backendPreference);
+    ASSERT_TRUE(SUCCEEDED(result));
+    EXPECT_STREQ(backendPreference, L"GDI");
+    SysFreeString(backendPreference);
+
+    BSTR renderingBackend{};
+    result = activeXControl->get_RenderingBackend(&renderingBackend);
+    ASSERT_TRUE(SUCCEEDED(result));
+    EXPECT_STREQ(renderingBackend, L"Not rendered");
+    SysFreeString(renderingBackend);
+
+    BSTR renderingStatus{};
+    result = activeXControl->get_RenderingStatus(&renderingStatus);
+    ASSERT_TRUE(SUCCEEDED(result));
+    EXPECT_STREQ(renderingStatus, L"Rendering has not been attempted.");
+    SysFreeString(renderingStatus);
 }
 
 TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
