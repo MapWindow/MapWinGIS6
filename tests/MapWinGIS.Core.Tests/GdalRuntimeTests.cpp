@@ -136,7 +136,7 @@ TEST(GdalRuntime, CapturesStructuredGdalErrors)
 
     CPLError(CE_Failure, CPLE_AppDefined, "%s", "forced failure");
 
-    ASSERT_EQ(errors.Errors().size(), 1);
+    ASSERT_EQ(errors.Errors().size(), 1u);
     EXPECT_EQ(errors.Errors().front().errorClass, GdalErrorClass::Failure);
     EXPECT_EQ(errors.LastErrorCode(), CPLE_AppDefined);
     EXPECT_EQ(errors.LastErrorMessage(), "forced failure");
@@ -158,7 +158,7 @@ TEST(GdalRuntime, ContinuesCapturingDiagnosticsAfterLoggerException)
     CPLError(CE_Failure, CPLE_AppDefined, "%s", "failure after warning");
     GdalEnvironment::SetLogHandler({});
 
-    ASSERT_EQ(errors.Errors().size(), 2);
+    ASSERT_EQ(errors.Errors().size(), 2u);
     EXPECT_EQ(errors.Errors()[0].message, "warning before failure");
     EXPECT_EQ(errors.Errors()[1].message, "failure after warning");
     EXPECT_EQ(errors.LastErrorCode(), CPLE_AppDefined);
@@ -284,8 +284,8 @@ TEST(GdalRuntime, IsolatesOverlappingErrorScopesOnDifferentThreads)
     std::thread second(capture, 1);
     first.join();
     second.join();
-    ASSERT_EQ(results[0].size(), 1);
-    ASSERT_EQ(results[1].size(), 1);
+    ASSERT_EQ(results[0].size(), 1u);
+    ASSERT_EQ(results[1].size(), 1u);
     EXPECT_EQ(results[0].front().message, "first");
     EXPECT_EQ(results[1].front().message, "second");
 }

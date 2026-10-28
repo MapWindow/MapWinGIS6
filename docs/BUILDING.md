@@ -118,7 +118,10 @@ msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release -p:Mwg
 
 ### Runtime data
 
-vcpkg installs `gdal-data` and `proj.db` under `vcpkg_installed\<triplet>\share`.
+vcpkg installs `gdal-data` and `proj.db` under
+`vcpkg_installed\<Platform>\<triplet>\share`. Each platform has its own install
+tree because vcpkg removes other triplets from a shared tree, which would break
+alternating Win32 and x64 builds.
 A target in `Directory.Build.targets` copies them into the output folder as
 `gdal-data\` and `proj\`, and `GdalEnvironment` points GDAL and PROJ at them.
 No `GDAL_DATA` or `PROJ_LIB` environment variable is needed or set.

@@ -109,9 +109,9 @@ TEST_P(VectorRenderSceneTest, CopiesPolygonCoordinatesAndExtent)
 {
     const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(*_layer);
 
-    ASSERT_EQ(scene.polygons.size(), Provinces::kFeatureCount);
-    ASSERT_EQ(scene.polygons.front().size(), 1);
-    ASSERT_EQ(scene.polygons.front().front().size(), 5);
+    ASSERT_EQ(scene.polygons.size(), static_cast<std::size_t>(Provinces::kFeatureCount));
+    ASSERT_EQ(scene.polygons.front().size(), 1u);
+    ASSERT_EQ(scene.polygons.front().front().size(), 5u);
     EXPECT_DOUBLE_EQ(scene.extent.xMin, Provinces::kMinX);
     EXPECT_DOUBLE_EQ(scene.extent.yMin, Provinces::kMinY);
     EXPECT_DOUBLE_EQ(scene.extent.xMax, Provinces::kMaxX);
@@ -141,8 +141,8 @@ TEST(VectorRenderScene, AcceptsPolygonZAndPolygonM)
         ASSERT_EQ(layer.Type(), shapeType);
 
         const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(layer);
-        ASSERT_EQ(scene.polygons.size(), 1);
-        ASSERT_EQ(scene.polygons.front().size(), 1);
-        EXPECT_EQ(scene.polygons.front().front().size(), 5);
+        ASSERT_EQ(scene.polygons.size(), 1u);
+        ASSERT_EQ(scene.polygons.front().size(), 1u);
+        EXPECT_EQ(scene.polygons.front().front().size(), 5u);
     }
 }

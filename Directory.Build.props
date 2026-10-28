@@ -38,7 +38,9 @@
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
     <VcpkgManifestInstall>true</VcpkgManifestInstall>
     <VcpkgManifestRoot>$(MwgRepoRoot)</VcpkgManifestRoot>
-    <VcpkgInstalledDir>$(MwgRepoRoot)vcpkg_installed\</VcpkgInstalledDir>
+    <!-- One install tree per platform: vcpkg prunes the other triplet from a shared tree,
+         which breaks alternating Win32 and x64 builds. -->
+    <VcpkgInstalledDir>$(MwgRepoRoot)vcpkg_installed\$(Platform)\</VcpkgInstalledDir>
     <VcpkgUseStatic>false</VcpkgUseStatic>
     <VcpkgAutoLink>true</VcpkgAutoLink>
     <VcpkgApplocalDeps>true</VcpkgApplocalDeps>

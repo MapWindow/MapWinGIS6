@@ -375,9 +375,9 @@ TEST(GdalAlgorithmRunner, LogsWarningsWithoutTurningSuccessIntoFailure)
     EXPECT_FALSE(result.WasCancelled());
     EXPECT_EQ(result.LastErrorCode(), 0);
     EXPECT_TRUE(result.ErrorMsg().empty());
-    ASSERT_EQ(result.AllErrors().size(), 1);
+    ASSERT_EQ(result.AllErrors().size(), 1u);
     EXPECT_EQ(result.AllErrors().front().errorClass, GdalErrorClass::Warning);
-    ASSERT_EQ(warnings.size(), 1);
+    ASSERT_EQ(warnings.size(), 1u);
     EXPECT_NE(warnings.front().find("test warning"), std::string::npos);
 }
 
@@ -391,7 +391,7 @@ TEST(GdalAlgorithmRunner, AddsFailureDiagnosticWhenGdalOnlyEmitsWarnings)
     const auto result = runner.Result();
     EXPECT_EQ(result.LastErrorCode(), CPLE_AppDefined);
     EXPECT_NE(result.ErrorMsg().find("execution failed"), std::string::npos);
-    ASSERT_EQ(result.AllErrors().size(), 2);
+    ASSERT_EQ(result.AllErrors().size(), 2u);
     EXPECT_EQ(result.AllErrors().front().errorClass, GdalErrorClass::Warning);
 }
 
@@ -480,8 +480,8 @@ TEST(GdalAlgorithmRunner, SerializesConcurrentRunnersAndIsolatesTheirResults)
     EXPECT_FALSE(DiagnosticsAlgorithm::overlapped.load());
     EXPECT_TRUE(results[0].Succeeded());
     EXPECT_FALSE(results[1].Succeeded());
-    EXPECT_EQ(results[0].AllErrors().size(), 1);
-    EXPECT_EQ(results[1].AllErrors().size(), 2);
+    EXPECT_EQ(results[0].AllErrors().size(), 1u);
+    EXPECT_EQ(results[1].AllErrors().size(), 2u);
     EXPECT_EQ(results[0].DetailedErrorMsg().find("second operation"), std::string::npos);
     EXPECT_EQ(results[1].DetailedErrorMsg().find("first operation"), std::string::npos);
 }
