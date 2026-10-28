@@ -41,7 +41,7 @@
 
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;$(MwgRepoRoot)obj\MapWinGIS.ActiveX\$(Configuration)\$(Platform);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;$(MwgRepoRoot)src\MapWinGIS.ActiveX;$(MwgRepoRoot)obj\MapWinGIS.ActiveX\$(Configuration)\$(Platform);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -62,6 +62,10 @@
     <ClCompile Include="ActiveXActivationTests.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="TestData.cpp" />
+    <ClCompile Include="VectorLayerRendererTests.cpp" />
+    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\GdiVectorLayerRenderer.cpp" />
+    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\OpenGlVectorLayerRenderer.cpp" />
+    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\VectorLayerRenderer.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
     <ClCompile Include="VectorLayerTests.cpp" />
     <ClCompile Include="VectorRenderSceneTests.cpp" />

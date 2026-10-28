@@ -11,11 +11,56 @@
 #include <exception>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <utility>
 
-#include "VectorLayerRenderer.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
+
+namespace
+{
+    [[nodiscard]] HRESULT CopyToBstr(const std::wstring_view value, BSTR* result) noexcept
+    {
+        if (result == nullptr)
+        {
+            return E_POINTER;
+        }
+
+        *result = ::SysAllocStringLen(
+            value.data(),
+            static_cast<UINT>(value.size()));
+        return *result != nullptr ? S_OK : E_OUTOFMEMORY;
+    }
+
+    [[nodiscard]] const wchar_t* BackendName(
+        const std::optional<mwg::activex::VectorRenderBackendKind> backend) noexcept
+    {
+        if (!backend.has_value())
+        {
+            return L"Not rendered";
+        }
+
+        return *backend == mwg::activex::VectorRenderBackendKind::OpenGL
+            ? L"OpenGL"
+            : L"GDI";
+    }
+
+    [[nodiscard]] const wchar_t* PreferenceName(
+        const mwg::activex::VectorRenderBackendPreference preference) noexcept
+    {
+        switch (preference)
+        {
+        case mwg::activex::VectorRenderBackendPreference::Automatic:
+            return L"Automatic";
+        case mwg::activex::VectorRenderBackendPreference::OpenGL:
+            return L"OpenGL";
+        case mwg::activex::VectorRenderBackendPreference::Gdi:
+            return L"GDI";
+        default:
+            return L"Automatic";
+        }
+    }
+}
 
 STDMETHODIMP CMapWinGISControl::get_CoreInitialized(VARIANT_BOOL* initialized)
 {
@@ -99,6 +144,61 @@ STDMETHODIMP CMapWinGISControl::get_FeatureCount(LONGLONG* count)
     return S_OK;
 }
 
+STDMETHODIMP CMapWinGISControl::get_RenderingBackend(BSTR* backend)
+{
+    return CopyToBstr(BackendName(_renderer.GetActiveBackend()), backend);
+}
+
+STDMETHODIMP CMapWinGISControl::get_RenderingStatus(BSTR* status)
+{
+    return CopyToBstr(_renderer.GetDiagnostic(), status);
+}
+
+STDMETHODIMP CMapWinGISControl::get_RenderingBackendPreference(BSTR* preference)
+{
+    return CopyToBstr(PreferenceName(_renderer.GetPreference()), preference);
+}
+
+STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
+{
+    if (preference == nullptr)
+    {
+        return E_INVALIDARG;
+    }
+
+    const UINT length = ::SysStringLen(preference);
+    auto equals = [preference, length](const wchar_t* value, const int valueLength)
+    {
+        return length == static_cast<UINT>(valueLength) &&
+            ::CompareStringOrdinal(
+                preference,
+                static_cast<int>(length),
+                value,
+                valueLength,
+                TRUE) == CSTR_EQUAL;
+    };
+
+    if (equals(L"Automatic", 9))
+    {
+        _renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Automatic);
+    }
+    else if (equals(L"OpenGL", 6))
+    {
+        _renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
+    }
+    else if (equals(L"GDI", 3))
+    {
+        _renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Gdi);
+    }
+    else
+    {
+        return E_INVALIDARG;
+    }
+
+    FireViewChange();
+    return S_OK;
+}
+
 LRESULT CMapWinGISControl::OnSize(
     UINT,
     WPARAM,
@@ -132,6 +232,6 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
     }
 
     return _scene.has_value()
-        ? mwg::activex::DrawVectorRenderScene(drawInfo.hdcDraw, bounds, *_scene)
+        ? _renderer.Draw(drawInfo.hdcDraw, bounds, *_scene)
         : S_OK;
 }

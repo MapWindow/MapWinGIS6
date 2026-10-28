@@ -4,8 +4,8 @@
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
- * Provides automation for loading a vector dataset and painting its initial
- * polygon layer into the host drawing surface.
+ * Provides automation for loading vector data, selecting a rendering backend,
+ * reporting render status, and painting the initial polygon layer.
  */
 #pragma once
 
@@ -19,6 +19,7 @@
 
 #include "mapwingis/rendering/VectorRenderScene.h"
 #include "mapwingis/vector/VectorDataset.h"
+#include "VectorLayerRenderer.h"
 
 class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
@@ -31,8 +32,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
     public ATL::IDispatchImpl<
-        IMapWinGISControl,
-        &IID_IMapWinGISControl,
+        IMapWinGISControl2,
+        &IID_IMapWinGISControl2,
         &LIBID_MapWinGISActiveXLib,
         1,
         0>
@@ -43,6 +44,7 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IDispatch)
         COM_INTERFACE_ENTRY(IViewObjectEx)
@@ -72,6 +74,10 @@ public:
     STDMETHOD(LoadVectorDataset)(BSTR path) override;
     STDMETHOD(get_LayerLoaded)(VARIANT_BOOL* loaded) override;
     STDMETHOD(get_FeatureCount)(LONGLONG* count) override;
+    STDMETHOD(get_RenderingBackend)(BSTR* backend) override;
+    STDMETHOD(get_RenderingStatus)(BSTR* status) override;
+    STDMETHOD(get_RenderingBackendPreference)(BSTR* preference) override;
+    STDMETHOD(put_RenderingBackendPreference)(BSTR preference) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
     HRESULT OnDraw(ATL_DRAWINFO& drawInfo);
@@ -79,6 +85,7 @@ public:
 private:
     std::unique_ptr<mwg::VectorDataset> _dataset;
     std::optional<mwg::rendering::VectorRenderScene> _scene;
+    mwg::activex::VectorLayerRenderer _renderer;
     LONGLONG _featureCount = 0;
 };
 
