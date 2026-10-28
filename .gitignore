@@ -430,3 +430,6 @@ FodyWeavers.xsd
 
 # vcpkg installed libraries
 vcpkg_installed/
+
+# C++ language server compilation database
+.mscppls/
