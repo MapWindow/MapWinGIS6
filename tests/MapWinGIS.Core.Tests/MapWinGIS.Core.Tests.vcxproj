@@ -42,6 +42,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;$(MwgRepoRoot)src\MapWinGIS.ActiveX;$(MwgRepoRoot)obj\MapWinGIS.ActiveX\$(Configuration)\$(Platform);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>MWG_ENABLE_RENDERER_TEST_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

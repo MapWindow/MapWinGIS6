@@ -22,6 +22,7 @@
 #include <iostream>
 #include <memory>
 #include <numbers>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -60,7 +61,9 @@ namespace
         return values[values.size() / 2];
     }
 
-    [[nodiscard]] double PrivateMiB()
+    /// Returns the process private usage, or an empty value with the Win32
+    /// error code reported through @p error when it cannot be queried.
+    [[nodiscard]] std::optional<double> PrivateMiB(DWORD& error)
     {
         PROCESS_MEMORY_COUNTERS_EX counters{};
         counters.cb = sizeof(counters);
@@ -69,7 +72,8 @@ namespace
                 reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
                 sizeof(counters)))
         {
-            return 0.0;
+            error = GetLastError();
+            return std::nullopt;
         }
         return static_cast<double>(counters.PrivateUsage) / (1024.0 * 1024.0);
     }
@@ -221,7 +225,9 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     TempDirectory directory;
     const std::filesystem::path path = MakePolygonGrid(directory.Path(), featureCount);
 
-    const double memoryBefore = PrivateMiB();
+    DWORD memoryError = ERROR_SUCCESS;
+    const std::optional<double> memoryBefore = PrivateMiB(memoryError);
+    ASSERT_TRUE(memoryBefore.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     Clock::time_point start = Clock::now();
     std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
     VectorLayer& layer = dataset->Layer(0);
@@ -230,7 +236,8 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     start = Clock::now();
     const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(layer);
     const double sceneMs = ElapsedMilliseconds(start);
-    const double memoryAfterScene = PrivateMiB();
+    const std::optional<double> memoryAfterScene = PrivateMiB(memoryError);
+    ASSERT_TRUE(memoryAfterScene.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     ASSERT_EQ(scene.polygons.size(), static_cast<std::size_t>(featureCount));
 
     DibSurface surface(kTargetWidth, kTargetHeight);
@@ -251,7 +258,7 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
               << kTargetHeight << " target\n";
     Report("Core open dataset", openMs, "ms");
     Report("Core prepare render scene", sceneMs, "ms");
-    Report("Private memory increase for scene", memoryAfterScene - memoryBefore, "MiB");
+    Report("Private memory increase for scene", *memoryAfterScene - *memoryBefore, "MiB");
     Report("GDI frame (median)", Median(gdiFrames), "ms");
 
     activex::OpenGlVectorLayerRenderer openGl;
@@ -275,5 +282,7 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
 
     Report("OpenGL first frame (context+draw)", firstOpenGlMs, "ms");
     Report("OpenGL frame (median)", Median(openGlFrames), "ms");
-    Report("Private memory increase total", PrivateMiB() - memoryBefore, "MiB");
+    const std::optional<double> memoryAfterOpenGl = PrivateMiB(memoryError);
+    ASSERT_TRUE(memoryAfterOpenGl.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
+    Report("Private memory increase total", *memoryAfterOpenGl - *memoryBefore, "MiB");
 }

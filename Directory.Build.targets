@@ -43,25 +43,51 @@
     vcpkg's incremental install check only compares vcpkg.json and
     vcpkg-configuration.json with its stamp file, so changing MwgVcpkgFeatures
     (for example adding full-drivers) silently reused the previous install.
-    Record the requested features per project and make that file an input of
-    the check; it is rewritten only when the feature set changes. A per-project
-    file avoids concurrent writes from parallel project builds.
+    The install tree and stamp are shared by all configurations of a platform,
+    so the feature set actually installed is recorded next to the stamp after
+    each successful install. When the requested features differ from that
+    record, the stamp is deleted to force vcpkg to reinstall the tree.
   -->
-  <Target Name="MwgTrackVcpkgFeatures"
+  <PropertyGroup>
+    <_MwgVcpkgTrackFeatures Condition="'$(VcpkgEnabled)' == 'true' And '$(VcpkgEnableManifest)' == 'true' And '$(VcpkgManifestInstall)' == 'true'">true</_MwgVcpkgTrackFeatures>
+    <_MwgVcpkgInstalledFeaturesFile>$(_ZVcpkgMSBuildStampFile).features.txt</_MwgVcpkgInstalledFeaturesFile>
+  </PropertyGroup>
+
+  <Target Name="MwgInvalidateVcpkgInstallOnFeatureChange"
           BeforeTargets="VcpkgInstallManifestDependencies"
-          Condition="'$(VcpkgEnabled)' == 'true' And '$(VcpkgEnableManifest)' == 'true' And '$(VcpkgManifestInstall)' == 'true'">
+          Condition="'$(_MwgVcpkgTrackFeatures)' == 'true'">
+    <ReadLinesFromFile File="$(_MwgVcpkgInstalledFeaturesFile)"
+                       Condition="Exists('$(_MwgVcpkgInstalledFeaturesFile)')">
+      <Output TaskParameter="Lines" ItemName="_MwgVcpkgInstalledFeatures" />
+    </ReadLinesFromFile>
+
+    <Delete Files="$(_ZVcpkgMSBuildStampFile)"
+            Condition="!Exists('$(_MwgVcpkgInstalledFeaturesFile)') Or '@(_MwgVcpkgInstalledFeatures)' != '$(MwgVcpkgFeatures)'" />
+  </Target>
+
+  <Target Name="MwgRecordVcpkgInstalledFeatures"
+          AfterTargets="VcpkgInstallManifestDependencies"
+          Condition="'$(_MwgVcpkgTrackFeatures)' == 'true'">
     <PropertyGroup>
-      <_MwgVcpkgFeaturesFile>$([MSBuild]::NormalizePath('$(ProjectDir)', '$(IntDir)', 'vcpkg-features-$(VcpkgTriplet).txt'))</_MwgVcpkgFeaturesFile>
+      <_MwgVcpkgProjectFeaturesFile>$([MSBuild]::NormalizePath('$(ProjectDir)', '$(IntDir)', 'vcpkg-features-$(VcpkgTriplet).txt'))</_MwgVcpkgProjectFeaturesFile>
     </PropertyGroup>
 
-    <WriteLinesToFile File="$(_MwgVcpkgFeaturesFile)"
+    <ReadLinesFromFile File="$(_MwgVcpkgInstalledFeaturesFile)"
+                       Condition="Exists('$(_MwgVcpkgInstalledFeaturesFile)')">
+      <Output TaskParameter="Lines" ItemName="_MwgVcpkgRecordedFeatures" />
+    </ReadLinesFromFile>
+
+    <!-- Parallel projects may publish the same record; stage it per project
+         and copy with retries instead of writing the shared file directly. -->
+    <WriteLinesToFile File="$(_MwgVcpkgProjectFeaturesFile)"
                       Lines="$(MwgVcpkgFeatures)"
                       Overwrite="true"
                       WriteOnlyWhenDifferent="true" />
-
-    <ItemGroup>
-      <_ZVcpkgInstallManifestDependenciesInputs Include="$(_MwgVcpkgFeaturesFile)" />
-    </ItemGroup>
+    <Copy SourceFiles="$(_MwgVcpkgProjectFeaturesFile)"
+          DestinationFiles="$(_MwgVcpkgInstalledFeaturesFile)"
+          Retries="10"
+          RetryDelayMilliseconds="200"
+          Condition="!Exists('$(_MwgVcpkgInstalledFeaturesFile)') Or '@(_MwgVcpkgRecordedFeatures)' != '$(MwgVcpkgFeatures)'" />
   </Target>
 
 </Project>

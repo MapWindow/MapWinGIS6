@@ -98,9 +98,12 @@ registration-based activation, and the C# host checks have been verified on
 both architectures.
 
 Changing `MwgVcpkgFeatures` (for example adding `full-drivers`) reinstalls the
-vcpkg packages on the next build: each C++ project records the requested
-features in `obj\...\vcpkg-features-<triplet>.txt`, which is an input of
-vcpkg's incremental install check.
+vcpkg packages on the next build. After each successful install, the build
+records the installed features next to vcpkg's stamp file in the shared
+`vcpkg_installed\<Platform>\` tree. When a later build of any configuration
+requests different features, it deletes the stamp, so vcpkg reinstalls the
+tree. For example, Release with `full-drivers`, then Debug without it, then
+Release with it again reinstalls the tree each time.
 
 ### Where vcpkg is found
 
