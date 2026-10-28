@@ -360,19 +360,34 @@ internal sealed class MainForm : Form
         }
 
         dynamic automation = automationObject;
-        automation.RenderingBackendPreference = "GDI";
-        _host.Invalidate(true);
-        _host.Update();
-        Application.DoEvents();
-
-        string activeBackend = automation.RenderingBackend;
-        string renderingStatus = automation.RenderingStatus;
-        if (activeBackend != "GDI" ||
-            renderingStatus != "GDI was selected by the rendering preference.")
+        string previousPreference = automation.RenderingBackendPreference;
+        try
         {
-            throw new InvalidOperationException(
-                $"The requested CPU backend was not reported. Backend='{activeBackend}', status='{renderingStatus}'.");
+            automation.RenderingBackendPreference = "GDI";
+            RepaintHost();
+
+            string activeBackend = automation.RenderingBackend;
+            string renderingStatus = automation.RenderingStatus;
+            if (activeBackend != "GDI" ||
+                renderingStatus != "GDI was selected by the rendering preference.")
+            {
+                throw new InvalidOperationException(
+                    $"The requested CPU backend was not reported. Backend='{activeBackend}', status='{renderingStatus}'.");
+            }
         }
+        finally
+        {
+            // Later resize/repaint checks must exercise the default backend path.
+            automation.RenderingBackendPreference = previousPreference;
+            RepaintHost();
+        }
+    }
+
+    private void RepaintHost()
+    {
+        _host?.Invalidate(true);
+        _host?.Update();
+        Application.DoEvents();
     }
 
     private void VerifyResize()
