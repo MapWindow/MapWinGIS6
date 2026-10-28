@@ -29,10 +29,18 @@ namespace mwg::activex
         OpenGlVectorLayerRenderer(const OpenGlVectorLayerRenderer&) = delete;
         OpenGlVectorLayerRenderer& operator=(const OpenGlVectorLayerRenderer&) = delete;
 
+        /**
+         * @brief Checks a target against detected size limits and the staging budget.
+         *
+         * @p maximumWidth and @p maximumHeight are the effective per-axis
+         * limits: the smaller of the renderbuffer size and the viewport
+         * dimensions, because `glViewport` silently clamps larger targets.
+         */
         [[nodiscard]] static bool IsTargetWithinLimits(
             int width,
             int height,
-            int maximumFramebufferSize,
+            int maximumWidth,
+            int maximumHeight,
             std::wstring_view& rejectionReason) noexcept;
 
         /**
@@ -68,7 +76,8 @@ namespace mwg::activex
         unsigned int _renderbuffer{};
         int _framebufferWidth{};
         int _framebufferHeight{};
-        int _maximumFramebufferSize{};
+        int _maximumTargetWidth{};
+        int _maximumTargetHeight{};
         bool _initializationFailed = false;
         bool _contextInvalid = false;
         std::wstring_view _lastFailureReason =

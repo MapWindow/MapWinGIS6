@@ -261,7 +261,8 @@ namespace mwg::activex
     bool OpenGlVectorLayerRenderer::IsTargetWithinLimits(
         const int width,
         const int height,
-        const int maximumFramebufferSize,
+        const int maximumWidth,
+        const int maximumHeight,
         std::wstring_view& rejectionReason) noexcept
     {
         if (width <= 0 || height <= 0)
@@ -270,16 +271,16 @@ namespace mwg::activex
             return false;
         }
 
-        if (maximumFramebufferSize <= 0)
+        if (maximumWidth <= 0 || maximumHeight <= 0)
         {
             rejectionReason = L"OpenGL did not report a usable maximum framebuffer size.";
             return false;
         }
 
-        if (width > maximumFramebufferSize || height > maximumFramebufferSize)
+        if (width > maximumWidth || height > maximumHeight)
         {
             rejectionReason =
-                L"The OpenGL target exceeds the detected maximum framebuffer size.";
+                L"The OpenGL target exceeds the detected maximum framebuffer or viewport size.";
             return false;
         }
 
@@ -414,13 +415,17 @@ namespace mwg::activex
 
         GLint maximumFramebufferSize{};
         glGetIntegerv(kMaxRenderbufferSize, &maximumFramebufferSize);
-        if (glGetError() != GL_NO_ERROR || maximumFramebufferSize <= 0)
+        GLint maximumViewportDimensions[2]{};
+        glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maximumViewportDimensions);
+        if (glGetError() != GL_NO_ERROR || maximumFramebufferSize <= 0 ||
+            maximumViewportDimensions[0] <= 0 || maximumViewportDimensions[1] <= 0)
         {
             _lastFailureReason =
                 L"OpenGL did not report a usable maximum framebuffer size.";
             return false;
         }
-        _maximumFramebufferSize = maximumFramebufferSize;
+        _maximumTargetWidth = std::min(maximumFramebufferSize, maximumViewportDimensions[0]);
+        _maximumTargetHeight = std::min(maximumFramebufferSize, maximumViewportDimensions[1]);
 
         _framebufferFunctions->genFramebuffers(1, &_framebuffer);
         _framebufferFunctions->genRenderbuffers(1, &_renderbuffer);
@@ -468,7 +473,8 @@ namespace mwg::activex
         _renderbuffer = 0;
         _framebufferWidth = 0;
         _framebufferHeight = 0;
-        _maximumFramebufferSize = 0;
+        _maximumTargetWidth = 0;
+        _maximumTargetHeight = 0;
 
         if (_renderingContext != nullptr)
         {
@@ -537,17 +543,19 @@ namespace mwg::activex
                 static_cast<int>(width),
                 static_cast<int>(height),
                 std::numeric_limits<int>::max(),
+                std::numeric_limits<int>::max(),
                 rejectionReason))
         {
             _lastFailureReason = rejectionReason;
             return S_FALSE;
         }
 
+        // Keep the flag set until a replacement context initializes, so a
+        // transient recreation failure is retried on later draws.
         if (_contextInvalid)
         {
             Release();
             _initializationFailed = false;
-            _contextInvalid = false;
             _initializationFailureReason = {};
         }
 
@@ -555,11 +563,13 @@ namespace mwg::activex
         {
             return S_FALSE;
         }
+        _contextInvalid = false;
 
         if (!IsTargetWithinLimits(
                 static_cast<int>(width),
                 static_cast<int>(height),
-                _maximumFramebufferSize,
+                _maximumTargetWidth,
+                _maximumTargetHeight,
                 rejectionReason))
         {
             _lastFailureReason = rejectionReason;
@@ -567,9 +577,18 @@ namespace mwg::activex
         }
 
         const std::size_t pixelCount = pixelWidth * pixelHeight;
+        const std::size_t stagingBytes = pixelCount * kBytesPerPixel;
         try
         {
-            _rgbaPixels.resize(pixelCount * 4);
+            // Allocate exactly the accepted size and free the old buffer
+            // first, so neither retained capacity nor the resize peak can
+            // exceed the staging budget enforced by IsTargetWithinLimits.
+            if (_rgbaPixels.capacity() < stagingBytes)
+            {
+                std::vector<unsigned char>().swap(_rgbaPixels);
+                _rgbaPixels.reserve(stagingBytes);
+            }
+            _rgbaPixels.resize(stagingBytes);
         }
         catch (const std::bad_alloc&)
         {

@@ -309,12 +309,16 @@ TEST(ActiveXActivation, CreatesControlThroughClassFactory)
     ASSERT_TRUE(SUCCEEDED(result));
     EXPECT_EQ(GetPixel(surface.Get(), 79, 59), GetSysColor(COLOR_WINDOW));
 
-    ComPtr<IMapWinGISControl> activeXControl;
+    ComPtr<IMapWinGISControl> originalInterface;
+    result = control.As(&originalInterface);
+    ASSERT_TRUE(SUCCEEDED(result));
+
+    ComPtr<IMapWinGISControl2> activeXControl;
     result = control.As(&activeXControl);
     ASSERT_TRUE(SUCCEEDED(result));
 
     VARIANT_BOOL initialized = VARIANT_FALSE;
-    result = activeXControl->get_CoreInitialized(&initialized);
+    result = originalInterface->get_CoreInitialized(&initialized);
     ASSERT_TRUE(SUCCEEDED(result));
     EXPECT_EQ(initialized == VARIANT_TRUE, mwg::GdalEnvironment::IsInitialized());
 

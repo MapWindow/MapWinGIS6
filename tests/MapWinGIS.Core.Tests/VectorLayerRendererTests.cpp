@@ -235,6 +235,7 @@ TEST(VectorLayerRenderer, AppliesDetectedFramebufferLimitWithoutRequiringOpenGl)
         1280,
         720,
         4096,
+        4096,
         rejectionReason));
     EXPECT_TRUE(rejectionReason.empty());
 
@@ -242,8 +243,17 @@ TEST(VectorLayerRenderer, AppliesDetectedFramebufferLimitWithoutRequiringOpenGl)
         2048,
         720,
         1024,
+        4096,
         rejectionReason));
     EXPECT_EQ(
         rejectionReason,
-        L"The OpenGL target exceeds the detected maximum framebuffer size.");
+        L"The OpenGL target exceeds the detected maximum framebuffer or viewport size.");
+
+    // A viewport limit smaller than the renderbuffer limit must also reject.
+    EXPECT_FALSE(mwg::activex::OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+        1024,
+        900,
+        4096,
+        800,
+        rejectionReason));
 }

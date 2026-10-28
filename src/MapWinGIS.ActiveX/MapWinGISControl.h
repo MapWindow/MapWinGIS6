@@ -32,8 +32,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
     public ATL::IDispatchImpl<
-        IMapWinGISControl,
-        &IID_IMapWinGISControl,
+        IMapWinGISControl2,
+        &IID_IMapWinGISControl2,
         &LIBID_MapWinGISActiveXLib,
         1,
         0>
@@ -44,6 +44,7 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IDispatch)
         COM_INTERFACE_ENTRY(IViewObjectEx)
