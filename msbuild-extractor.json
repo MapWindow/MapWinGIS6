@@ -1,0 +1,6 @@
+{
+  "solutions": ["MapWinGIS6.slnx"],
+  "configuration": "Debug",
+  "platform": "x64",
+  "output": ".mscppls\\compile_commands.json"
+}
