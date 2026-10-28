@@ -95,6 +95,60 @@ namespace mwg::activex
             HGDIOBJ _previous;
         };
 
+        // GDI on Windows NT only accepts coordinates within a signed 27-bit range.
+        constexpr double kMaximumGdiCoordinate = 134217727.0;
+
+        [[nodiscard]] double ToDeviceX(
+            const rendering::Point& point,
+            const rendering::VectorRenderScene& scene,
+            const double scale,
+            const double left) noexcept
+        {
+            return left + (point.x - scene.extent.xMin) * scale;
+        }
+
+        [[nodiscard]] double ToDeviceY(
+            const rendering::Point& point,
+            const rendering::VectorRenderScene& scene,
+            const double scale,
+            const double top) noexcept
+        {
+            return top + (scene.extent.yMax - point.y) * scale;
+        }
+
+        [[nodiscard]] bool IsDrawableCoordinate(const double value) noexcept
+        {
+            return std::isfinite(value) &&
+                value >= -kMaximumGdiCoordinate &&
+                value <= kMaximumGdiCoordinate;
+        }
+
+        /// Checks every vertex before drawing so invalid geometry fails the
+        /// whole scene instead of being partially rasterized.
+        [[nodiscard]] bool HasDrawableCoordinates(
+            const rendering::VectorRenderScene& scene,
+            const double scale,
+            const double left,
+            const double top) noexcept
+        {
+            for (const rendering::Polygon& polygon : scene.polygons)
+            {
+                for (const rendering::Ring& ring : polygon)
+                {
+                    for (const rendering::Point& point : ring)
+                    {
+                        if (!IsDrawableCoordinate(ToDeviceX(point, scene, scale, left)) ||
+                            !IsDrawableCoordinate(ToDeviceY(point, scene, scale, top)))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            return true;
+        }
+
         [[nodiscard]] POINT ToPoint(
             const rendering::Point& point,
             const rendering::VectorRenderScene& scene,
@@ -103,8 +157,8 @@ namespace mwg::activex
             const double top) noexcept
         {
             return {
-                static_cast<LONG>(std::lround(left + (point.x - scene.extent.xMin) * scale)),
-                static_cast<LONG>(std::lround(top + (scene.extent.yMax - point.y) * scale))};
+                static_cast<LONG>(std::lround(ToDeviceX(point, scene, scale, left))),
+                static_cast<LONG>(std::lround(ToDeviceY(point, scene, scale, top)))};
         }
     }
 
@@ -140,6 +194,10 @@ namespace mwg::activex
                             (static_cast<double>(bounds.right - bounds.left) - drawingWidth) / 2.0;
         const double top = static_cast<double>(bounds.top) +
                            (static_cast<double>(bounds.bottom - bounds.top) - drawingHeight) / 2.0;
+        if (!HasDrawableCoordinates(scene, scale, left, top))
+        {
+            return E_INVALIDARG;
+        }
 
         const ScopedDcState savedState(deviceContext);
         if (!savedState.IsValid())

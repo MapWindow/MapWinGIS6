@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "OpenGlVectorLayerRenderer.h"
 #include "VectorLayerRenderer.h"
 
@@ -144,6 +146,23 @@ TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
 
     mwg::activex::OpenGlVectorLayerRenderer renderer;
     EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene), S_FALSE);
+}
+
+TEST(VectorLayerRenderer, FailsWithoutDrawingNonFiniteCoordinates)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
+    const RECT bounds{0, 0, 120, 100};
+
+    mwg::rendering::VectorRenderScene scene = MakeConvexPolygonScene();
+    scene.polygons.push_back(
+        {{{1.0, 1.0}, {std::numeric_limits<double>::quiet_NaN(), 5.0}, {9.0, 9.0}, {1.0, 1.0}}});
+
+    mwg::activex::VectorLayerRenderer renderer;
+    EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene), E_INVALIDARG);
+    EXPECT_FALSE(renderer.GetActiveBackend().has_value());
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(0, 0, 0));
 }
 
 TEST(VectorLayerRenderer, UsesGdiForPolygonWithInteriorRing)
