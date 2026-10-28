@@ -158,8 +158,8 @@ graphics-runtime dependency.
 Test Core scene preparation and the renderer coordinator independently of COM
 activation. OpenGL-specific integration checks need a usable WGL context;
 GDI fallback and coordinator tests do not require a GPU. The registration-free
-C# host exercises COM integration, but its rendered-pixel assertions require
-an interactive Windows desktop.
+C# host exercises COM integration and samples the host window's rendered
+pixels; it requires an interactive Windows desktop.
 
 Design the v6 architecture and APIs for clarity, maintainability, and
 performance first; backward compatibility is secondary and must not force the
@@ -184,17 +184,20 @@ geometry types are not rendered. There is no map navigation or
 reprojection, so coordinates remain in the source coordinate system.
 
 Core prepares and retains the complete supported polygon scene in memory.
-There is no tiling, paging, or unchanged-geometry cache, and no timing or
-memory baseline has been collected. OpenGL only supports convex single-ring
+There is no tiling, paging, or unchanged-geometry cache. The opt-in rendering
+baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline)) shows
+that Core scene preparation dominates and grows faster than linearly with
+feature count, while OpenGL frames are faster than GDI frames for the measured
+convex scenes. OpenGL only supports convex single-ring
 polygons and copies each frame through CPU memory. Its reusable CPU staging
 buffer is limited to 64 MiB per frame; target dimensions are also limited by
 the detected framebuffer and viewport capabilities. GDI is the supported
 Windows CPU fallback; Core has no independent platform-neutral renderer.
 
-The C# host's visible pixel assertions need a rerun in an interactive desktop
-session. The Win32 host pixel behavior and Release packaging with the
-`full-drivers` feature are unverified; activation checks were run in Debug.
+The C# host's pixel assertions, activation, and native tests pass for Debug
+and Release on Win32 and x64 in an interactive desktop session.
 The next useful milestone is a tested map-view transform for viewport and
-coordinate-system behavior. Measure scene preparation and rendering with
-representative datasets before adding caching, paging, or broader OpenGL
-geometry support. OpenCL and full MapWinGIS 5 API parity remain deferred.
+coordinate-system behavior. Make scene preparation read geometry sequentially
+instead of by index through WKT, then re-measure with representative datasets
+before adding caching, paging, or broader OpenGL geometry support. OpenCL and
+full MapWinGIS 5 API parity remain deferred.

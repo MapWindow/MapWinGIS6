@@ -93,9 +93,14 @@ bin\Debug\Win32\MapWinGIS.Core.Tests.exe
 
 The native activation check uses a PowerShell process with the same bitness as
 the target. The registration-free C# host also needs matching native binaries.
-The host can be built for Win32 and x64, but its visible pixel assertions
-require an interactive desktop. Debug and Release native builds are supported;
-registration and activation have only been verified in Debug.
+Its pixel assertions need an interactive desktop. Debug and Release builds,
+registration-based activation, and the C# host checks have been verified on
+both architectures.
+
+Changing `MwgVcpkgFeatures` (for example adding `full-drivers`) reinstalls the
+vcpkg packages on the next build: each C++ project records the requested
+features in `obj\...\vcpkg-features-<triplet>.txt`, which is an input of
+vcpkg's incremental install check.
 
 ### Where vcpkg is found
 

@@ -374,6 +374,8 @@ internal sealed class MainForm : Form
                 throw new InvalidOperationException(
                     $"The requested CPU backend was not reported. Backend='{activeBackend}', status='{renderingStatus}'.");
             }
+
+            VerifyMapPixels();
         }
         finally
         {
@@ -425,48 +427,98 @@ internal sealed class MainForm : Form
         _surfacePanel.Update();
         await Task.Delay(150);
         Application.DoEvents();
+        VerifyMapPixels();
+    }
+
+    private void VerifyMapPixels()
+    {
+        if (_host is null)
+        {
+            throw new InvalidOperationException("The ActiveX control has not been created.");
+        }
 
         uint background = GetSysColor(ColorWindow);
+        using Bitmap windowImage = CaptureWindowContent();
         VerifyPaintPixel(
+            windowImage,
             _host.PointToScreen(new Point(_host.Width / 5, _host.Height / 2)),
             ColorToColorRef(MapFillColor),
             "first polygon");
         VerifyPaintPixel(
+            windowImage,
             _host.PointToScreen(new Point(_host.Width / 2, _host.Height / 2)),
             background,
             "empty space between polygons");
         VerifyPaintPixel(
+            windowImage,
             _host.PointToScreen(new Point(_host.Width * 4 / 5, _host.Height / 2)),
             ColorToColorRef(MapFillColor),
             "second polygon");
     }
 
-    private static void VerifyPaintPixel(Point point, uint expected, string location)
+    // Sampling the screen DC reads whatever is on top at that position, so another
+    // window or a lost foreground race made the check fail although the control had
+    // painted correctly. PrintWindow with PW_RENDERFULLCONTENT reads this window's own
+    // composed content, including child windows and OpenGL output, regardless of z-order.
+    private Bitmap CaptureWindowContent()
     {
-        IntPtr screen = GetDC(IntPtr.Zero);
-        if (screen == IntPtr.Zero)
+        if (!GetWindowRect(Handle, out NativeRect windowRect))
         {
-            throw new InvalidOperationException("Could not capture the visible control surface.");
+            throw new InvalidOperationException("Could not read the host window bounds.");
         }
 
+        var image = new Bitmap(
+            windowRect.Right - windowRect.Left,
+            windowRect.Bottom - windowRect.Top);
         try
         {
-            uint actual = GetPixel(screen, point.X, point.Y);
-            if (actual == 0xffffffff)
+            using (Graphics graphics = Graphics.FromImage(image))
             {
-                throw new InvalidOperationException(
-                    $"Could not sample the {location} pixel of the control surface.");
+                IntPtr dc = graphics.GetHdc();
+                try
+                {
+                    if (!PrintWindow(Handle, dc, PrintWindowRenderFullContent))
+                    {
+                        throw new InvalidOperationException(
+                            "Could not capture the rendered content of the host window.");
+                    }
+                }
+                finally
+                {
+                    graphics.ReleaseHdc(dc);
+                }
             }
 
-            if (actual != expected)
-            {
-                throw new InvalidOperationException(
-                    $"Expected color 0x{expected:x6} at the {location} of the control, got 0x{actual:x6}.");
-            }
+            image.Tag = new Point(windowRect.Left, windowRect.Top);
+            return image;
         }
-        finally
+        catch
         {
-            ReleaseDC(IntPtr.Zero, screen);
+            image.Dispose();
+            throw;
+        }
+    }
+
+    private static void VerifyPaintPixel(
+        Bitmap windowImage,
+        Point screenPoint,
+        uint expected,
+        string location)
+    {
+        var origin = (Point)windowImage.Tag!;
+        int x = screenPoint.X - origin.X;
+        int y = screenPoint.Y - origin.Y;
+        if (x < 0 || y < 0 || x >= windowImage.Width || y >= windowImage.Height)
+        {
+            throw new InvalidOperationException(
+                $"The {location} sample point lies outside the captured host window.");
+        }
+
+        uint actual = ColorToColorRef(windowImage.GetPixel(x, y));
+        if (actual != expected)
+        {
+            throw new InvalidOperationException(
+                $"Expected color 0x{expected:x6} at the {location} of the control, got 0x{actual:x6}.");
         }
     }
 
@@ -636,14 +688,24 @@ internal sealed class MainForm : Form
     private static uint ColorToColorRef(Color color) =>
         (uint)(color.R | (color.G << 8) | (color.B << 16));
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetDC(IntPtr window);
+    private const uint PrintWindowRenderFullContent = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 
     [DllImport("user32.dll")]
-    private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr window, out NativeRect rect);
 
-    [DllImport("gdi32.dll")]
-    private static extern uint GetPixel(IntPtr dc, int x, int y);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
 
     [DllImport("user32.dll")]
     private static extern uint GetSysColor(int index);

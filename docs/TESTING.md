@@ -32,10 +32,16 @@ pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration
 The launcher makes no COM registration changes. Automated mode creates a
 visible window and runs the UI message loop, checks the `CoreInitialized`
 automation property, loads a generated two-polygon GeoJSON dataset through the
-control, resizes the host, samples rendered polygon and background pixels,
-recreates the control, reloads the layer, and writes individual outcomes to
-`bin\Debug\x64\ActiveXTestHost-results.json`. A watchdog enforces a 30-second
-default timeout; `-TimeoutSeconds` changes it from 5 to 300 seconds. These
+control, resizes the host, samples rendered polygon and background pixels for
+both the GDI preference and the default (OpenGL-first) path, recreates the
+control, reloads the layer, and writes individual outcomes to
+`bin\Debug\x64\ActiveXTestHost-results.json`. Pixels are sampled from the host
+window's own composed content (`PrintWindow` with `PW_RENDERFULLCONTENT`), not
+from the screen, so another window on top or a lost foreground race does not
+affect the result. A watchdog enforces a 30-second
+default timeout; `-TimeoutSeconds` changes it from 5 to 300 seconds. The first
+run after a fresh build can be slow while the new native DLLs load (one Win32
+run exceeded 30 seconds); rerun it before treating a timeout as a hang. These
 integration checks require Windows and an interactive desktop session; they
 are not currently part of CI.
 
@@ -86,18 +92,80 @@ desktop. Rerun that check from an interactive Windows desktop.
 ### Phase 6 and 7 validation
 
 The renderer coordinator tests cover runtime backend preferences, hardware
-capability rejection, and GDI fallback. Recreation of a failed OpenGL context
-on later draws is not yet covered by an automated test; the ActiveX hosting
-test recreates the entire control, not a failed WGL context. Phase 7 passed Debug and Release solution builds and native test runs
+capability rejection, and GDI fallback. At Phase 7, recreation of a failed
+OpenGL context on later draws was not covered by an automated test (the
+ActiveX hosting test recreates the entire control, not a failed WGL context);
+the follow-up validation below adds that test. Phase 7 passed Debug and Release solution builds and native test runs
 on Win32 and x64, with no Level 4 compiler warnings. Each test run reported
 146 tests: 144 passed and 2 were skipped (the opt-in network test and the
 separately exercised registered-host check). The native registration and
 host-lifecycle check passed for both architectures in Debug.
 
-The managed host builds for both architectures, but has not been run against
-both native controls in an interactive desktop session. Its pixel assertions
-remain unverified for the current phase baseline. Release packaging with the
-`full-drivers` feature has not been verified for Win32.
+The managed host builds for both architectures. At Phase 7 it had not been
+run against both native controls, and the screen-sampled pixel assertions were
+unverified; the follow-up validation below resolves both.
+
+### Follow-up validation of open Phase 5–8 findings
+
+The earlier pixel failures were caused by the check, not the control: it read
+the screen DC, which returns whatever window is on top. A capture of the host
+window showed both polygons and the gap rendered correctly by OpenGL while the
+screen showed another application at that position. The host now samples its
+own window content (see above) and also checks pixels under the GDI preference.
+
+On an interactive console session, the registration-free host passed all 13
+checks for Debug and Release on both Win32 and x64, and passed ten consecutive
+Debug runs (five per architecture). `Verify-ActiveXActivation.ps1` passed for
+Debug and Release on both architectures (32-bit Windows PowerShell for Win32).
+The native suite ran 147 tests in each Release build: 144 passed and 3 were
+skipped (the opt-in network, registered-host, and rendering-baseline tests).
+
+A Win32 Release build with `MwgVcpkgFeatures=tests;full-drivers` installed the
+extra GDAL dependencies and deployed the HDF5, NetCDF, PostgreSQL, and
+SpatiaLite DLLs (libkml links statically). Its native suite, which by then
+included the context-loss test below, ran 148 tests: 145 passed with the same
+three opt-in skips. The host passed all 13 checks.
+
+`VectorLayerRenderer.OpenGlRecreatesLostContextOnLaterDraw` destroys the
+OpenGL backend's hidden render target after a successful draw. It verifies
+that the next draw fails with `E_FAIL` (the coordinator falls back to GDI for
+that frame) and that the following draw recreates the context and renders
+with OpenGL again.
+
+## Rendering performance baseline
+
+`RenderingBaseline.MeasuresCoreSceneAndBackendCosts` is opt-in. It generates a
+GeoPackage grid of convex 32-vertex polygons and separately reports Core
+dataset open, render-scene preparation, process private-memory growth, the
+median GDI frame, the first OpenGL frame (context creation and drawing), and
+the median steady OpenGL frame, for a 1280x720 off-screen target. It records
+the values as GoogleTest properties and fails only when a stage fails. Use a
+Release build for meaningful numbers:
+
+```powershell
+$env:MWG_RUN_RENDERING_BASELINE = '1'
+$env:MWG_RENDERING_BASELINE_FEATURES = '100000'   # optional; default 50000
+bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_filter=RenderingBaseline.*
+```
+
+Baseline on one developer workstation (Release, hardware OpenGL):
+
+| Measurement | x64, 10k | x64, 100k | Win32, 10k |
+|---|---:|---:|---:|
+| Core open dataset | 1.5 ms | 1.5 ms | 1.6 ms |
+| Core prepare render scene | 717 ms | 15,225 ms | 994 ms |
+| Private memory for the scene | 8.5 MiB | 62.8 MiB | 7.8 MiB |
+| GDI frame (median) | 17.5 ms | 308 ms | 24.6 ms |
+| OpenGL first frame | 157 ms | 350 ms | 150 ms |
+| OpenGL frame (median) | 10.0 ms | 82.3 ms | 20.1 ms |
+| Private memory, total | 91.7 MiB | 167.4 MiB | 72.9 MiB |
+
+Scene preparation dominates and grows faster than linearly (10x features cost
+about 21x time). It reads each feature by index through
+`VectorLayer::GeometryWkt` and reparses the WKT; a sequential geometry read is
+the first optimization candidate. OpenGL frames re-submit all geometry
+because there is no unchanged-geometry cache, yet are faster than GDI for
+these scenes. Total memory includes the OpenGL driver and context.
 
 ## Conventions
 

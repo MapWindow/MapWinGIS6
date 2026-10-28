@@ -39,4 +39,29 @@
   <Import Project="$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets"
           Condition="Exists('$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets')" />
 
+  <!--
+    vcpkg's incremental install check only compares vcpkg.json and
+    vcpkg-configuration.json with its stamp file, so changing MwgVcpkgFeatures
+    (for example adding full-drivers) silently reused the previous install.
+    Record the requested features per project and make that file an input of
+    the check; it is rewritten only when the feature set changes. A per-project
+    file avoids concurrent writes from parallel project builds.
+  -->
+  <Target Name="MwgTrackVcpkgFeatures"
+          BeforeTargets="VcpkgInstallManifestDependencies"
+          Condition="'$(VcpkgEnabled)' == 'true' And '$(VcpkgEnableManifest)' == 'true' And '$(VcpkgManifestInstall)' == 'true'">
+    <PropertyGroup>
+      <_MwgVcpkgFeaturesFile>$([MSBuild]::NormalizePath('$(ProjectDir)', '$(IntDir)', 'vcpkg-features-$(VcpkgTriplet).txt'))</_MwgVcpkgFeaturesFile>
+    </PropertyGroup>
+
+    <WriteLinesToFile File="$(_MwgVcpkgFeaturesFile)"
+                      Lines="$(MwgVcpkgFeatures)"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
+
+    <ItemGroup>
+      <_ZVcpkgInstallManifestDependenciesInputs Include="$(_MwgVcpkgFeaturesFile)" />
+    </ItemGroup>
+  </Target>
+
 </Project>

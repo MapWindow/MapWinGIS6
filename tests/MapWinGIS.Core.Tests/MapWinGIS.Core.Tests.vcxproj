@@ -62,6 +62,7 @@
     <ClCompile Include="ActiveXActivationTests.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="TestData.cpp" />
+    <ClCompile Include="RenderingBaselineTests.cpp" />
     <ClCompile Include="VectorLayerRendererTests.cpp" />
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\GdiVectorLayerRenderer.cpp" />
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\OpenGlVectorLayerRenderer.cpp" />
