@@ -49,8 +49,9 @@ namespace mwg
 
         std::optional<std::string> GetGlobalConfigOption(const std::string& name)
         {
-            using ConfigOptionsPtr = std::unique_ptr<char*, void(*)(char**)>;
-            ConfigOptionsPtr configOptions(CPLGetConfigOptions(), &CSLDestroy);
+            // CSLDestroy is __stdcall on x86, so wrap it instead of naming its function-pointer type.
+            const auto destroyOptions = [](char** options) { CSLDestroy(options); };
+            std::unique_ptr<char*, decltype(destroyOptions)> configOptions(CPLGetConfigOptions(), destroyOptions);
             if (const char* value = CSLFetchNameValue(configOptions.get(), name.c_str()))
                 return value;
             return std::nullopt;
