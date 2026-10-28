@@ -46,6 +46,29 @@ choose deliberately whether it belongs in v6 and document important departures.
 - **Formatting:** preserve legacy display formatting when existing consumers
   rely on it; otherwise prefer a consistent, documented v6 representation.
 
+## Current ActiveX compatibility boundary
+
+The initial `MapWinGIS.ocx` exposes a deliberately small v6 automation
+contract. `IMapWinGISControl` reports Core initialization, loads a vector
+dataset, and reports whether a layer is loaded and its feature count.
+`IMapWinGISControl2` adds renderer preference, active backend, and status.
+New members belong on a new derived interface; do not change a published
+interface IID or silently add vtable members to it.
+
+These are new interfaces, not the MapWinGIS 5 type-library interfaces, and the
+control does not claim binary or API compatibility with existing v5 clients.
+The control loads only the first vector layer and currently prepares
+Polygon/MultiPolygon scene data. It does not expose the broad v5 map, layer,
+shape, event, or editing API. It draws in source coordinates without
+reprojection. OpenGL only handles convex single-ring polygons; GDI handles
+the supported polygon scene as the CPU fallback.
+
+Keep these gaps visible when extending the COM surface. Reuse Core behavior,
+add only the automation members required by a concrete use case, and retain a
+legacy identifier only after verifying that its full signature and behavior
+are compatible. Do not copy the v5 class hierarchy or rendering pipeline to
+make the initial control appear compatible.
+
 ## Anti-patterns
 
 - Do not copy the v5 file organization (flat folders, `stdafx.h`, COM maps).

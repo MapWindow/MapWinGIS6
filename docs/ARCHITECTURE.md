@@ -8,7 +8,7 @@ MapWinGIS6 splits the monolithic MapWinGIS 5 control into two layers:
    and backend-neutral render data live here. No COM, ATL, MFC, windowing, or
    graphics API dependencies are allowed in this layer.
 2. **MapWinGIS.ocx** — an ActiveX/COM wrapper. It exposes the intentionally
-   implemented subset of the v5 COM API, translates between COM and core
+   implemented v6 automation surface, translates between COM and core
    types, converts core exceptions into COM errors, and integrates the core
    with the host control surface and graphics backend.
 
@@ -96,32 +96,29 @@ anywhere.
 
 ## ActiveX and rendering architecture
 
-This section records the design baseline for the future ActiveX control and
-rendering path. It describes intended boundaries, not implemented
-functionality. The first implementation should remain a small vertical slice;
-these responsibilities do not require separate DLLs.
+The first ActiveX and rendering vertical slice is implemented across the
+existing Core and ActiveX projects; the boundaries below describe current
+responsibilities, not a requirement to split them into more DLLs.
 
 | Component | Responsibility | Must not depend on |
 |---|---|---|
 | `MapWinGIS.Core` | Own GIS data, reusable map/layer state, and backend-neutral render data. Keep its public API independent of windowing, COM, and graphics APIs. | COM, ATL, MFC, windowing APIs, OpenGL, OpenCL |
 | `MapWinGIS.ocx` | Own COM activation, host-facing control lifecycle, and translation between the external API and core operations. Integrate core rendering with the host surface and selected backend. | GIS rules, core data ownership, rendering-specific types in its public COM contract |
 | Rendering coordinator (in the OCX) | Try OpenGL for supported scenes and use GDI when OpenGL is unavailable or the scene is unsupported. Keep backend selection independent of COM activation. | GIS rules, COM interface layout, backend-specific resource types outside the backend |
-| GDI backend (in the OCX) | Paint all currently supported polygon scene geometry, including interior rings, into a device context. | Core dataset ownership, COM interface layout, GPU availability |
+| GDI backend (in the OCX) | Paint supported polygon scenes, including interior rings, into a device context; provide the Windows CPU fallback. | Core dataset ownership, COM interface layout, GPU availability |
 | OpenGL backend (in the OCX) | Render convex single-ring polygons through a reusable WGL context, then copy pixels to the host device context. | Core GIS data ownership and public COM interfaces |
-| Future CPU backend (in Core) | Provide a platform-independent rendering path if later justified by other clients. | GPU or OpenCL availability |
 | Future compute work | Host optional compute acceleration only for workloads justified by profiling. | OpenGL being installed or selected |
 
 The OCX is the composition root for control, render-coordinator, and
-host-specific graphics-context lifetimes. The control owns its core-side
-map/session object; that object owns open dataset handles, and each
-`VectorDataset` owns its `VectorLayer` objects. Core creates backend-neutral
-render input from map state; the coordinator binds it to the current control
-target and backend. Backends must not retain pointers or references to
-dataset-owned objects after a draw. Core dataset and layer objects are not
-thread-safe, so the initial control must serialize their use. The OpenGL
-backend owns its WGL context and reusable pixel buffers; those resources are
-released with the control. Resizing updates the OpenGL viewport and staging
-buffers without changing ownership of map data.
+host-specific graphics-context lifetimes. The control owns the opened
+`VectorDataset` and its prepared `VectorRenderScene`; each `VectorDataset`
+owns its `VectorLayer` objects. Core creates backend-neutral render input; the
+coordinator binds it to the control target and backend. Backends must not
+retain references to dataset-owned objects after a draw. Core dataset and
+layer objects are not thread-safe, so the control must serialize their use.
+The OpenGL backend owns its WGL context and reusable pixel buffers; those
+resources are released with the control. Resizing updates the OpenGL viewport
+and staging buffers without changing ownership of map data.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. Core
@@ -134,10 +131,11 @@ before copying them to the host device context; this is a working backend
 boundary, not an end-to-end accelerated presentation path. Rendering into a
 framebuffer object avoids undefined pixels from window pixel-ownership rules.
 Interior rings, concave or self-intersecting rings, missing framebuffer-object
-support, initialization failures, and drawing failures use the GDI
-backend. The GDI backend can draw the scene's existing polygon and interior
-ring structure. Both backends render source coordinates directly without
-reprojection, and scene preparation currently supports polygon layers only.
+support, initialization failures, and drawing failures use the GDI backend.
+The GDI backend draws the currently supported polygon scene, including its
+interior rings. Both backends draw source coordinates without reprojection,
+and scene preparation currently supports Polygon and MultiPolygon features
+from the first vector layer only.
 
 The `RenderingBackendPreference` automation property is configurable as
 `Automatic`, `OpenGL`, or `GDI`. `Automatic` and `OpenGL` try the OpenGL
@@ -151,17 +149,17 @@ OpenGL capability detection checks framebuffer-object entry points, the
 maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
 limited to one 64 MiB buffer per frame, including retained capacity and
-reallocation peaks; larger targets use GDI instead. A failed rendering context
-is recreated on later draws until a replacement initializes successfully. Switching backends does not
-discard map state. The GDI backend remains usable without a GPU or OpenGL
-runtime; Core itself has no graphics-runtime dependency.
+reallocation peaks; larger targets use GDI instead. A failed rendering
+context is recreated on later draws until a replacement initializes
+successfully. Switching backends does not discard map state. The GDI backend
+remains usable without a GPU or OpenGL runtime; Core itself has no
+graphics-runtime dependency.
 
-Test core scene preparation and CPU drawing through the core with deterministic
-input and output. Test the native OCX coordinator without COM activation by
-injecting capabilities, render targets, and backend initialization results;
-verify backend selection and failure recovery there. OpenGL-specific
-integration checks may require a real context, but they must not be required
-for core or CPU-rendering tests.
+Test Core scene preparation and the renderer coordinator independently of COM
+activation. OpenGL-specific integration checks need a usable WGL context;
+GDI fallback and coordinator tests do not require a GPU. The registration-free
+C# host exercises COM integration, but its rendered-pixel assertions require
+an interactive Windows desktop.
 
 Design the v6 architecture and APIs for clarity, maintainability, and
 performance first; backward compatibility is secondary and must not force the
@@ -174,14 +172,29 @@ actually compatible. Full legacy API parity, the historical MFC/ATL class
 hierarchy and rendering pipeline, and OpenCL integration are deferred. Document
 intentional compatibility gaps and the rationale when interfaces are introduced.
 
-## Current state
+## Current limits and next work
 
-The tree is early: GDAL environment setup and vector reading/editing
-(`VectorDataset`, `VectorLayer`, backed by OGR) are the first core slices.
-The OCX supports COM activation and the ATL resize/paint lifecycle. It can
-load the first polygon layer from a vector dataset through Core and display
-its geometry through an internal OpenGL/GDI renderer boundary. OpenGL is
-limited to convex single-ring polygons and currently incurs a full pixel
-readback before presentation; all other supported polygon scenes use GDI.
-Explicit hardware capability detection, configurable backend selection,
-context-loss recovery, and performance/resource policies remain for Phase 6.
+The control exposes a small v6 COM surface: Core initialization, vector
+dataset loading, layer-loaded state, feature count, and renderer preference,
+active backend, and status. It does not claim MapWinGIS 5 API compatibility.
+Only the first vector layer in a dataset is considered, and it must be a
+Polygon or MultiPolygon layer; a dataset whose first layer has another geometry
+type fails to load even if a later layer is polygonal. Raster layers and other
+geometry types are not rendered. There is no map navigation or
+reprojection, so coordinates remain in the source coordinate system.
+
+Core prepares and retains the complete supported polygon scene in memory.
+There is no tiling, paging, or unchanged-geometry cache, and no timing or
+memory baseline has been collected. OpenGL only supports convex single-ring
+polygons and copies each frame through CPU memory. Its reusable CPU staging
+buffer is limited to 64 MiB per frame; target dimensions are also limited by
+the detected framebuffer and viewport capabilities. GDI is the supported
+Windows CPU fallback; Core has no independent platform-neutral renderer.
+
+The C# host's visible pixel assertions need a rerun in an interactive desktop
+session. The Win32 host pixel behavior and Release packaging with the
+`full-drivers` feature are unverified; activation checks were run in Debug.
+The next useful milestone is a tested map-view transform for viewport and
+coordinate-system behavior. Measure scene preparation and rendering with
+representative datasets before adding caching, paging, or broader OpenGL
+geometry support. OpenCL and full MapWinGIS 5 API parity remain deferred.
