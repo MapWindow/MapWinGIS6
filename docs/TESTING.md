@@ -64,6 +64,19 @@ GeoJSON layer, sampling both polygon fills and the gap between them, and
 reloading and repainting after control recreation. These integration checks
 require an interactive Windows desktop and are not currently part of CI.
 
+### Phase 5 validation
+
+The native renderer tests exercise OpenGL rendering when a WGL context is
+available and verify that polygons with interior rings use the GDI fallback.
+The OpenGL-specific test skips when the machine cannot create a context; the
+GDI fallback test does not require OpenGL. The Debug x64 build completed
+without compiler warnings, and the native suite ran 140 tests: 138 passed and
+2 were skipped (the opt-in network test and registered-host check). The
+registration-free C# host activated the control, loaded the test layer, and
+resized it, but its screen-pixel checks could not be verified in this
+noninteractive session because the host window was absent from the captured
+desktop. Rerun that check from an interactive Windows desktop.
+
 ## Conventions
 
 - One test file per area under test (`VectorDatasetTests.cpp`,
