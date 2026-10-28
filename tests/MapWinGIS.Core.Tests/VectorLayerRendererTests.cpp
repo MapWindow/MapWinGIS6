@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <limits>
+#include <string_view>
 
 #include "OpenGlVectorLayerRenderer.h"
 #include "VectorLayerRenderer.h"
@@ -116,6 +117,7 @@ TEST(VectorLayerRenderer, UsesOpenGlForConvexPolygonWhenAvailable)
     EXPECT_EQ(
         renderer.GetActiveBackend(),
         mwg::activex::VectorRenderBackendKind::OpenGL);
+    EXPECT_EQ(renderer.GetDiagnostic(), L"OpenGL rendered the frame successfully.");
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
     EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
 }
@@ -186,6 +188,72 @@ TEST(VectorLayerRenderer, UsesGdiForPolygonWithInteriorRing)
     EXPECT_EQ(
         renderer.GetActiveBackend(),
         mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_EQ(
+        renderer.GetDiagnostic(),
+        L"The scene uses geometry that the OpenGL backend does not support.");
     EXPECT_EQ(GetPixel(surface.Get(), 30, 50), RGB(61, 122, 169));
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), GetSysColor(COLOR_WINDOW));
+}
+
+TEST(VectorLayerRenderer, HonorsCpuPreferenceAndReportsTheSelectedBackend)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    const mwg::rendering::VectorRenderScene scene = MakeConvexPolygonScene();
+    mwg::activex::VectorLayerRenderer renderer;
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Gdi);
+
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene), S_OK);
+
+    EXPECT_EQ(renderer.GetPreference(), mwg::activex::VectorRenderBackendPreference::Gdi);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_EQ(renderer.GetDiagnostic(), L"GDI was selected by the rendering preference.");
+}
+
+TEST(VectorLayerRenderer, FallsBackToCpuWhenOpenGlStagingBudgetIsExceeded)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 5000, 5000};
+    const mwg::rendering::VectorRenderScene scene = MakeConvexPolygonScene();
+    mwg::activex::VectorLayerRenderer renderer;
+
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene), S_OK);
+
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_EQ(
+        renderer.GetDiagnostic(),
+        L"The OpenGL frame exceeds the 64 MiB CPU staging-buffer budget.");
+}
+
+TEST(VectorLayerRenderer, AppliesDetectedFramebufferLimitWithoutRequiringOpenGl)
+{
+    std::wstring_view rejectionReason;
+
+    EXPECT_TRUE(mwg::activex::OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+        1280,
+        720,
+        4096,
+        4096,
+        rejectionReason));
+    EXPECT_TRUE(rejectionReason.empty());
+
+    EXPECT_FALSE(mwg::activex::OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+        2048,
+        720,
+        1024,
+        4096,
+        rejectionReason));
+    EXPECT_EQ(
+        rejectionReason,
+        L"The OpenGL target exceeds the detected maximum framebuffer or viewport size.");
+
+    // A viewport limit smaller than the renderbuffer limit must also reject.
+    EXPECT_FALSE(mwg::activex::OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+        1024,
+        900,
+        4096,
+        800,
+        rejectionReason));
 }

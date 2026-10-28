@@ -100,9 +100,13 @@ internal sealed class MainForm : Form
             DisposeHostedControl();
             CreateHostedControl();
             LoadTestLayer();
+            _host!.Update();
+            Application.DoEvents();
             bool initialized = ReadCoreInitialized();
-            _statusLabel.Text =
-                $"Active: {ProgId}; CoreInitialized={initialized}; polygon features loaded";
+            dynamic automation = _host.AutomationObject!;
+            _statusLabel.Text = initialized
+                ? $"Active: {ProgId}; backend={automation.RenderingBackend}; {automation.RenderingStatus}"
+                : $"Active: {ProgId}; CoreInitialized=false";
         }
         catch (Exception exception)
         {
@@ -128,7 +132,9 @@ internal sealed class MainForm : Form
         _host.Invalidate(true);
         _host.Update();
         _surfacePanel.Update();
-        _statusLabel.Text = "Repaint requested.";
+        dynamic automation = _host.AutomationObject!;
+        _statusLabel.Text =
+            $"backend={automation.RenderingBackend}; {automation.RenderingStatus}";
     }
 
     private async Task RunAutomatedAsync()
@@ -143,6 +149,7 @@ internal sealed class MainForm : Form
                 _statusLabel.Text = $"Active: {ProgId}; CoreInitialized={initialized}";
             });
             RecordCheck("Load vector layer", LoadTestLayer);
+            RecordCheck("CPU backend preference and status", VerifyCpuBackendSelection);
 
             RecordCheck("Resize", VerifyResize);
             await RecordCheckAsync("Repaint", VerifyRepaintAsync);
@@ -343,6 +350,44 @@ internal sealed class MainForm : Form
             throw new InvalidOperationException(
                 $"The ActiveX control reported CoreInitialized=false after {activation}.");
         }
+    }
+
+    private void VerifyCpuBackendSelection()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+        }
+
+        dynamic automation = automationObject;
+        string previousPreference = automation.RenderingBackendPreference;
+        try
+        {
+            automation.RenderingBackendPreference = "GDI";
+            RepaintHost();
+
+            string activeBackend = automation.RenderingBackend;
+            string renderingStatus = automation.RenderingStatus;
+            if (activeBackend != "GDI" ||
+                renderingStatus != "GDI was selected by the rendering preference.")
+            {
+                throw new InvalidOperationException(
+                    $"The requested CPU backend was not reported. Backend='{activeBackend}', status='{renderingStatus}'.");
+            }
+        }
+        finally
+        {
+            // Later resize/repaint checks must exercise the default backend path.
+            automation.RenderingBackendPreference = previousPreference;
+            RepaintHost();
+        }
+    }
+
+    private void RepaintHost()
+    {
+        _host?.Invalidate(true);
+        _host?.Update();
+        Application.DoEvents();
     }
 
     private void VerifyResize()

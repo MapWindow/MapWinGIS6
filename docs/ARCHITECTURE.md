@@ -139,15 +139,22 @@ backend. The GDI backend can draw the scene's existing polygon and interior
 ring structure. Both backends render source coordinates directly without
 reprojection, and scene preparation currently supports polygon layers only.
 
-Backend choice is internal to the rendering coordinator and observable to
-native tests, not through a graphics-specific COM API. The coordinator tries
-OpenGL and falls back to GDI on initialization or drawing failure. OpenGL
-errors are written to the debugger output. The current backend is not
-selectable by callers and no capability report is exposed yet. Phase 6 will
-establish explicit runtime capability reporting and resource-aware fallback.
-Switching backends does not discard map state. The GDI backend remains usable
-without a GPU or OpenGL runtime; Core itself has no graphics-runtime
-dependency.
+The `RenderingBackendPreference` automation property is configurable as
+`Automatic`, `OpenGL`, or `GDI`. `Automatic` and `OpenGL` try the OpenGL
+backend first and fall back to GDI when the scene, hardware, allocation, or
+drawing operation is unsupported. The control reports the active backend and
+the reason for a fallback through `RenderingBackend` and `RenderingStatus`.
+These rendering properties are on `IMapWinGISControl2`, the coclass default
+interface, which derives from `IMapWinGISControl`; the original interface and
+its IID are left unchanged so clients built against it keep working.
+OpenGL capability detection checks framebuffer-object entry points, the
+maximum renderbuffer size, and the maximum viewport dimensions at runtime;
+targets exceeding either limit use GDI. CPU staging for OpenGL readback is
+limited to one 64 MiB buffer per frame, including retained capacity and
+reallocation peaks; larger targets use GDI instead. A failed rendering context
+is recreated on later draws until a replacement initializes successfully. Switching backends does not
+discard map state. The GDI backend remains usable without a GPU or OpenGL
+runtime; Core itself has no graphics-runtime dependency.
 
 Test core scene preparation and CPU drawing through the core with deterministic
 input and output. Test the native OCX coordinator without COM activation by

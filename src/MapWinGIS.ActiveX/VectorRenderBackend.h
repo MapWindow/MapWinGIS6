@@ -21,6 +21,13 @@ namespace mwg::activex
         Gdi
     };
 
+    enum class VectorRenderBackendPreference
+    {
+        Automatic,
+        OpenGL,
+        Gdi
+    };
+
     class IVectorRenderBackend
     {
     public:

@@ -35,6 +35,9 @@ namespace mwg::activex
         constexpr GLenum kColorAttachment0 = 0x8CE0;
         constexpr GLenum kFramebufferComplete = 0x8CD5;
         constexpr GLenum kRgba8 = 0x8058;
+        constexpr GLenum kMaxRenderbufferSize = 0x84E8;
+        constexpr std::size_t kMaxStagingBufferBytes = 64U * 1024U * 1024U;
+        constexpr std::size_t kBytesPerPixel = 4;
     }
 
     struct OpenGlVectorLayerRenderer::FramebufferFunctions final
@@ -255,6 +258,46 @@ namespace mwg::activex
         Release();
     }
 
+    bool OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+        const int width,
+        const int height,
+        const int maximumWidth,
+        const int maximumHeight,
+        std::wstring_view& rejectionReason) noexcept
+    {
+        if (width <= 0 || height <= 0)
+        {
+            rejectionReason = L"The OpenGL target dimensions must be positive.";
+            return false;
+        }
+
+        if (maximumWidth <= 0 || maximumHeight <= 0)
+        {
+            rejectionReason = L"OpenGL did not report a usable maximum framebuffer size.";
+            return false;
+        }
+
+        if (width > maximumWidth || height > maximumHeight)
+        {
+            rejectionReason =
+                L"The OpenGL target exceeds the detected maximum framebuffer or viewport size.";
+            return false;
+        }
+
+        const std::size_t pixelWidth = static_cast<std::size_t>(width);
+        const std::size_t pixelHeight = static_cast<std::size_t>(height);
+        if (pixelWidth > std::numeric_limits<std::size_t>::max() / pixelHeight ||
+            pixelWidth * pixelHeight > kMaxStagingBufferBytes / kBytesPerPixel)
+        {
+            rejectionReason =
+                L"The OpenGL frame exceeds the 64 MiB CPU staging-buffer budget.";
+            return false;
+        }
+
+        rejectionReason = {};
+        return true;
+    }
+
     bool OpenGlVectorLayerRenderer::Initialize() noexcept
     {
         if (_renderingContext != nullptr)
@@ -263,6 +306,7 @@ namespace mwg::activex
         }
         if (_initializationFailed)
         {
+            _lastFailureReason = _initializationFailureReason;
             return false;
         }
 
@@ -282,6 +326,8 @@ namespace mwg::activex
         if (_window == nullptr)
         {
             _initializationFailed = true;
+            _lastFailureReason = L"OpenGL could not create its render target window.";
+            _initializationFailureReason = _lastFailureReason;
             OutputDebugStringW(L"MapWinGIS: could not create the OpenGL render target window.\n");
             Release();
             return false;
@@ -291,6 +337,8 @@ namespace mwg::activex
         if (_deviceContext == nullptr)
         {
             _initializationFailed = true;
+            _lastFailureReason = L"OpenGL could not acquire its render target device context.";
+            _initializationFailureReason = _lastFailureReason;
             OutputDebugStringW(L"MapWinGIS: could not acquire the OpenGL render target DC.\n");
             Release();
             return false;
@@ -309,6 +357,8 @@ namespace mwg::activex
         if (pixelFormat == 0 || SetPixelFormat(_deviceContext, pixelFormat, &descriptor) == FALSE)
         {
             _initializationFailed = true;
+            _lastFailureReason = L"OpenGL could not select a compatible pixel format.";
+            _initializationFailureReason = _lastFailureReason;
             OutputDebugStringW(L"MapWinGIS: could not select an OpenGL pixel format.\n");
             Release();
             return false;
@@ -318,6 +368,8 @@ namespace mwg::activex
         if (_renderingContext == nullptr)
         {
             _initializationFailed = true;
+            _lastFailureReason = L"OpenGL could not create a rendering context.";
+            _initializationFailureReason = _lastFailureReason;
             OutputDebugStringW(L"MapWinGIS: could not create an OpenGL rendering context.\n");
             Release();
             return false;
@@ -326,6 +378,12 @@ namespace mwg::activex
         if (!InitializeFramebuffer())
         {
             _initializationFailed = true;
+            if (_lastFailureReason == L"OpenGL was not selected for this frame.")
+            {
+                _lastFailureReason =
+                    L"OpenGL framebuffer objects are unavailable on this system.";
+            }
+            _initializationFailureReason = _lastFailureReason;
             OutputDebugStringW(L"MapWinGIS: OpenGL framebuffer objects are unavailable.\n");
             Release();
             return false;
@@ -346,12 +404,28 @@ namespace mwg::activex
         if (_framebufferFunctions == nullptr || !_framebufferFunctions->Load())
         {
             _framebufferFunctions.reset();
+            _lastFailureReason =
+                L"The OpenGL framebuffer-object entry points are unavailable.";
             return false;
         }
 
         while (glGetError() != GL_NO_ERROR)
         {
         }
+
+        GLint maximumFramebufferSize{};
+        glGetIntegerv(kMaxRenderbufferSize, &maximumFramebufferSize);
+        GLint maximumViewportDimensions[2]{};
+        glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maximumViewportDimensions);
+        if (glGetError() != GL_NO_ERROR || maximumFramebufferSize <= 0 ||
+            maximumViewportDimensions[0] <= 0 || maximumViewportDimensions[1] <= 0)
+        {
+            _lastFailureReason =
+                L"OpenGL did not report a usable maximum framebuffer size.";
+            return false;
+        }
+        _maximumTargetWidth = std::min(maximumFramebufferSize, maximumViewportDimensions[0]);
+        _maximumTargetHeight = std::min(maximumFramebufferSize, maximumViewportDimensions[1]);
 
         _framebufferFunctions->genFramebuffers(1, &_framebuffer);
         _framebufferFunctions->genRenderbuffers(1, &_renderbuffer);
@@ -399,6 +473,8 @@ namespace mwg::activex
         _renderbuffer = 0;
         _framebufferWidth = 0;
         _framebufferHeight = 0;
+        _maximumTargetWidth = 0;
+        _maximumTargetHeight = 0;
 
         if (_renderingContext != nullptr)
         {
@@ -428,13 +504,17 @@ namespace mwg::activex
         const RECT& bounds,
         const rendering::VectorRenderScene& scene) noexcept
     {
+        _lastFailureReason = L"OpenGL did not render this frame.";
         if (deviceContext == nullptr)
         {
+            _lastFailureReason = L"The OpenGL target device context is invalid.";
             return E_INVALIDARG;
         }
 
         if (!IsSupported(scene))
         {
+            _lastFailureReason =
+                L"The scene uses geometry that the OpenGL backend does not support.";
             return S_FALSE;
         }
 
@@ -442,6 +522,7 @@ namespace mwg::activex
             scene.extent.Width() <= 0.0 ||
             scene.extent.Height() <= 0.0)
         {
+            _lastFailureReason = L"The scene extent is invalid for OpenGL rendering.";
             return E_INVALIDARG;
         }
 
@@ -451,41 +532,81 @@ namespace mwg::activex
             width > std::numeric_limits<int>::max() ||
             height > std::numeric_limits<int>::max())
         {
+            _lastFailureReason = L"The OpenGL target has invalid or too-small dimensions.";
             return S_FALSE;
         }
 
         const std::size_t pixelWidth = static_cast<std::size_t>(width);
         const std::size_t pixelHeight = static_cast<std::size_t>(height);
-        if (pixelWidth > std::numeric_limits<std::size_t>::max() / pixelHeight ||
-            pixelWidth * pixelHeight > std::numeric_limits<std::size_t>::max() / 4)
+        std::wstring_view rejectionReason;
+        if (!IsTargetWithinLimits(
+                static_cast<int>(width),
+                static_cast<int>(height),
+                std::numeric_limits<int>::max(),
+                std::numeric_limits<int>::max(),
+                rejectionReason))
         {
-            return E_OUTOFMEMORY;
+            _lastFailureReason = rejectionReason;
+            return S_FALSE;
+        }
+
+        // Keep the flag set until a replacement context initializes, so a
+        // transient recreation failure is retried on later draws.
+        if (_contextInvalid)
+        {
+            Release();
+            _initializationFailed = false;
+            _initializationFailureReason = {};
         }
 
         if (!Initialize())
         {
             return S_FALSE;
         }
+        _contextInvalid = false;
 
+        if (!IsTargetWithinLimits(
+                static_cast<int>(width),
+                static_cast<int>(height),
+                _maximumTargetWidth,
+                _maximumTargetHeight,
+                rejectionReason))
+        {
+            _lastFailureReason = rejectionReason;
+            return S_FALSE;
+        }
+
+        const std::size_t pixelCount = pixelWidth * pixelHeight;
+        const std::size_t stagingBytes = pixelCount * kBytesPerPixel;
         try
         {
-            const std::size_t pixelCount = pixelWidth * pixelHeight;
-            _rgbaPixels.resize(pixelCount * 4);
-            _dibPixels.resize(pixelCount * 4);
+            // Allocate exactly the accepted size and free the old buffer
+            // first, so neither retained capacity nor the resize peak can
+            // exceed the staging budget enforced by IsTargetWithinLimits.
+            if (_rgbaPixels.capacity() < stagingBytes)
+            {
+                std::vector<unsigned char>().swap(_rgbaPixels);
+                _rgbaPixels.reserve(stagingBytes);
+            }
+            _rgbaPixels.resize(stagingBytes);
         }
         catch (const std::bad_alloc&)
         {
-            return E_OUTOFMEMORY;
+            _lastFailureReason = L"OpenGL could not allocate its CPU staging buffers.";
+            return S_FALSE;
         }
         catch (const std::length_error&)
         {
-            return E_OUTOFMEMORY;
+            _lastFailureReason = L"The OpenGL CPU staging-buffer size is not representable.";
+            return S_FALSE;
         }
 
         const ScopedCurrentContext currentContext(_deviceContext, _renderingContext);
         if (!currentContext.IsValid())
         {
+            _lastFailureReason = L"OpenGL could not activate its rendering context.";
             OutputDebugStringW(L"MapWinGIS: could not activate the OpenGL rendering context.\n");
+            _contextInvalid = true;
             return E_FAIL;
         }
 
@@ -493,6 +614,8 @@ namespace mwg::activex
         const int viewportHeight = static_cast<int>(height);
         if (!ResizeFramebuffer(viewportWidth, viewportHeight))
         {
+            _lastFailureReason =
+                L"OpenGL could not allocate a complete framebuffer for this target.";
             OutputDebugStringW(L"MapWinGIS: no complete OpenGL framebuffer for this size.\n");
             return S_FALSE;
         }
@@ -504,6 +627,7 @@ namespace mwg::activex
             availableHeight / scene.extent.Height());
         if (!std::isfinite(scale) || scale <= 0.0)
         {
+            _lastFailureReason = L"The scene extent cannot be represented in the OpenGL viewport.";
             return E_INVALIDARG;
         }
 
@@ -581,22 +705,34 @@ namespace mwg::activex
             _rgbaPixels.data());
         if (glGetError() != GL_NO_ERROR)
         {
+            _lastFailureReason =
+                L"OpenGL drawing or pixel readback failed; the context will be recreated.";
             OutputDebugStringW(L"MapWinGIS: OpenGL drawing or pixel readback failed.\n");
+            _contextInvalid = true;
             return E_FAIL;
         }
 
-        for (std::size_t row = 0; row < pixelHeight; ++row)
+        for (std::size_t row = 0; row < pixelHeight / 2; ++row)
         {
-            const std::size_t sourceRow = pixelHeight - row - 1;
             for (std::size_t column = 0; column < pixelWidth; ++column)
             {
-                const std::size_t source = (sourceRow * pixelWidth + column) * 4;
-                const std::size_t target = (row * pixelWidth + column) * 4;
-                _dibPixels[target] = _rgbaPixels[source + 2];
-                _dibPixels[target + 1] = _rgbaPixels[source + 1];
-                _dibPixels[target + 2] = _rgbaPixels[source];
-                _dibPixels[target + 3] = 255;
+                const std::size_t topPixel = (row * pixelWidth + column) * 4;
+                const std::size_t bottomPixel =
+                    ((pixelHeight - row - 1) * pixelWidth + column) * 4;
+                for (std::size_t channel = 0; channel < 4; ++channel)
+                {
+                    std::swap(
+                        _rgbaPixels[topPixel + channel],
+                        _rgbaPixels[bottomPixel + channel]);
+                }
             }
+        }
+
+        for (std::size_t pixel = 0; pixel < pixelCount; ++pixel)
+        {
+            const std::size_t offset = pixel * 4;
+            std::swap(_rgbaPixels[offset], _rgbaPixels[offset + 2]);
+            _rgbaPixels[offset + 3] = 255;
         }
 
         BITMAPINFO bitmapInfo{};
@@ -617,9 +753,16 @@ namespace mwg::activex
             0,
             0,
             static_cast<UINT>(viewportHeight),
-            _dibPixels.data(),
+            _rgbaPixels.data(),
             &bitmapInfo,
             DIB_RGB_COLORS);
-        return copiedRows == viewportHeight ? S_OK : E_FAIL;
+        if (copiedRows != viewportHeight)
+        {
+            _lastFailureReason =
+                L"OpenGL rendered the frame, but Windows could not present its pixels.";
+            return E_FAIL;
+        }
+
+        return S_OK;
     }
 }
