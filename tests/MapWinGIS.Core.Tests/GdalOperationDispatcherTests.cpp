@@ -520,7 +520,7 @@ TEST(GdalOperationDispatcher, CompletionRemainsAvailableWhenWakeCallbackFails)
     EXPECT_TRUE(result.succeeded);
 }
 
-TEST(GdalOperationDispatcher, ResumesNotificationDeliveryAfterSuspension)
+TEST(GdalOperationDispatcher, ResumesNotificationsWithoutCancellingActiveOperations)
 {
     mwg::GdalEnvironment::Initialize();
     RegisterDispatcherAlgorithms();
@@ -538,6 +538,12 @@ TEST(GdalOperationDispatcher, ResumesNotificationDeliveryAfterSuspension)
 
     dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
     EXPECT_TRUE(dispatcher.IsDispatchActive());
+    ASSERT_TRUE(WaitForCompletion(
+        dispatcher,
+        signal,
+        first,
+        std::chrono::steady_clock::now() + 10s));
+
     const std::uint64_t second = dispatcher.Begin(
         "mwg-test-dispatcher diagnostics",
         {});
@@ -552,7 +558,8 @@ TEST(GdalOperationDispatcher, ResumesNotificationDeliveryAfterSuspension)
     EXPECT_EQ(
         dispatcher.End(first, result),
         mwg::activex::GdalEndResult::Ended);
-    EXPECT_TRUE(result.cancelled);
+    EXPECT_TRUE(result.succeeded);
+    EXPECT_FALSE(result.cancelled);
     EXPECT_EQ(
         dispatcher.End(second, result),
         mwg::activex::GdalEndResult::Ended);

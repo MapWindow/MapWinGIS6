@@ -124,7 +124,8 @@ and staging buffers without changing ownership of map data.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. Core
-converts Polygon and MultiPolygon features into an owned vector scene. The
+sequentially reads Polygon, MultiPolygon, CurvePolygon, and MultiSurface
+features into an owned vector scene, linearizing curved geometries. The
 coordinator tries the OpenGL backend for simple convex polygons with one ring.
 OpenGL uses a context created on a hidden, never-presented window, draws with
 fixed-function calls into a framebuffer object (OpenGL 3.0 or
@@ -136,8 +137,8 @@ Interior rings, concave or self-intersecting rings, missing framebuffer-object
 support, initialization failures, and drawing failures use the GDI backend.
 The GDI backend draws the currently supported polygon scene, including its
 interior rings. Both backends draw source coordinates without reprojection,
-and scene preparation currently supports Polygon and MultiPolygon features
-from the first vector layer only.
+and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
+and MultiSurface features from the first vector layer only.
 
 The `RenderingBackendPreference` automation property is configurable as
 `Automatic`, `OpenGL`, or `GDI`. `Automatic` and `OpenGL` try the OpenGL
@@ -183,31 +184,31 @@ progress, cancellation, and result reporting. The GDAL API has a new interface
 and does not claim MapWinGIS 5 `IGdalUtils` binary compatibility.
 At most sixteen operations may be active or awaiting result cleanup. Call
 `EndGdalOperation` after completion to release an operation slot. The control
-delivers events on its owning apartment thread and drops queued notifications
-after control destruction; workers never retain COM references or wait for
-event handlers.
+delivers events on its owning apartment thread. Destroying the in-place window
+pauses notification delivery without cancelling operations; a subsequent
+`WM_SIZE` reconnects delivery. Calling `Close` or releasing the control's final
+COM reference cancels outstanding work and drops queued notifications.
+Workers never retain COM references or wait for event handlers.
 
 Only the first vector layer in a dataset is considered, and it must be a
-Polygon or MultiPolygon layer; a dataset whose first layer has another geometry
+polygon-compatible layer; a dataset whose first layer has another geometry
 type fails to load even if a later layer is polygonal. Raster layers and other
 geometry types are not rendered. There is no map navigation or
 reprojection, so coordinates remain in the source coordinate system.
 
-Core prepares and retains the complete supported polygon scene in memory.
-There is no tiling, paging, or unchanged-geometry cache. The opt-in rendering
-baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline)) shows
-that Core scene preparation dominates and grows faster than linearly with
-feature count, while OpenGL frames are faster than GDI frames for the measured
-convex scenes. OpenGL only supports convex single-ring
-polygons and copies each frame through CPU memory. Its reusable CPU staging
-buffer is limited to 64 MiB per frame; target dimensions are also limited by
-the detected framebuffer and viewport capabilities. GDI is the supported
+Core prepares and retains the complete supported polygon scene in memory,
+reading feature geometries sequentially without WKT serialization and
+reparsing. There is no tiling, paging, or unchanged-geometry cache. The opt-in
+rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
+tracks scene preparation and backend frame costs. OpenGL only supports convex
+single-ring polygons and copies each frame through CPU memory. Its reusable CPU
+staging buffer is limited to 64 MiB per frame; target dimensions are also
+limited by the detected framebuffer and viewport capabilities. GDI is the supported
 Windows CPU fallback; Core has no independent platform-neutral renderer.
 
 The C# host's pixel assertions, activation, and native tests pass for Debug
 and Release on Win32 and x64 in an interactive desktop session.
 The next useful milestone is a tested map-view transform for viewport and
-coordinate-system behavior. Make scene preparation read geometry sequentially
-instead of by index through WKT, then re-measure with representative datasets
-before adding caching, paging, or broader OpenGL geometry support. OpenCL and
-full MapWinGIS 5 API parity remain deferred.
+coordinate-system behavior. Measure scene preparation with representative
+datasets before adding caching, paging, or broader OpenGL geometry support.
+OpenCL and full MapWinGIS 5 API parity remain deferred.

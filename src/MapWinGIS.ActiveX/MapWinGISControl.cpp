@@ -325,9 +325,21 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
     {
         return E_UNEXPECTED;
     }
-    if (!_gdalDispatchWindow.IsWindow())
+    if (_gdalDispatchWindow == nullptr)
     {
-        if (_gdalDispatchWindow.Create(
+        try
+        {
+            _gdalDispatchWindow =
+                std::make_shared<mwg::activex::GdalDispatchWindow>();
+        }
+        catch (const std::bad_alloc&)
+        {
+            return E_OUTOFMEMORY;
+        }
+    }
+    if (!_gdalDispatchWindow->IsWindow())
+    {
+        if (_gdalDispatchWindow->Create(
                 &CMapWinGISControl::DispatchGdalNotifications,
                 this) == nullptr)
         {
@@ -363,7 +375,7 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
 
     _gdalDispatcher.SetWakeCallback(
         &CMapWinGISControl::PostGdalDispatchMessage,
-        _gdalDispatchWindow.m_hWnd);
+        _gdalDispatchWindow->m_hWnd);
     _gdalDispatcher.SetWorkerFinishedCallback(
         &UnlockActiveXModule,
         nullptr);
@@ -663,6 +675,13 @@ LRESULT CMapWinGISControl::OnSize(
     LPARAM,
     BOOL& handled)
 {
+    if (!_gdalClosing && _gdalDispatchWindow != nullptr &&
+        _gdalDispatchWindow->IsWindow())
+    {
+        _gdalDispatcher.SetWakeCallback(
+            &CMapWinGISControl::PostGdalDispatchMessage,
+            _gdalDispatchWindow->m_hWnd);
+    }
     FireViewChange();
     handled = TRUE;
     return 0;
@@ -758,12 +777,12 @@ LRESULT CMapWinGISControl::OnDestroy(
     if (_gdalClosing)
     {
         _gdalDispatcher.Shutdown();
+        DestroyGdalDispatchWindow();
     }
     else
     {
         _gdalDispatcher.Suspend();
     }
-    DestroyGdalDispatchWindow();
     handled = FALSE;
     return 0;
 }
@@ -804,7 +823,10 @@ void CMapWinGISControl::DestroyGdalDispatchWindow() noexcept
     }
 
     _gdalDispatchWindowDestroyPending = false;
-    _gdalDispatchWindow.Destroy();
+    if (_gdalDispatchWindow != nullptr)
+    {
+        _gdalDispatchWindow->Destroy();
+    }
 }
 
 void CMapWinGISControl::RecordGdalCallbackError(

@@ -26,6 +26,11 @@ namespace mwg
 {
     class VectorDataset;
 
+    namespace detail
+    {
+        struct VectorLayerAccess;
+    }
+
     enum class OpenMode : int
     {
         ReadOnly,
@@ -98,6 +103,7 @@ namespace mwg
 
     private:
         friend class VectorDataset;
+        friend struct detail::VectorLayerAccess;
 
         void ValidateField(int fieldIndex) const;
 

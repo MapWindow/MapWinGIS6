@@ -148,24 +148,24 @@ $env:MWG_RENDERING_BASELINE_FEATURES = '100000'   # optional; default 50000
 bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_filter=RenderingBaseline.*
 ```
 
-Baseline on one developer workstation (Release, hardware OpenGL):
+Measurements on one developer workstation (Release, hardware OpenGL); the
+previous implementation measurements are retained for comparison:
 
-| Measurement | x64, 10k | x64, 100k | Win32, 10k |
+| Measurement | x64, 10k (previous) | x64, 100k (previous) | x64, 100k (sequential) |
 |---|---:|---:|---:|
-| Core open dataset | 1.5 ms | 1.5 ms | 1.6 ms |
-| Core prepare render scene | 717 ms | 15,225 ms | 994 ms |
-| Private memory for the scene | 8.5 MiB | 62.8 MiB | 7.8 MiB |
-| GDI frame (median) | 17.5 ms | 308 ms | 24.6 ms |
-| OpenGL first frame | 157 ms | 350 ms | 150 ms |
-| OpenGL frame (median) | 10.0 ms | 82.3 ms | 20.1 ms |
-| Private memory, total | 91.7 MiB | 167.4 MiB | 72.9 MiB |
+| Core open dataset | 1.5 ms | 1.5 ms | 1.5 ms |
+| Core prepare render scene | 717 ms | 15,225 ms | 91.5 ms |
+| Private memory for the scene | 8.5 MiB | 62.8 MiB | 61.5 MiB |
+| GDI frame (median) | 17.5 ms | 308 ms | 171.4 ms |
+| OpenGL first frame | 157 ms | 350 ms | 233.7 ms |
+| OpenGL frame (median) | 10.0 ms | 82.3 ms | 80.5 ms |
+| Private memory, total | 91.7 MiB | 167.4 MiB | 167.2 MiB |
 
-Scene preparation dominates and grows faster than linearly (10x features cost
-about 21x time). It reads each feature by index through
-`VectorLayer::GeometryWkt` and reparses the WKT; a sequential geometry read is
-the first optimization candidate. OpenGL frames re-submit all geometry
-because there is no unchanged-geometry cache, yet are faster than GDI for
-these scenes. Total memory includes the OpenGL driver and context.
+Scene preparation now reads geometries sequentially through OGR and copies
+their coordinates directly, avoiding indexed lookups, WKT serialization, and
+reparsing. The 100k-feature measurement dropped from 15,225 ms to 91.5 ms on
+the recorded x64 run. OpenGL frames re-submit all geometry because there is no
+unchanged-geometry cache. Total memory includes the OpenGL driver and context.
 
 ## Conventions
 

@@ -15,6 +15,7 @@
 #include <cpl_error.h>
 #include <gdal.h>
 #include <gdalalgorithm.h>
+#include <gdal_priv.h>
 
 #include <exception>
 #include <sstream>
@@ -438,13 +439,30 @@ namespace mwg
         bool finalized = false;
         if (succeeded)
         {
-            GDALAlgorithmArg* output = _impl->algorithm->GetArg("output");
+            GDALAlgorithmArg* output = _impl->algorithm != nullptr
+                                           ? _impl->algorithm->GetArg("output")
+                                           : nullptr;
             if (output != nullptr && output->GetType() == GAAT_DATASET)
             {
                 _impl->outputDataset.reset(
                     output->Get<GDALArgDatasetValue>().GetDatasetIncreaseRefCount());
             }
             finalized = Finalize();
+        }
+        if (_impl->outputDataset != nullptr)
+        {
+            GdalErrorScope outputScope;
+            const std::size_t outputErrorCount = _impl->errors.size();
+            const CPLErr flushResult = _impl->outputDataset->FlushCache();
+            AppendErrors(_impl->errors, outputScope);
+            outputScope.RethrowCaptureException();
+            if (flushResult != CE_None)
+            {
+                AddFailureIfNoDiagnostic(
+                    _impl->errors,
+                    outputErrorCount,
+                    "GDAL algorithm output could not be flushed.");
+            }
         }
         scope.RethrowCaptureException();
 
@@ -478,7 +496,28 @@ namespace mwg
             succeeded && finalized && !adapter.WasCancelled() && !callbackFailed &&
             !HasFailure(_impl->errors);
         if (!_impl->operationSucceeded)
+        {
+            GdalErrorScope closeScope;
+            const std::size_t closeErrorCount = _impl->errors.size();
             _impl->outputDataset.reset();
+            GDALAlgorithmArg* output = _impl->algorithm != nullptr
+                                           ? _impl->algorithm->GetArg("output")
+                                           : nullptr;
+            bool outputClosed = true;
+            if (output != nullptr && output->GetType() == GAAT_DATASET)
+            {
+                outputClosed = output->Get<GDALArgDatasetValue>().Close();
+            }
+            AppendErrors(_impl->errors, closeScope);
+            if (!outputClosed)
+            {
+                AddFailureIfNoDiagnostic(
+                    _impl->errors,
+                    closeErrorCount,
+                    "GDAL algorithm output could not be closed.");
+            }
+            closeScope.RethrowCaptureException();
+        }
         return _impl->operationSucceeded;
     }
 

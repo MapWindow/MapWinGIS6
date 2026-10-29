@@ -4,8 +4,8 @@
  * @file VectorRenderScene.cpp
  * @brief Builds owned polygon scene data from vector layers.
  *
- * Extracts Polygon and MultiPolygon coordinates through the existing vector
- * layer API and releases all feature-owned geometry before returning.
+ * Reads vector geometries sequentially and copies supported polygon
+ * coordinates into owned scene data before releasing each feature.
  */
 #include "mapwingis/rendering/VectorRenderScene.h"
 
@@ -17,6 +17,8 @@
 
 #include "mapwingis/core/Error.h"
 #include "mapwingis/vector/VectorDataset.h"
+
+#include "internal/VectorLayerAccess.h"
 
 namespace mwg::rendering
 {
@@ -76,6 +78,18 @@ namespace mwg::rendering
                 return;
             }
 
+            case wkbCurvePolygon:
+            case wkbMultiSurface:
+            {
+                const std::unique_ptr<OGRGeometry> linear(geometry.getLinearGeometry());
+                if (linear == nullptr)
+                {
+                    throw CoreError("Cannot linearize curved vector geometry");
+                }
+                AppendGeometry(*linear, scene);
+                return;
+            }
+
             default:
                 throw CoreError("Vector rendering supports Polygon and MultiPolygon geometries only");
             }
@@ -91,30 +105,12 @@ namespace mwg::rendering
 
         VectorRenderScene scene;
         scene.extent = layer.GetExtent();
-        const std::int64_t featureCount = layer.FeatureCount();
-        for (std::int64_t index = 0; index < featureCount; ++index)
-        {
-            const std::string geometryWkt = layer.GeometryWkt(index);
-            if (geometryWkt.empty())
+        detail::VectorLayerAccess::ForEachGeometry(
+            layer,
+            [&scene](const OGRGeometry& geometry)
             {
-                continue;
-            }
-
-            const char* text = geometryWkt.c_str();
-            OGRGeometry* parsed = nullptr;
-            if (OGRGeometryFactory::createFromWkt(&text, nullptr, &parsed) != OGRERR_NONE ||
-                parsed == nullptr)
-            {
-                throw CoreError("Cannot parse vector feature geometry at index " +
-                                std::to_string(index));
-            }
-
-            const std::unique_ptr<OGRGeometry> geometry(parsed);
-            if (!geometry->IsEmpty())
-            {
-                AppendGeometry(*geometry, scene);
-            }
-        }
+                AppendGeometry(geometry, scene);
+            });
 
         if (scene.polygons.empty())
         {

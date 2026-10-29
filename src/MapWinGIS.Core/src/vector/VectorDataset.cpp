@@ -15,11 +15,13 @@
 #include <utility>
 
 #include <cpl_conv.h>
+#include <cpl_error.h>
 #include <gdal_priv.h>
 #include <ogr_api.h>
 #include <ogrsf_frmts.h>
 
 #include "internal/Utf8.h"
+#include "internal/VectorLayerAccess.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
@@ -265,6 +267,50 @@ namespace mwg
         mutable std::optional<std::int64_t> _featureCount;
         mutable std::optional<Extent> _extent;
     };
+
+    void detail::VectorLayerAccess::ForEachGeometry(
+        const VectorLayer& layer,
+        const std::function<void(const OGRGeometry&)>& callback)
+    {
+        OGRLayer& ogrLayer = *layer._impl->_layer;
+        ogrLayer.ResetReading();
+        struct ReadingReset final
+        {
+            OGRLayer& layer;
+
+            ~ReadingReset()
+            {
+                layer.ResetReading();
+            }
+        } readingReset{ogrLayer};
+
+        while (true)
+        {
+            CPLErrorReset();
+            OGRFeatureUniquePtr feature{ogrLayer.GetNextFeature()};
+            if (feature == nullptr)
+            {
+                if (CPLGetLastErrorType() >= CE_Failure)
+                {
+                    std::string message = "Failed to read vector layer features";
+                    const char* const detail = CPLGetLastErrorMsg();
+                    if (detail != nullptr && detail[0] != '\0')
+                    {
+                        message += ": ";
+                        message += detail;
+                    }
+                    throw CoreError(message);
+                }
+                break;
+            }
+
+            const OGRGeometry* geometry = feature->GetGeometryRef();
+            if (geometry != nullptr && !geometry->IsEmpty())
+            {
+                callback(*geometry);
+            }
+        }
+    }
 
     VectorLayer::VectorLayer(std::unique_ptr<Impl> impl)
         : _impl(std::move(impl))
