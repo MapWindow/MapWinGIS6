@@ -55,6 +55,18 @@ namespace
         }
     };
 
+    struct FailedDispatchSignal
+    {
+        std::atomic<int> attempts = 0;
+
+        static bool Wake(void* context) noexcept
+        {
+            auto& signal = *static_cast<FailedDispatchSignal*>(context);
+            ++signal.attempts;
+            return false;
+        }
+    };
+
     class DispatcherProgressAlgorithm final : public GDALAlgorithm
     {
     public:
@@ -472,6 +484,40 @@ TEST(GdalOperationDispatcher, NotificationDeliveryDefersEndUntilCallbacksReturn)
         mwg::activex::GdalEndResult::Ended);
     EXPECT_EQ(result.callbackErrorCode, callbackError);
     EXPECT_EQ(result.callbackError, "event callback failed");
+}
+
+TEST(GdalOperationDispatcher, CompletionRemainsAvailableWhenWakeCallbackFails)
+{
+    mwg::GdalEnvironment::Initialize();
+    RegisterDispatcherAlgorithms();
+
+    FailedDispatchSignal signal;
+    mwg::activex::GdalOperationDispatcher dispatcher;
+    dispatcher.SetWakeCallback(&FailedDispatchSignal::Wake, &signal);
+    const std::uint64_t operationId =
+        dispatcher.Begin("mwg-test-dispatcher diagnostics", {});
+
+    bool completed = false;
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (!completed && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(10ms);
+        for (const auto& notification : dispatcher.DrainNotifications())
+        {
+            completed = completed ||
+                (notification.operationId == operationId &&
+                 notification.kind ==
+                     mwg::activex::GdalNotificationKind::Completed);
+        }
+    }
+    ASSERT_TRUE(completed);
+    EXPECT_GT(signal.attempts.load(), 0);
+
+    mwg::activex::GdalOperationSnapshot result;
+    EXPECT_EQ(
+        dispatcher.End(operationId, result),
+        mwg::activex::GdalEndResult::Ended);
+    EXPECT_TRUE(result.succeeded);
 }
 
 TEST(GdalOperationDispatcher, ResumesNotificationDeliveryAfterSuspension)

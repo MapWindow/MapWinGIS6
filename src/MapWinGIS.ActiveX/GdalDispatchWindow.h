@@ -14,6 +14,8 @@
 namespace mwg::activex
 {
     inline constexpr UINT kGdalDispatchMessage = WM_APP + 0x316;
+    inline constexpr UINT_PTR kGdalDispatchRetryTimerId = 1;
+    inline constexpr UINT kGdalDispatchRetryIntervalMilliseconds = 100;
 
     class GdalDispatchWindow final : public ATL::CWindowImpl<GdalDispatchWindow>
     {
@@ -26,7 +28,25 @@ namespace mwg::activex
         {
             _callback = callback;
             _context = context;
-            return ATL::CWindowImpl<GdalDispatchWindow>::Create(HWND_MESSAGE);
+            const HWND window =
+                ATL::CWindowImpl<GdalDispatchWindow>::Create(HWND_MESSAGE);
+            if (window == nullptr)
+            {
+                return nullptr;
+            }
+            if (::SetTimer(
+                    window,
+                    kGdalDispatchRetryTimerId,
+                    kGdalDispatchRetryIntervalMilliseconds,
+                    nullptr) == 0)
+            {
+                _callback = nullptr;
+                _context = nullptr;
+                ::SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+                DestroyWindow();
+                return nullptr;
+            }
+            return window;
         }
 
         void Destroy() noexcept
@@ -35,12 +55,14 @@ namespace mwg::activex
             _context = nullptr;
             if (m_hWnd != nullptr)
             {
+                ::KillTimer(m_hWnd, kGdalDispatchRetryTimerId);
                 DestroyWindow();
             }
         }
 
         BEGIN_MSG_MAP(GdalDispatchWindow)
             MESSAGE_HANDLER(kGdalDispatchMessage, OnDispatch)
+            MESSAGE_HANDLER(WM_TIMER, OnRetryTimer)
         END_MSG_MAP()
 
     private:
@@ -48,6 +70,16 @@ namespace mwg::activex
         {
             handled = TRUE;
             if (_callback != nullptr)
+            {
+                _callback(_context);
+            }
+            return 0;
+        }
+
+        LRESULT OnRetryTimer(UINT, WPARAM timerId, LPARAM, BOOL& handled) noexcept
+        {
+            handled = TRUE;
+            if (timerId == kGdalDispatchRetryTimerId && _callback != nullptr)
             {
                 _callback(_context);
             }

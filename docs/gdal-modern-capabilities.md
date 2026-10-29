@@ -107,6 +107,8 @@ and retains one terminal notification. It accepts at most sixteen outstanding
 operations, including completed results not yet ended. Repeated cancellation
 returns `S_FALSE`; cancellation of an unknown operation returns
 `E_INVALIDARG`; ending a still-running operation returns `E_PENDING`.
+The owner-thread dispatch window also polls for queued notifications every
+100 ms, so a failed wake-up post cannot strand a completion.
 Event-handler failures are reported separately from GDAL execution status with
 their HRESULT and message. Result retrieval returns `E_PENDING` while an event
 handler is running, so handlers must retrieve results after event delivery
