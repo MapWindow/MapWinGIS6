@@ -110,6 +110,7 @@ namespace mwg::activex
             std::uint64_t operationId,
             int errorCode,
             std::string message);
+        /// Stops owner-thread notifications without cancelling active operations.
         void Suspend() noexcept;
         void Shutdown() noexcept;
 

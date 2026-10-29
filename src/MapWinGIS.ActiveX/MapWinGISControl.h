@@ -137,7 +137,7 @@ private:
     std::optional<mwg::rendering::VectorRenderScene> _scene;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalOperationDispatcher _gdalDispatcher;
-    mwg::activex::GdalDispatchWindow _gdalDispatchWindow;
+    std::shared_ptr<mwg::activex::GdalDispatchWindow> _gdalDispatchWindow;
     bool _gdalDispatching = false;
     bool _gdalDispatchWindowDestroyPending = false;
     bool _gdalClosing = false;

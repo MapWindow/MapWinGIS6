@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <thread>
@@ -200,6 +201,15 @@ namespace
                 _completedOperations.begin(),
                 _completedOperations.end(),
                 operationId) != _completedOperations.end();
+        }
+
+        [[nodiscard]] bool HasProgress(const LONGLONG operationId) const
+        {
+            std::lock_guard lock(_mutex);
+            return std::find(
+                _progressOperations.begin(),
+                _progressOperations.end(),
+                operationId) != _progressOperations.end();
         }
 
         [[nodiscard]] bool WasDeliveredOn(
@@ -693,6 +703,20 @@ namespace
 
     private:
         HRESULT _result;
+    };
+
+    struct ReleaseControlFromEvent final
+    {
+        TestHostWindow* window = nullptr;
+        ATL::CComPtrBase<IMapWinGISControlGdal>* control = nullptr;
+
+        static HRESULT Release(void* context, LONGLONG)
+        {
+            auto& release = *static_cast<ReleaseControlFromEvent*>(context);
+            (void)release.window->Destroy();
+            release.control->Release();
+            return S_OK;
+        }
     };
 
     class Module final
@@ -1290,15 +1314,83 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             GetPixel(resizedSurface.Get(), resizedWidth - 1, resizedHeight - 1),
             GetSysColor(COLOR_WINDOW));
 
-        viewObject = nullptr;
-        documentWindow = nullptr;
-        inPlaceFrame = nullptr;
-        inPlaceSite = nullptr;
-        clientSite = nullptr;
-        oleObject = nullptr;
-        hostedControl = nullptr;
-        control = nullptr;
-        host = nullptr;
-        EXPECT_TRUE(hostWindow.Destroy());
+        if (iteration == 1)
+        {
+            ATL::CComQIPtr<IMapWinGISControlGdal> gdalControl(hostedControl);
+            ASSERT_NE(gdalControl.p, nullptr);
+            ATL::CComQIPtr<IConnectionPointContainer> connectionPoints(hostedControl);
+            ASSERT_NE(connectionPoints.p, nullptr);
+            ATL::CComPtr<IConnectionPoint> connectionPoint;
+            ASSERT_TRUE(SUCCEEDED(connectionPoints->FindConnectionPoint(
+                __uuidof(IMapWinGISControlEvents),
+                &connectionPoint)));
+
+            ComPtr<GdalEventSink> releaseEventSink;
+            releaseEventSink.Attach(new GdalEventSink());
+            ReleaseControlFromEvent releaseControl{
+                &hostWindow,
+                std::addressof(gdalControl)};
+            releaseEventSink->SetProgressCallback(
+                &ReleaseControlFromEvent::Release,
+                &releaseControl);
+            DWORD releaseCookie = 0;
+            ASSERT_TRUE(SUCCEEDED(connectionPoint->Advise(
+                releaseEventSink.Get(),
+                &releaseCookie)));
+            connectionPoint = nullptr;
+            connectionPoints = nullptr;
+
+            LONGLONG operationId = 0;
+            ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
+                gdalControl,
+                L"mwg-test-activex progress",
+                {},
+                &operationId)));
+
+            viewObject = nullptr;
+            documentWindow = nullptr;
+            inPlaceFrame = nullptr;
+            inPlaceSite = nullptr;
+            clientSite = nullptr;
+            oleObject = nullptr;
+            hostedControl = nullptr;
+            control = nullptr;
+            host = nullptr;
+
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (!releaseEventSink->HasProgress(operationId) &&
+                   std::chrono::steady_clock::now() < deadline)
+            {
+                MSG message{};
+                while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE)
+                {
+                    if (message.message == WM_QUIT)
+                    {
+                        PostQuitMessage(static_cast<int>(message.wParam));
+                        FAIL() << "Received WM_QUIT while waiting for the release event";
+                    }
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+                Sleep(1);
+            }
+            ASSERT_TRUE(releaseEventSink->HasProgress(operationId));
+            EXPECT_EQ(gdalControl.p, nullptr);
+            EXPECT_EQ(hostWindow.Get(), nullptr);
+        }
+        else
+        {
+            viewObject = nullptr;
+            documentWindow = nullptr;
+            inPlaceFrame = nullptr;
+            inPlaceSite = nullptr;
+            clientSite = nullptr;
+            oleObject = nullptr;
+            hostedControl = nullptr;
+            control = nullptr;
+            host = nullptr;
+            EXPECT_TRUE(hostWindow.Destroy());
+        }
     }
 }

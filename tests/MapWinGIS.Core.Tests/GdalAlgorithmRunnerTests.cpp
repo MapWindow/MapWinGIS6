@@ -219,6 +219,61 @@ namespace
         }
     };
 
+    class FailingOutputDataset final : public GDALDataset
+    {
+    public:
+        CPLErr FlushCache(bool) override
+        {
+            return CE_None;
+        }
+
+        CPLErr Close() override
+        {
+            CPLError(
+                CE_Failure,
+                CPLE_FileIO,
+                "%s",
+                "Simulated output close failure");
+            return CE_Failure;
+        }
+    };
+
+    class OutputFlushFailureAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static GDALDataset* outputDataset;
+
+        OutputFlushFailureAlgorithm()
+            : GDALAlgorithm(
+                  "mwg-test-output-flush-failure",
+                  "Test output dataset flush failures",
+                  "")
+        {
+            AddArg("output", 0, "Output dataset", &_output);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            if (outputDataset == nullptr)
+            {
+                ReportError(CE_Failure, CPLE_AppDefined, "%s",
+                            "output flush test dataset was not configured");
+                return false;
+            }
+            GDALDataset* const output = outputDataset;
+            _output.Set(output);
+            outputDataset = nullptr;
+            GDALReleaseDataset(output);
+            return false;
+        }
+
+    private:
+        GDALArgDatasetValue _output;
+    };
+
+    GDALDataset* OutputFlushFailureAlgorithm::outputDataset = nullptr;
+
     void RegisterTestAlgorithms()
     {
         static std::once_flag registrationFlag;
@@ -237,6 +292,8 @@ namespace
                                       [] { return std::make_unique<DiagnosticsAlgorithm>(); });
             registry.DeclareAlgorithm({"mwg-test", "callback-lifecycle"},
                                       [] { return std::make_unique<CallbackLifecycleAlgorithm>(); });
+            registry.DeclareAlgorithm({"mwg-test", "output-flush-failure"},
+                                      [] { return std::make_unique<OutputFlushFailureAlgorithm>(); });
         });
     }
 
@@ -500,6 +557,70 @@ TEST(GdalAlgorithmRunner, PreservesLoggerExceptionsUntilAfterFinalization)
     EXPECT_TRUE(runner.Finalize());
     EXPECT_FALSE(runner.Result().Succeeded());
     EXPECT_FALSE(runner.Result().AllErrors().empty());
+}
+
+TEST(GdalAlgorithmRunner, ReportsOutputFlushFailureAndAllowsSubsequentSaveAndRead)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    const GdalEnvironment::QuietScope quiet;
+    const auto deregister = [](GDALDriver* driver)
+    {
+        GetGDALDriverManager()->DeregisterDriver(driver);
+        delete driver;
+    };
+    const std::unique_ptr<GDALDriver, decltype(deregister)> driver{
+        std::make_unique<GDALDriver>().release(),
+        deregister};
+    driver->SetDescription("MWGOutputCloseFailure");
+    driver->SetMetadataItem(GDAL_DCAP_RASTER, "YES");
+    driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
+    driver->pfnIdentify = [](GDALOpenInfo* info)
+    {
+        return std::string_view(info->pszFilename).starts_with(
+                   "MWG_OUTPUT_CLOSE_FAILURE:")
+                   ? TRUE
+                   : FALSE;
+    };
+    driver->pfnOpen = [](GDALOpenInfo* info) -> GDALDataset*
+    {
+        if (!std::string_view(info->pszFilename).starts_with(
+                "MWG_OUTPUT_CLOSE_FAILURE:"))
+        {
+            return nullptr;
+        }
+        return new FailingOutputDataset();
+    };
+    GetGDALDriverManager()->RegisterDriver(driver.get());
+
+    {
+        GdalDatasetPtr failingOutput(static_cast<GDALDataset*>(
+            GDALOpen("MWG_OUTPUT_CLOSE_FAILURE:output", GA_Update)));
+        ASSERT_NE(failingOutput, nullptr);
+        OutputFlushFailureAlgorithm::outputDataset = failingOutput.release();
+        GdalAlgorithmRunner runner("mwg-test output-flush-failure");
+
+        EXPECT_FALSE(runner.Run());
+        EXPECT_NE(runner.Result().ErrorMsg().find("Simulated output close failure"),
+                  std::string::npos) << runner.Result().DetailedErrorMsg();
+        OutputFlushFailureAlgorithm::outputDataset = nullptr;
+    }
+
+    mwg::test::TempDirectory directory;
+    const std::filesystem::path input = MakeRaster(directory.Path(), "after-failure.tif");
+    const std::filesystem::path output = directory.Path() / "after-failure.png";
+    GdalAlgorithmRunner runner("raster convert");
+    ASSERT_TRUE(runner.SetArgument("input", ToUtf8(input)));
+    ASSERT_TRUE(runner.SetArgument("output", ToUtf8(output)));
+    ASSERT_TRUE(runner.SetArgument("output-format", "PNG"));
+    ASSERT_TRUE(runner.Run()) << LastError(runner);
+    runner.TakeOutputDataset().reset();
+
+    DatasetPtr saved(static_cast<GDALDataset*>(
+        GDALOpen(ToUtf8(output).c_str(), GA_ReadOnly)));
+    ASSERT_NE(saved, nullptr);
+    EXPECT_EQ(saved->GetRasterXSize(), 32);
+    EXPECT_EQ(saved->GetRasterYSize(), 24);
 }
 
 TEST(GdalAlgorithmRunner, RejectsPreCancelledRunBeforeInvokingAlgorithm)

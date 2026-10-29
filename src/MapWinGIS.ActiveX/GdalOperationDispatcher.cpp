@@ -563,7 +563,6 @@ namespace mwg::activex
         for (auto& [operationId, operation] : _state->operations)
         {
             static_cast<void>(operationId);
-            operation->cancellation.Cancel();
             operation->progress.reset();
             operation->completionPending = operation->completed;
         }

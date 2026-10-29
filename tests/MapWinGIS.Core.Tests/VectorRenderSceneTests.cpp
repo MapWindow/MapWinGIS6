@@ -146,3 +146,22 @@ TEST(VectorRenderScene, AcceptsPolygonZAndPolygonM)
         EXPECT_EQ(scene.polygons.front().front().size(), 5u);
     }
 }
+
+TEST(VectorRenderScene, LinearizesCurvedPolygonGeometry)
+{
+    GdalEnvironment::Initialize();
+    TempDirectory directory;
+    const auto path = MakeDimensionalPolygonDataset(
+        directory.Path(),
+        "curved-polygon.gpkg",
+        wkbCurvePolygon,
+        "CURVEPOLYGON (CIRCULARSTRING (0 0, 1 1, 2 0, 1 -1, 0 0))");
+    const auto dataset = VectorDataset::Open(path);
+
+    const rendering::VectorRenderScene scene =
+        rendering::CreateVectorRenderScene(dataset->Layer(0));
+
+    ASSERT_EQ(scene.polygons.size(), 1u);
+    ASSERT_EQ(scene.polygons.front().size(), 1u);
+    EXPECT_GT(scene.polygons.front().front().size(), 5u);
+}

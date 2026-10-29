@@ -20,6 +20,7 @@
 #include <ogrsf_frmts.h>
 
 #include "internal/Utf8.h"
+#include "internal/VectorLayerAccess.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
@@ -265,6 +266,32 @@ namespace mwg
         mutable std::optional<std::int64_t> _featureCount;
         mutable std::optional<Extent> _extent;
     };
+
+    void detail::VectorLayerAccess::ForEachGeometry(
+        const VectorLayer& layer,
+        const std::function<void(const OGRGeometry&)>& callback)
+    {
+        OGRLayer& ogrLayer = *layer._impl->_layer;
+        ogrLayer.ResetReading();
+        struct ReadingReset final
+        {
+            OGRLayer& layer;
+
+            ~ReadingReset()
+            {
+                layer.ResetReading();
+            }
+        } readingReset{ogrLayer};
+
+        while (OGRFeatureUniquePtr feature{ogrLayer.GetNextFeature()})
+        {
+            const OGRGeometry* geometry = feature->GetGeometryRef();
+            if (geometry != nullptr && !geometry->IsEmpty())
+            {
+                callback(*geometry);
+            }
+        }
+    }
 
     VectorLayer::VectorLayer(std::unique_ptr<Impl> impl)
         : _impl(std::move(impl))
