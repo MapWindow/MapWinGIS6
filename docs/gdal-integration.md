@@ -89,6 +89,34 @@ algorithms promptly. Cancellation can leave partial output files. Callbacks
 must not start another GDAL operation or wait on a thread that needs the GDAL
 execution lock; callback exceptions are returned as operation failures.
 
+## ActiveX operations
+
+The ActiveX control exposes asynchronous generic GDAL execution through its
+separate `IMapWinGISControlGdal` interface. `BeginGdalOperation` accepts a GDAL
+algorithm path and an array of command-line argument tokens; use the installed
+algorithm's `UsageAsJson()` or GDAL documentation for valid arguments. Text is
+converted between BSTR and UTF-8 at the COM boundary.
+
+Call the interface on its owning COM apartment, which must continue pumping
+messages while operations are active. A message-only dispatcher delivers
+`GdalProgress` and `GdalOperationCompleted` events on that thread. Progress is
+coalesced per operation;
+the terminal event is retained. The wrapper permits sixteen outstanding
+operations. Call `EndGdalOperation` after completion to retrieve success,
+cancellation, GDAL error code, summary, full diagnostics, callback error code
+and message, and warnings, and to release the operation slot. An incomplete
+operation returns `E_PENDING`; an unknown or ended identifier returns
+`E_INVALIDARG`.
+
+`CancelGdalOperation` is non-blocking. Repeated cancellation returns `S_FALSE`;
+an unknown identifier returns `E_INVALIDARG`. Cancellation remains distinct
+from GDAL failures and event-handler failures. Closing the control requests
+cancellation and discards pending events. Drivers without progress callbacks
+may not stop promptly. The COM API does not expose native dataset handles or
+in-memory outputs; use a GDAL output path when a client needs a persistent
+result. For a managed client, see
+[`GdalOperationClient.cs`](../samples/CSharp/ActiveXTestHost/GdalOperationClient.cs).
+
 ## Errors and logging
 
 Runner and convenience-operation results own their diagnostic lists.
@@ -165,17 +193,15 @@ algorithm-specific CRS options.
 
 ## Migration and examples
 
-MapWinGIS5's COM `GdalUtils` is not yet exposed by MapWinGIS6's ActiveX layer.
+MapWinGIS5's COM `IGdalUtils` is not binary-compatible with the new generic v6
+interface. The old IID and operation-specific signatures are not reused.
 Use the native runner and typed options for new C++ code. A deprecated native
-`GdalUtils` bridge is available for gradual migration; it is not
-binary-compatible with the v5 COM object. See [GDAL migration](gdal-migration.md)
-for operation examples and API differences.
+`GdalUtils` bridge remains available for gradual native migration. See
+[GDAL migration](gdal-migration.md) for operation examples and API differences.
 
 The solution builds the runnable C++ example
 [`samples/Cpp/translate.cpp`](../samples/Cpp/translate.cpp). Run it with
 `bin\Debug\x64\translate.exe <input-raster> <output-raster>`.
-There is no C# sample yet: the Core DLL has no managed binding or C ABI, and
-the ActiveX layer does not expose the GDAL API to C#.
 
 ## Limitations and troubleshooting
 

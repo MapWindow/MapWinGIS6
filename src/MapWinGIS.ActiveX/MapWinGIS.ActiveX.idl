@@ -58,11 +58,61 @@ library MapWinGISActiveXLib
     };
 
     [
+        object,
+        dual,
+        oleautomation,
+        uuid(65E33073-669C-43E3-9A96-EF8D38F5EDAC),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControlGdal : IDispatch
+    {
+        [id(1)]
+        HRESULT BeginGdalOperation(
+            [in] BSTR algorithmPath,
+            [in] SAFEARRAY(BSTR) arguments,
+            [out, retval] hyper* operationId);
+
+        [id(2)]
+        HRESULT CancelGdalOperation([in] hyper operationId);
+
+        [id(3)]
+        HRESULT EndGdalOperation(
+            [in] hyper operationId,
+            [out] VARIANT_BOOL* succeeded,
+            [out] VARIANT_BOOL* cancelled,
+            [out] LONG* errorCode,
+            [out] LONG* callbackErrorCode,
+            [out] BSTR* callbackError,
+            [out] BSTR* summary,
+            [out] BSTR* diagnostics,
+            [out] SAFEARRAY(BSTR)* warnings);
+    };
+
+    [
+        uuid(3EC7E255-3045-4A32-A9DA-12FA310FD3F0)
+    ]
+    dispinterface IMapWinGISControlEvents
+    {
+        properties:
+        methods:
+            [id(1)]
+            void GdalProgress(
+                [in] hyper operationId,
+                [in] double progress,
+                [in] BSTR message);
+
+            [id(2)]
+            void GdalOperationCompleted([in] hyper operationId);
+    };
+
+    [
         uuid(2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F),
         control
     ]
     coclass MapWinGISControl
     {
         [default] interface IMapWinGISControl2;
+        interface IMapWinGISControlGdal;
+        [default, source] dispinterface IMapWinGISControlEvents;
     };
 };

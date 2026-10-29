@@ -12,14 +12,468 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <mutex>
+#include <new>
+#include <thread>
+#include <vector>
+
+#include <gdal_priv.h>
+#include <gdalalgorithm.h>
 
 #include "MapWinGIS.ActiveX_i.h"
+#include "TestData.h"
+#include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 namespace
 {
     using Microsoft::WRL::ComPtr;
+
+    [[nodiscard]] std::string ToUtf8(const std::filesystem::path& path)
+    {
+        const std::u8string utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
+    class GdalEventSink final : public IDispatch
+    {
+    public:
+        using ProgressCallback = HRESULT(*)(void*, LONGLONG);
+
+        HRESULT STDMETHODCALLTYPE QueryInterface(
+            REFIID interfaceId,
+            void** result) override
+        {
+            if (result == nullptr)
+            {
+                return E_POINTER;
+            }
+            *result = nullptr;
+            if (IsEqualIID(interfaceId, IID_IUnknown) ||
+                IsEqualIID(interfaceId, IID_IDispatch) ||
+                IsEqualIID(interfaceId, __uuidof(IMapWinGISControlEvents)))
+            {
+                *result = static_cast<IDispatch*>(this);
+                AddRef();
+                return S_OK;
+            }
+            return E_NOINTERFACE;
+        }
+
+        ULONG STDMETHODCALLTYPE AddRef() override
+        {
+            return ++_references;
+        }
+
+        ULONG STDMETHODCALLTYPE Release() override
+        {
+            const ULONG remaining = --_references;
+            if (remaining == 0)
+            {
+                delete this;
+            }
+            return remaining;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetTypeInfoCount(UINT* count) override
+        {
+            if (count == nullptr)
+            {
+                return E_POINTER;
+            }
+            *count = 0;
+            return S_OK;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetTypeInfo(
+            UINT,
+            LCID,
+            ITypeInfo**) override
+        {
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetIDsOfNames(
+            REFIID,
+            LPOLESTR*,
+            UINT,
+            LCID,
+            DISPID*) override
+        {
+            return DISP_E_UNKNOWNNAME;
+        }
+
+        HRESULT STDMETHODCALLTYPE Invoke(
+            DISPID memberId,
+            REFIID,
+            LCID,
+            WORD,
+            DISPPARAMS* parameters,
+            VARIANT*,
+            EXCEPINFO*,
+            UINT*) override
+        {
+            if (parameters == nullptr || parameters->rgvarg == nullptr)
+            {
+                return E_INVALIDARG;
+            }
+
+            if ((memberId == 1 && parameters->cArgs != 3) ||
+                (memberId == 2 && parameters->cArgs != 1))
+            {
+                return E_INVALIDARG;
+            }
+
+            const LONGLONG operationId = memberId == 1
+                ? parameters->rgvarg[2].llVal
+                : parameters->rgvarg[0].llVal;
+            ProgressCallback progressCallback = nullptr;
+            void* progressContext = nullptr;
+            {
+                std::lock_guard lock(_mutex);
+                _ownerThread = std::this_thread::get_id();
+                try
+                {
+                    if (memberId == 1)
+                    {
+                        _progressOperations.push_back(operationId);
+                    }
+                    else if (memberId == 2)
+                    {
+                        _completedOperations.push_back(operationId);
+                    }
+                    else
+                    {
+                        return DISP_E_MEMBERNOTFOUND;
+                    }
+                }
+                catch (const std::bad_alloc&)
+                {
+                    return E_OUTOFMEMORY;
+                }
+                progressCallback = _progressCallback;
+                progressContext = _progressContext;
+            }
+            return memberId == 1 && progressCallback != nullptr
+                ? progressCallback(progressContext, operationId)
+                : S_OK;
+        }
+
+        void SetProgressCallback(
+            const ProgressCallback callback,
+            void* const context) noexcept
+        {
+            std::lock_guard lock(_mutex);
+            _progressCallback = callback;
+            _progressContext = context;
+        }
+
+        [[nodiscard]] bool HasCompleted(const LONGLONG operationId) const
+        {
+            std::lock_guard lock(_mutex);
+            return std::find(
+                _completedOperations.begin(),
+                _completedOperations.end(),
+                operationId) != _completedOperations.end();
+        }
+
+        [[nodiscard]] bool WasDeliveredOn(
+            const std::thread::id threadId) const
+        {
+            std::lock_guard lock(_mutex);
+            return _ownerThread == threadId;
+        }
+
+    private:
+        std::atomic<ULONG> _references{1};
+        mutable std::mutex _mutex;
+        std::thread::id _ownerThread;
+        std::vector<LONGLONG> _progressOperations;
+        std::vector<LONGLONG> _completedOperations;
+        ProgressCallback _progressCallback = nullptr;
+        void* _progressContext = nullptr;
+    };
+
+    class HostedProgressAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        HostedProgressAlgorithm()
+            : GDALAlgorithm(
+                  "mwg-test-activex-progress",
+                  "Test hosted COM progress",
+                  "")
+        {
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc progress, void* userData) override
+        {
+            for (int step = 0; step <= 100; ++step)
+            {
+                if (progress != nullptr &&
+                    progress(
+                        static_cast<double>(step) / 100.0,
+                        "COM progress",
+                        userData) == 0)
+                {
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return true;
+        }
+    };
+
+    class HostedDiagnosticsAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        HostedDiagnosticsAlgorithm()
+            : GDALAlgorithm(
+                  "mwg-test-activex-diagnostics",
+                  "Test hosted COM diagnostics",
+                  "")
+        {
+            AddArg("fail", 0, "Fail after a warning", &_fail);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            ReportError(CE_Warning, CPLE_AppDefined, "%s", "COM test warning");
+            if (_fail)
+            {
+                ReportError(CE_Failure, CPLE_AppDefined, "%s", "COM test failure");
+                return false;
+            }
+            return true;
+        }
+
+    private:
+        bool _fail = false;
+    };
+
+    void RegisterHostedTestAlgorithms()
+    {
+        static std::once_flag registrationFlag;
+        std::call_once(registrationFlag, []
+        {
+            auto& registry = GDALGlobalAlgorithmRegistry::GetSingleton();
+            registry.DeclareAlgorithm(
+                {"mwg-test-activex", "progress"},
+                [] { return std::make_unique<HostedProgressAlgorithm>(); });
+            registry.DeclareAlgorithm(
+                {"mwg-test-activex", "diagnostics"},
+                [] { return std::make_unique<HostedDiagnosticsAlgorithm>(); });
+        });
+    }
+
+    struct ComCancellation final
+    {
+        IMapWinGISControlGdal* control = nullptr;
+        LONGLONG operationId = 0;
+        HRESULT first = E_FAIL;
+        HRESULT repeated = E_FAIL;
+
+        static HRESULT Cancel(void* context, const LONGLONG operationId)
+        {
+            auto& cancellation = *static_cast<ComCancellation*>(context);
+            if (operationId != cancellation.operationId ||
+                cancellation.first != E_FAIL)
+            {
+                return S_OK;
+            }
+            cancellation.first =
+                cancellation.control->CancelGdalOperation(operationId);
+            cancellation.repeated =
+                cancellation.control->CancelGdalOperation(operationId);
+            return S_OK;
+        }
+    };
+
+    HRESULT FailProgress(void*, LONGLONG)
+    {
+        return E_FAIL;
+    }
+
+    struct ComGdalResult final
+    {
+        VARIANT_BOOL succeeded = VARIANT_FALSE;
+        VARIANT_BOOL cancelled = VARIANT_FALSE;
+        LONG errorCode = 0;
+        LONG callbackErrorCode = 0;
+        std::wstring callbackError;
+        std::wstring summary;
+        std::wstring diagnostics;
+        std::vector<std::wstring> warnings;
+    };
+
+    [[nodiscard]] HRESULT StartGdalOperation(
+        IMapWinGISControlGdal* control,
+        const std::wstring_view algorithmPath,
+        const std::vector<std::wstring>& arguments,
+        LONGLONG* operationId)
+    {
+        using BstrPtr = std::unique_ptr<wchar_t, decltype(&SysFreeString)>;
+        BstrPtr algorithm(SysAllocStringLen(
+            algorithmPath.data(),
+            static_cast<UINT>(algorithmPath.size())), &SysFreeString);
+        if (algorithm == nullptr)
+        {
+            return E_OUTOFMEMORY;
+        }
+
+        using SafeArrayPtr =
+            std::unique_ptr<SAFEARRAY, decltype(&SafeArrayDestroy)>;
+        SafeArrayPtr array(
+            SafeArrayCreateVector(
+                VT_BSTR,
+                0,
+                static_cast<ULONG>(arguments.size())),
+            &SafeArrayDestroy);
+        if (array == nullptr)
+        {
+            return E_OUTOFMEMORY;
+        }
+        for (std::size_t offset = 0; offset < arguments.size(); ++offset)
+        {
+            BstrPtr argument(
+                SysAllocStringLen(
+                    arguments[offset].data(),
+                    static_cast<UINT>(arguments[offset].size())),
+                &SysFreeString);
+            if (argument == nullptr)
+            {
+                return E_OUTOFMEMORY;
+            }
+            LONG index = static_cast<LONG>(offset);
+            const HRESULT result = SafeArrayPutElement(
+                array.get(),
+                &index,
+                argument.get());
+            if (FAILED(result))
+            {
+                return result;
+            }
+        }
+        return control->BeginGdalOperation(
+            algorithm.get(),
+            array.get(),
+            operationId);
+    }
+
+    [[nodiscard]] HRESULT EndGdalOperation(
+        IMapWinGISControlGdal* control,
+        const LONGLONG operationId,
+        ComGdalResult& result)
+    {
+        using BstrPtr = std::unique_ptr<wchar_t, decltype(&SysFreeString)>;
+        using SafeArrayPtr =
+            std::unique_ptr<SAFEARRAY, decltype(&SafeArrayDestroy)>;
+        BSTR rawSummary = nullptr;
+        BSTR rawDiagnostics = nullptr;
+        BSTR rawCallbackError = nullptr;
+        SAFEARRAY* rawWarnings = nullptr;
+        const HRESULT status = control->EndGdalOperation(
+            operationId,
+            &result.succeeded,
+            &result.cancelled,
+            &result.errorCode,
+            &result.callbackErrorCode,
+            &rawCallbackError,
+            &rawSummary,
+            &rawDiagnostics,
+            &rawWarnings);
+        BstrPtr summary(rawSummary, &SysFreeString);
+        BstrPtr diagnostics(rawDiagnostics, &SysFreeString);
+        BstrPtr callbackError(rawCallbackError, &SysFreeString);
+        SafeArrayPtr warnings(rawWarnings, &SafeArrayDestroy);
+        if (FAILED(status))
+        {
+            return status;
+        }
+
+        if (summary != nullptr)
+        {
+            result.summary.assign(summary.get(), SysStringLen(summary.get()));
+        }
+        if (callbackError != nullptr)
+        {
+            result.callbackError.assign(
+                callbackError.get(),
+                SysStringLen(callbackError.get()));
+        }
+        if (diagnostics != nullptr)
+        {
+            result.diagnostics.assign(
+                diagnostics.get(),
+                SysStringLen(diagnostics.get()));
+        }
+        if (warnings != nullptr)
+        {
+            LONG lowerBound = 0;
+            LONG upperBound = -1;
+            HRESULT arrayResult = SafeArrayGetLBound(
+                warnings.get(),
+                1,
+                &lowerBound);
+            if (FAILED(arrayResult))
+            {
+                return arrayResult;
+            }
+            arrayResult = SafeArrayGetUBound(warnings.get(), 1, &upperBound);
+            if (FAILED(arrayResult))
+            {
+                return arrayResult;
+            }
+            for (LONG index = lowerBound; index <= upperBound; ++index)
+            {
+                BstrPtr warning(nullptr, &SysFreeString);
+                BSTR rawWarning = nullptr;
+                arrayResult = SafeArrayGetElement(
+                    warnings.get(),
+                    &index,
+                    &rawWarning);
+                warning.reset(rawWarning);
+                if (FAILED(arrayResult))
+                {
+                    return arrayResult;
+                }
+                result.warnings.emplace_back(
+                    warning.get(),
+                    SysStringLen(warning.get()));
+            }
+        }
+        return S_OK;
+    }
+
+    [[nodiscard]] bool PumpUntilGdalCompletion(
+        GdalEventSink& sink,
+        const LONGLONG operationId,
+        const std::chrono::steady_clock::time_point deadline)
+    {
+        while (!sink.HasCompleted(operationId) &&
+               std::chrono::steady_clock::now() < deadline)
+        {
+            MSG message{};
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE)
+            {
+                if (message.message == WM_QUIT)
+                {
+                    PostQuitMessage(static_cast<int>(message.wParam));
+                    return false;
+                }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            Sleep(1);
+        }
+        return sink.HasCompleted(operationId);
+    }
 
     class CMapWinGISTestModule final :
         public ATL::CAtlExeModuleT<CMapWinGISTestModule>
@@ -416,6 +870,255 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             hostWindow.Get(),
             &hostBounds);
         ASSERT_TRUE(SUCCEEDED(activateResult));
+
+        if (iteration == 0)
+        {
+            RegisterHostedTestAlgorithms();
+            ATL::CComQIPtr<IMapWinGISControlGdal> gdalControl(hostedControl);
+            ASSERT_NE(gdalControl.p, nullptr);
+            ATL::CComQIPtr<IConnectionPointContainer> connectionPoints(hostedControl);
+            ASSERT_NE(connectionPoints.p, nullptr);
+            ATL::CComPtr<IConnectionPoint> connectionPoint;
+            ASSERT_TRUE(SUCCEEDED(connectionPoints->FindConnectionPoint(
+                __uuidof(IMapWinGISControlEvents),
+                &connectionPoint)));
+
+            ComPtr<GdalEventSink> eventSink;
+            eventSink.Attach(new GdalEventSink());
+            DWORD adviseCookie = 0;
+            const HRESULT adviseResult = connectionPoint->Advise(
+                eventSink.Get(),
+                &adviseCookie);
+            ASSERT_TRUE(SUCCEEDED(adviseResult));
+
+            struct ConnectionPointSubscription final
+            {
+                ATL::CComPtr<IConnectionPoint> connectionPoint;
+                DWORD cookie = 0;
+
+                ~ConnectionPointSubscription()
+                {
+                    if (connectionPoint != nullptr && cookie != 0)
+                    {
+                        connectionPoint->Unadvise(cookie);
+                    }
+                }
+            } subscription{connectionPoint, adviseCookie};
+
+            mwg::test::TempDirectory operationDirectory;
+            const std::filesystem::path input =
+                mwg::test::MakeRaster(operationDirectory.Path(), "gdal-source.tif");
+            const std::filesystem::path output =
+                operationDirectory.Path() / "gdal-converted.png";
+            std::vector<std::wstring> argumentTexts{
+                L"--input",
+                input.wstring(),
+                L"--output",
+                output.wstring(),
+                L"--output-format",
+                L"PNG"};
+            using SafeArrayPtr =
+                std::unique_ptr<SAFEARRAY, decltype(&SafeArrayDestroy)>;
+            SafeArrayPtr arguments(
+                SafeArrayCreateVector(
+                    VT_BSTR,
+                    0,
+                    static_cast<ULONG>(argumentTexts.size())),
+                &SafeArrayDestroy);
+            ASSERT_NE(arguments, nullptr);
+            for (std::size_t index = 0; index < argumentTexts.size(); ++index)
+            {
+                using BstrPtr = std::unique_ptr<wchar_t, decltype(&SysFreeString)>;
+                BstrPtr argument(
+                    SysAllocStringLen(
+                        argumentTexts[index].data(),
+                        static_cast<UINT>(argumentTexts[index].size())),
+                    &SysFreeString);
+                ASSERT_NE(argument, nullptr);
+                LONG arrayIndex = static_cast<LONG>(index);
+                const HRESULT setResult = SafeArrayPutElement(
+                    arguments.get(),
+                    &arrayIndex,
+                    argument.get());
+                ASSERT_TRUE(SUCCEEDED(setResult));
+            }
+
+            using BstrPtr = std::unique_ptr<wchar_t, decltype(&SysFreeString)>;
+            BstrPtr algorithmPath(SysAllocString(L"raster convert"), &SysFreeString);
+            ASSERT_NE(algorithmPath, nullptr);
+            LONGLONG operationId = 0;
+            const HRESULT beginResult = gdalControl->BeginGdalOperation(
+                algorithmPath.get(),
+                arguments.get(),
+                &operationId);
+            ASSERT_TRUE(SUCCEEDED(beginResult))
+                << "BeginGdalOperation failed with HRESULT "
+                << std::hex << static_cast<unsigned long>(beginResult);
+            ASSERT_GT(operationId, 0);
+
+            ASSERT_TRUE(PumpUntilGdalCompletion(
+                *eventSink.Get(),
+                operationId,
+                std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+            EXPECT_TRUE(eventSink->WasDeliveredOn(std::this_thread::get_id()));
+
+            VARIANT_BOOL succeeded = VARIANT_FALSE;
+            VARIANT_BOOL cancelled = VARIANT_FALSE;
+            LONG errorCode = 0;
+            LONG callbackErrorCode = 0;
+            BSTR rawCallbackError = nullptr;
+            BSTR rawSummary = nullptr;
+            BSTR rawDiagnostics = nullptr;
+            SAFEARRAY* rawWarnings = nullptr;
+            const HRESULT endResult = gdalControl->EndGdalOperation(
+                operationId,
+                &succeeded,
+                &cancelled,
+                &errorCode,
+                &callbackErrorCode,
+                &rawCallbackError,
+                &rawSummary,
+                &rawDiagnostics,
+                &rawWarnings);
+            BstrPtr summary(rawSummary, &SysFreeString);
+            BstrPtr diagnostics(rawDiagnostics, &SysFreeString);
+            BstrPtr callbackError(rawCallbackError, &SysFreeString);
+            SafeArrayPtr warnings(rawWarnings, &SafeArrayDestroy);
+            ASSERT_TRUE(SUCCEEDED(endResult));
+            EXPECT_EQ(succeeded, VARIANT_TRUE) << diagnostics.get();
+            EXPECT_EQ(cancelled, VARIANT_FALSE);
+            EXPECT_EQ(callbackErrorCode, 0);
+
+            using DatasetPtr =
+                std::unique_ptr<GDALDataset, decltype(&GDALClose)>;
+            DatasetPtr converted(
+                static_cast<GDALDataset*>(GDALOpen(
+                    ToUtf8(output).c_str(),
+                    GA_ReadOnly)),
+                &GDALClose);
+            ASSERT_NE(converted, nullptr);
+            std::uint8_t pixel = 0;
+            ASSERT_EQ(
+                converted->GetRasterBand(1)->RasterIO(
+                    GF_Read,
+                    0,
+                    0,
+                    1,
+                    1,
+                    &pixel,
+                    1,
+                    1,
+                    GDT_Byte,
+                    0,
+                    0),
+                CE_None);
+            EXPECT_EQ(pixel, 42);
+
+            const auto finishOperation = [&](const LONGLONG id,
+                                             ComGdalResult& operationResult)
+            {
+                if (!PumpUntilGdalCompletion(
+                        *eventSink.Get(),
+                        id,
+                        std::chrono::steady_clock::now() +
+                            std::chrono::seconds(10)))
+                {
+                    return E_ABORT;
+                }
+                return EndGdalOperation(
+                    gdalControl,
+                    id,
+                    operationResult);
+            };
+
+            ComCancellation cancellation{
+                gdalControl,
+                0,
+                E_FAIL,
+                E_FAIL};
+            eventSink->SetProgressCallback(
+                &ComCancellation::Cancel,
+                &cancellation);
+            LONGLONG cancelledOperationId = 0;
+            ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
+                gdalControl,
+                L"mwg-test-activex progress",
+                {},
+                &cancelledOperationId)));
+            cancellation.operationId = cancelledOperationId;
+            ComGdalResult cancelledResult;
+            ASSERT_TRUE(SUCCEEDED(finishOperation(
+                cancelledOperationId,
+                cancelledResult)));
+            EXPECT_EQ(cancellation.first, S_OK);
+            EXPECT_EQ(cancellation.repeated, S_FALSE);
+            EXPECT_EQ(cancelledResult.succeeded, VARIANT_FALSE);
+            EXPECT_EQ(cancelledResult.cancelled, VARIANT_TRUE);
+
+            eventSink->SetProgressCallback(&FailProgress, nullptr);
+            LONGLONG callbackFailureOperationId = 0;
+            ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
+                gdalControl,
+                L"mwg-test-activex progress",
+                {},
+                &callbackFailureOperationId)));
+            ComGdalResult callbackFailureResult;
+            ASSERT_TRUE(SUCCEEDED(finishOperation(
+                callbackFailureOperationId,
+                callbackFailureResult)));
+            EXPECT_EQ(callbackFailureResult.succeeded, VARIANT_TRUE);
+            EXPECT_EQ(
+                callbackFailureResult.callbackErrorCode,
+                static_cast<LONG>(E_FAIL));
+            EXPECT_FALSE(callbackFailureResult.callbackError.empty());
+
+            eventSink->SetProgressCallback(nullptr, nullptr);
+            LONGLONG warningOperationId = 0;
+            ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
+                gdalControl,
+                L"mwg-test-activex diagnostics",
+                {},
+                &warningOperationId)));
+            ComGdalResult warningResult;
+            ASSERT_TRUE(SUCCEEDED(finishOperation(
+                warningOperationId,
+                warningResult)));
+            EXPECT_EQ(warningResult.succeeded, VARIANT_TRUE);
+            ASSERT_EQ(warningResult.warnings.size(), 1u);
+            EXPECT_NE(
+                warningResult.warnings.front().find(L"COM test warning"),
+                std::wstring::npos);
+
+            LONGLONG failureOperationId = 0;
+            ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
+                gdalControl,
+                L"mwg-test-activex diagnostics",
+                {L"--fail"},
+                &failureOperationId)));
+            ComGdalResult failureResult;
+            ASSERT_TRUE(SUCCEEDED(finishOperation(
+                failureOperationId,
+                failureResult)));
+            EXPECT_EQ(failureResult.succeeded, VARIANT_FALSE);
+            EXPECT_FALSE(failureResult.diagnostics.empty());
+
+            LONGLONG unknownOperationId = 0;
+            ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
+                gdalControl,
+                L"mwg-unknown algorithm",
+                {},
+                &unknownOperationId)));
+            ComGdalResult unknownResult;
+            ASSERT_TRUE(SUCCEEDED(finishOperation(
+                unknownOperationId,
+                unknownResult)));
+            EXPECT_EQ(unknownResult.succeeded, VARIANT_FALSE);
+            EXPECT_NE(
+                unknownResult.diagnostics.find(L"Unknown GDAL algorithm"),
+                std::wstring::npos);
+
+            EXPECT_TRUE(SUCCEEDED(connectionPoint->Unadvise(adviseCookie)));
+        }
 
         ComPtr<IViewObjectEx> viewObject;
         const HRESULT viewResult = hostedControl->QueryInterface(

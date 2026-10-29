@@ -20,8 +20,9 @@ selectively and must not prevent structural improvements.
 Early. The core currently includes GDAL setup and OGR-backed vector dataset
 and layer access, including feature and field reading and updates. Available
 formats depend on the GDAL drivers enabled in the build; tests cover shapefiles
-and GeoPackage. The ActiveX layer supports an initial slice of COM activation,
-control lifecycle, vector loading, and basic polygon rendering.
+and GeoPackage. The ActiveX layer supports COM activation, vector loading,
+polygon rendering, and asynchronous generic GDAL algorithms with progress and
+cancellation events.
 
 ## Build and test
 
