@@ -16,7 +16,9 @@ Core behavior must be testable through the core alone. OCX-specific
 host/rendering integration must also be testable as native components without
 COM activation; it must not contain GIS rules or core data ownership.
 Generic GDAL algorithms are exposed through the native `MapWinGIS.Core.dll`
-API; the COM façade currently exposes control lifecycle and vector loading.
+API and the ActiveX wrapper's separate `IMapWinGISControlGdal` interface.
+The wrapper handles COM translation, worker dispatch, progress, cancellation,
+and operation results; GDAL execution and dataset ownership remain in Core.
 
 ## Module design
 
