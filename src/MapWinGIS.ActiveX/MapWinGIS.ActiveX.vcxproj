@@ -66,6 +66,8 @@
 
   <ItemGroup>
     <ClInclude Include="ActiveXModule.h" />
+    <ClInclude Include="GdalDispatchWindow.h" />
+    <ClInclude Include="GdalOperationDispatcher.h" />
     <ClInclude Include="GdiVectorLayerRenderer.h" />
     <ClInclude Include="MapWinGISControl.h" />
     <ClInclude Include="OpenGlVectorLayerRenderer.h" />
@@ -76,6 +78,7 @@
 
   <ItemGroup>
     <ClCompile Include="ActiveXModule.cpp" />
+    <ClCompile Include="GdalOperationDispatcher.cpp" />
     <ClCompile Include="GdiVectorLayerRenderer.cpp" />
     <ClCompile Include="MapWinGISControl.cpp" />
     <ClCompile Include="OpenGlVectorLayerRenderer.cpp" />

@@ -93,8 +93,32 @@ A callback must remain valid until the operation returns.
 Removing a logger does not stop a callback that already holds a copy of that logger.
 Use owned state or shared ownership for captures that other threads can access.
 
-The merged ActiveX work defines architecture, not a control implementation.
-It introduces no COM interfaces, callback dispatcher, or asynchronous operation model.
-The completed GDAL phases therefore retain their native API and dataset ownership contracts.
-`BeginGdalOperation` and `EndGdalOperation` are not added.
-A future ActiveX wrapper must dispatch worker progress to its owning COM/UI thread without blocking the worker on another GDAL operation.
+The ActiveX wrapper exposes the generic algorithm runner through
+`IMapWinGISControlGdal`. It accepts a GDAL algorithm path and command-line
+argument tokens as COM strings, executes on a worker, and reports progress and
+completion through `IMapWinGISControlEvents` on the control's owning thread.
+`CancelGdalOperation` sets the native cancellation token without waiting for
+the worker. Call `EndGdalOperation` after the completion event to read status
+and diagnostics and release the operation slot. The wrapper does not expose
+GDAL dataset pointers or native output datasets through COM.
+
+The wrapper coalesces intermediate progress to the latest value per operation
+and retains one terminal notification. It accepts at most sixteen outstanding
+operations, including completed results not yet ended. Repeated cancellation
+returns `S_FALSE`; cancellation of an unknown operation returns
+`E_INVALIDARG`; ending a still-running operation returns `E_PENDING`.
+The owner-thread dispatch window also polls for queued notifications every
+100 ms, so a failed wake-up post cannot strand a completion.
+Event-handler failures are reported separately from GDAL execution status with
+their HRESULT and message. Result retrieval returns `E_PENDING` while an event
+handler is running, so handlers must retrieve results after event delivery
+returns. Destroying the control window suspends dispatch and requests
+cancellation; `IOleObject::Close` permanently shuts down the dispatcher.
+Reactivation resumes dispatch for retained results. A worker does not wait for
+the UI thread, but a GDAL driver without progress callbacks may continue until
+its current native call returns.
+
+This is a new v6 interface, not a binary-compatible implementation of the
+legacy `IGdalUtils` interface. The old interface uses a different IID and
+operation-specific method signatures; the new interface deliberately exposes
+the generic algorithm API instead.

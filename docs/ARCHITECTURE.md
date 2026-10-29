@@ -175,8 +175,16 @@ intentional compatibility gaps and the rationale when interfaces are introduced.
 ## Current limits and next work
 
 The control exposes a small v6 COM surface: Core initialization, vector
-dataset loading, layer-loaded state, feature count, and renderer preference,
-active backend, and status. It does not claim MapWinGIS 5 API compatibility.
+dataset loading, layer-loaded state, feature count, renderer preference,
+active backend and status, plus asynchronous generic GDAL operations with
+progress, cancellation, and result reporting. The GDAL API has a new interface
+and does not claim MapWinGIS 5 `IGdalUtils` binary compatibility.
+At most sixteen operations may be active or awaiting result cleanup. Call
+`EndGdalOperation` after completion to release an operation slot. The control
+delivers events on its owning apartment thread and drops queued notifications
+after control destruction; workers never retain COM references or wait for
+event handlers.
+
 Only the first vector layer in a dataset is considered, and it must be a
 Polygon or MultiPolygon layer; a dataset whose first layer has another geometry
 type fails to load even if a later layer is polygonal. Raster layers and other
