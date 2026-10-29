@@ -222,31 +222,49 @@ namespace
     class FailingOutputDataset final : public GDALDataset
     {
     public:
+        FailingOutputDataset(const bool failFlush, const bool failClose)
+            : _failFlush(failFlush),
+              _failClose(failClose)
+        {
+        }
+
         CPLErr FlushCache(bool) override
         {
-            return CE_None;
+            return ReportFailure(_failFlush, "Simulated output flush failure");
         }
 
         CPLErr Close() override
         {
-            CPLError(
-                CE_Failure,
-                CPLE_FileIO,
-                "%s",
-                "Simulated output close failure");
+            return ReportFailure(_failClose, "Simulated output close failure");
+        }
+
+    private:
+        static CPLErr ReportFailure(
+            const bool shouldFail,
+            const char* const message)
+        {
+            if (!shouldFail)
+            {
+                return CE_None;
+            }
+            CPLError(CE_Failure, CPLE_FileIO, "%s", message);
             return CE_Failure;
         }
+
+        bool _failFlush;
+        bool _failClose;
     };
 
-    class OutputFlushFailureAlgorithm final : public GDALAlgorithm
+    class OutputFailureAlgorithm final : public GDALAlgorithm
     {
     public:
         static GDALDataset* outputDataset;
+        static bool runSucceeded;
 
-        OutputFlushFailureAlgorithm()
+        OutputFailureAlgorithm()
             : GDALAlgorithm(
-                  "mwg-test-output-flush-failure",
-                  "Test output dataset flush failures",
+                  "mwg-test-output-failure",
+                  "Test output dataset failures",
                   "")
         {
             AddArg("output", 0, "Output dataset", &_output);
@@ -265,14 +283,15 @@ namespace
             _output.Set(output);
             outputDataset = nullptr;
             GDALReleaseDataset(output);
-            return false;
+            return runSucceeded;
         }
 
     private:
         GDALArgDatasetValue _output;
     };
 
-    GDALDataset* OutputFlushFailureAlgorithm::outputDataset = nullptr;
+    GDALDataset* OutputFailureAlgorithm::outputDataset = nullptr;
+    bool OutputFailureAlgorithm::runSucceeded = false;
 
     void RegisterTestAlgorithms()
     {
@@ -292,8 +311,8 @@ namespace
                                       [] { return std::make_unique<DiagnosticsAlgorithm>(); });
             registry.DeclareAlgorithm({"mwg-test", "callback-lifecycle"},
                                       [] { return std::make_unique<CallbackLifecycleAlgorithm>(); });
-            registry.DeclareAlgorithm({"mwg-test", "output-flush-failure"},
-                                      [] { return std::make_unique<OutputFlushFailureAlgorithm>(); });
+            registry.DeclareAlgorithm({"mwg-test", "output-failure"},
+                                      [] { return std::make_unique<OutputFailureAlgorithm>(); });
         });
     }
 
@@ -559,7 +578,7 @@ TEST(GdalAlgorithmRunner, PreservesLoggerExceptionsUntilAfterFinalization)
     EXPECT_FALSE(runner.Result().AllErrors().empty());
 }
 
-TEST(GdalAlgorithmRunner, ReportsOutputFlushFailureAndAllowsSubsequentSaveAndRead)
+TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentSaveAndRead)
 {
     GdalEnvironment::Initialize();
     RegisterTestAlgorithms();
@@ -572,38 +591,53 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushFailureAndAllowsSubsequentSaveAndRea
     const std::unique_ptr<GDALDriver, decltype(deregister)> driver{
         std::make_unique<GDALDriver>().release(),
         deregister};
-    driver->SetDescription("MWGOutputCloseFailure");
+    driver->SetDescription("MWGOutputFailure");
     driver->SetMetadataItem(GDAL_DCAP_RASTER, "YES");
     driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
     driver->pfnIdentify = [](GDALOpenInfo* info)
     {
         return std::string_view(info->pszFilename).starts_with(
-                   "MWG_OUTPUT_CLOSE_FAILURE:")
+                   "MWG_OUTPUT_FAILURE:")
                    ? TRUE
                    : FALSE;
     };
     driver->pfnOpen = [](GDALOpenInfo* info) -> GDALDataset*
     {
-        if (!std::string_view(info->pszFilename).starts_with(
-                "MWG_OUTPUT_CLOSE_FAILURE:"))
+        const std::string_view path(info->pszFilename);
+        if (!path.starts_with("MWG_OUTPUT_FAILURE:"))
         {
             return nullptr;
         }
-        return new FailingOutputDataset();
+        const bool failFlush = path.ends_with(":flush");
+        return new FailingOutputDataset(failFlush, !failFlush);
     };
     GetGDALDriverManager()->RegisterDriver(driver.get());
 
+    struct FailureCase final
     {
+        const char* kind;
+        const char* diagnostic;
+        bool runSucceeded;
+    };
+    for (const FailureCase& failure : {
+             FailureCase{"flush", "Simulated output flush failure", true},
+             FailureCase{"close", "Simulated output close failure", false}})
+    {
+        const std::string path =
+            std::string("MWG_OUTPUT_FAILURE:output:") + failure.kind;
         GdalDatasetPtr failingOutput(static_cast<GDALDataset*>(
-            GDALOpen("MWG_OUTPUT_CLOSE_FAILURE:output", GA_Update)));
+            GDALOpen(path.c_str(), GA_Update)));
         ASSERT_NE(failingOutput, nullptr);
-        OutputFlushFailureAlgorithm::outputDataset = failingOutput.release();
-        GdalAlgorithmRunner runner("mwg-test output-flush-failure");
+        OutputFailureAlgorithm::outputDataset = failingOutput.release();
+        OutputFailureAlgorithm::runSucceeded = failure.runSucceeded;
+        GdalAlgorithmRunner failingRunner("mwg-test output-failure");
 
-        EXPECT_FALSE(runner.Run());
-        EXPECT_NE(runner.Result().ErrorMsg().find("Simulated output close failure"),
-                  std::string::npos) << runner.Result().DetailedErrorMsg();
-        OutputFlushFailureAlgorithm::outputDataset = nullptr;
+        EXPECT_FALSE(failingRunner.Run());
+        EXPECT_NE(
+            failingRunner.Result().ErrorMsg().find(failure.diagnostic),
+            std::string::npos)
+            << failingRunner.Result().DetailedErrorMsg();
+        OutputFailureAlgorithm::outputDataset = nullptr;
     }
 
     mwg::test::TempDirectory directory;

@@ -9,10 +9,13 @@
  */
 #include <gtest/gtest.h>
 
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <tuple>
 
+#include <cpl_error.h>
 #include <gdal_priv.h>
 #include <ogrsf_frmts.h>
 
@@ -79,6 +82,102 @@ namespace
         output.reset();
         return path;
     }
+
+    class MidStreamFailureLayer final : public OGRLayer
+    {
+    public:
+        MidStreamFailureLayer()
+            : _definition(OGRFeatureDefn::CreateFeatureDefn("features"))
+        {
+            _definition->Reference();
+            _definition->SetGeomType(wkbPolygon);
+        }
+
+        ~MidStreamFailureLayer() override
+        {
+            _definition->Release();
+        }
+
+        void ResetReading() override
+        {
+            _firstFeatureReturned = false;
+        }
+
+        OGRFeature* GetNextFeature() override
+        {
+            if (!_firstFeatureReturned)
+            {
+                _firstFeatureReturned = true;
+                OGRFeatureUniquePtr feature(
+                    OGRFeature::CreateFeature(_definition));
+                auto* polygon = new OGRPolygon();
+                auto* ring = new OGRLinearRing();
+                ring->addPoint(0.0, 0.0);
+                ring->addPoint(1.0, 0.0);
+                ring->addPoint(1.0, 1.0);
+                ring->addPoint(0.0, 1.0);
+                ring->addPoint(0.0, 0.0);
+                polygon->addRingDirectly(ring);
+                if (feature->SetGeometryDirectly(polygon) != OGRERR_NONE)
+                {
+                    OGRGeometryFactory::destroyGeometry(polygon);
+                    return nullptr;
+                }
+                return feature.release();
+            }
+
+            CPLError(
+                CE_Failure,
+                CPLE_AppDefined,
+                "%s",
+                "Simulated mid-stream feature read failure");
+            return nullptr;
+        }
+
+        const OGRFeatureDefn* GetLayerDefn() const override
+        {
+            return _definition;
+        }
+
+        int TestCapability(const char*) const override
+        {
+            return FALSE;
+        }
+
+    protected:
+        OGRErr IGetExtent(
+            int,
+            OGREnvelope* extent,
+            bool) override
+        {
+            extent->MinX = 0.0;
+            extent->MinY = 0.0;
+            extent->MaxX = 1.0;
+            extent->MaxY = 1.0;
+            return OGRERR_NONE;
+        }
+
+    private:
+        OGRFeatureDefn* _definition;
+        bool _firstFeatureReturned = false;
+    };
+
+    class MidStreamFailureDataset final : public GDALDataset
+    {
+    public:
+        int GetLayerCount() const override
+        {
+            return 1;
+        }
+
+        const OGRLayer* GetLayer(int index) const override
+        {
+            return index == 0 ? &_layer : nullptr;
+        }
+
+    private:
+        MidStreamFailureLayer _layer;
+    };
 
     class VectorRenderSceneTest : public testing::TestWithParam<const char*>
     {
@@ -164,4 +263,49 @@ TEST(VectorRenderScene, LinearizesCurvedPolygonGeometry)
     ASSERT_EQ(scene.polygons.size(), 1u);
     ASSERT_EQ(scene.polygons.front().size(), 1u);
     EXPECT_GT(scene.polygons.front().front().size(), 5u);
+}
+
+TEST(VectorRenderScene, PropagatesMidStreamFeatureReadFailure)
+{
+    GdalEnvironment::Initialize();
+    const auto deregister = [](GDALDriver* driver)
+    {
+        GetGDALDriverManager()->DeregisterDriver(driver);
+        delete driver;
+    };
+    const std::unique_ptr<GDALDriver, decltype(deregister)> driver{
+        std::make_unique<GDALDriver>().release(),
+        deregister};
+    driver->SetDescription("MWGMidStreamFailure");
+    driver->SetMetadataItem(GDAL_DCAP_VECTOR, "YES");
+    driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
+    driver->pfnIdentify = [](GDALOpenInfo* info)
+    {
+        return std::string_view(info->pszFilename).starts_with(
+                   "MWG_VECTOR_READ_FAILURE:")
+                   ? TRUE
+                   : FALSE;
+    };
+    driver->pfnOpen = [](GDALOpenInfo* info) -> GDALDataset*
+    {
+        return std::string_view(info->pszFilename).starts_with(
+                   "MWG_VECTOR_READ_FAILURE:")
+                   ? new MidStreamFailureDataset()
+                   : nullptr;
+    };
+    GetGDALDriverManager()->RegisterDriver(driver.get());
+
+    const auto dataset = VectorDataset::Open("MWG_VECTOR_READ_FAILURE:features");
+    try
+    {
+        (void)rendering::CreateVectorRenderScene(dataset->Layer(0));
+        FAIL() << "Expected scene creation to report the feature read failure";
+    }
+    catch (const CoreError& error)
+    {
+        EXPECT_NE(
+            std::string(error.what()).find(
+                "Simulated mid-stream feature read failure"),
+            std::string::npos);
+    }
 }
