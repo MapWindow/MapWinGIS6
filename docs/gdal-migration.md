@@ -1,11 +1,12 @@
 # GDAL migration
 
-## From GdalUtils (v5) to GdalUtils2 (v6)
+## From GdalUtils (v5) to the v6 GDAL APIs
 
-MapWinGIS 5 exposed GDAL operations through the COM `GdalUtils` object. The
-ActiveX wrapper is not part of MapWinGIS6 yet, so v6 does not currently expose
-a COM `GdalUtils2` object. The native replacement is `GdalAlgorithmRunner`
-combined with the typed option structures in
+MapWinGIS 5 exposed GDAL operations through the COM `GdalUtils` object.
+MapWinGIS6 exposes asynchronous generic GDAL execution through the ActiveX
+wrapper's `IMapWinGISControlGdal` interface; this is not a binary-compatible
+`GdalUtils` or `GdalUtils2` interface. The native replacement is
+`GdalAlgorithmRunner` combined with the typed option structures in
 `mapwingis/gdal/GdalTypedOptions.h`.
 
 ### Raster conversion
@@ -78,5 +79,5 @@ connection flags are accepted but ignored: each operation owns its GDAL
 dataset handles.
 
 The compatibility methods are native C++ APIs, not binary-compatible COM
-interfaces. The future ActiveX layer must translate COM values and legacy
-error codes to the core API.
+interfaces. The ActiveX wrapper translates its generic COM arguments and
+results to the core API; it does not expose these operation-specific methods.
