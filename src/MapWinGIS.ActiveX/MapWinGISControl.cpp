@@ -321,6 +321,10 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
         return E_POINTER;
     }
     *operationId = 0;
+    if (_gdalClosing)
+    {
+        return E_UNEXPECTED;
+    }
     if (!_gdalDispatchWindow.IsWindow())
     {
         if (_gdalDispatchWindow.Create(
@@ -680,19 +684,66 @@ LRESULT CMapWinGISControl::OnGdalDispatch(
     BOOL& handled)
 {
     handled = TRUE;
-    for (const mwg::activex::GdalOperationNotification& notification :
-         _gdalDispatcher.DrainNotifications())
+    if (_gdalDispatching || !_gdalDispatcher.IsDispatchActive())
     {
-        const HRESULT result =
-            notification.kind == mwg::activex::GdalNotificationKind::Progress
-            ? FireGdalProgress(notification)
-            : FireGdalOperationCompleted(notification.operationId);
-        if (FAILED(result))
+        return 0;
+    }
+
+    _gdalDispatching = true;
+    struct DispatchGuard final
+    {
+        CMapWinGISControl& control;
+
+        ~DispatchGuard()
         {
-            _gdalDispatcher.RecordCallbackError(
-                notification.operationId,
-                result,
-                FormatHresult(result));
+            control._gdalDispatching = false;
+            if (control._gdalDispatchWindowDestroyPending)
+            {
+                control.DestroyGdalDispatchWindow();
+            }
+        }
+    } dispatchGuard{*this};
+
+    while (_gdalDispatcher.IsDispatchActive())
+    {
+        const auto notifications = _gdalDispatcher.DrainNotifications();
+        if (notifications.empty())
+        {
+            break;
+        }
+
+        for (const mwg::activex::GdalOperationNotification& notification :
+             notifications)
+        {
+            if (!_gdalDispatcher.IsDispatchActive())
+            {
+                break;
+            }
+            if (!_gdalDispatcher.BeginNotificationDelivery(
+                    notification.operationId))
+            {
+                continue;
+            }
+
+            struct NotificationGuard final
+            {
+                mwg::activex::GdalOperationDispatcher& dispatcher;
+                std::uint64_t operationId;
+
+                ~NotificationGuard()
+                {
+                    dispatcher.EndNotificationDelivery(operationId);
+                }
+            } notificationGuard{_gdalDispatcher, notification.operationId};
+
+            const HRESULT result =
+                notification.kind == mwg::activex::GdalNotificationKind::Progress
+                ? FireGdalProgress(notification)
+                : FireGdalOperationCompleted(notification.operationId);
+            if (FAILED(result))
+            {
+                RecordGdalCallbackError(notification.operationId, result);
+            }
         }
     }
     return 0;
@@ -704,8 +755,15 @@ LRESULT CMapWinGISControl::OnDestroy(
     LPARAM,
     BOOL& handled)
 {
-    _gdalDispatcher.Shutdown();
-    _gdalDispatchWindow.Destroy();
+    if (_gdalClosing)
+    {
+        _gdalDispatcher.Shutdown();
+    }
+    else
+    {
+        _gdalDispatcher.Suspend();
+    }
+    DestroyGdalDispatchWindow();
     handled = FALSE;
     return 0;
 }
@@ -713,6 +771,7 @@ LRESULT CMapWinGISControl::OnDestroy(
 void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
 {
     auto* const instance = static_cast<CMapWinGISControl*>(control);
+    ATL::CComPtr<CMapWinGISControl> lifetime(instance);
     BOOL handled = FALSE;
     try
     {
@@ -725,6 +784,44 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
     catch (const std::exception& exception)
     {
         ::OutputDebugStringA(exception.what());
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
+{
+    _gdalClosing = true;
+    _gdalDispatcher.Shutdown();
+    DestroyGdalDispatchWindow();
+    return ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
+}
+
+void CMapWinGISControl::DestroyGdalDispatchWindow() noexcept
+{
+    if (_gdalDispatching)
+    {
+        _gdalDispatchWindowDestroyPending = true;
+        return;
+    }
+
+    _gdalDispatchWindowDestroyPending = false;
+    _gdalDispatchWindow.Destroy();
+}
+
+void CMapWinGISControl::RecordGdalCallbackError(
+    const std::uint64_t operationId,
+    const HRESULT result) noexcept
+{
+    try
+    {
+        _gdalDispatcher.RecordCallbackError(
+            operationId,
+            result,
+            FormatHresult(result));
+    }
+    catch (const std::bad_alloc&)
+    {
+        ::OutputDebugStringW(
+            L"MapWinGIS: unable to retain a COM event callback failure.\n");
     }
 }
 
@@ -760,9 +857,14 @@ HRESULT CMapWinGISControl::FireGdalProgress(
     HRESULT firstError = S_OK;
     for (const ATL::CComPtr<IUnknown>& unknown : sinks)
     {
+        if (!_gdalDispatcher.IsDispatchActive())
+        {
+            break;
+        }
         ATL::CComQIPtr<IDispatch> sink(unknown);
         if (sink == nullptr)
         {
+            RecordGdalCallbackError(notification.operationId, E_NOINTERFACE);
             if (SUCCEEDED(firstError))
             {
                 firstError = E_NOINTERFACE;
@@ -790,6 +892,10 @@ HRESULT CMapWinGISControl::FireGdalProgress(
         if (FAILED(result) && SUCCEEDED(firstError))
         {
             firstError = result;
+        }
+        if (FAILED(result))
+        {
+            RecordGdalCallbackError(notification.operationId, result);
         }
         arguments[0].vt = VT_EMPTY;
         arguments[0].bstrVal = nullptr;
@@ -822,9 +928,14 @@ HRESULT CMapWinGISControl::FireGdalOperationCompleted(
     HRESULT firstError = S_OK;
     for (const ATL::CComPtr<IUnknown>& unknown : sinks)
     {
+        if (!_gdalDispatcher.IsDispatchActive())
+        {
+            break;
+        }
         ATL::CComQIPtr<IDispatch> sink(unknown);
         if (sink == nullptr)
         {
+            RecordGdalCallbackError(operationId, E_NOINTERFACE);
             if (SUCCEEDED(firstError))
             {
                 firstError = E_NOINTERFACE;
@@ -848,6 +959,10 @@ HRESULT CMapWinGISControl::FireGdalOperationCompleted(
         if (FAILED(result) && SUCCEEDED(firstError))
         {
             firstError = result;
+        }
+        if (FAILED(result))
+        {
+            RecordGdalCallbackError(operationId, result);
         }
     }
     return firstError;
@@ -882,5 +997,5 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
 CMapWinGISControl::~CMapWinGISControl()
 {
     _gdalDispatcher.Shutdown();
-    _gdalDispatchWindow.Destroy();
+    DestroyGdalDispatchWindow();
 }

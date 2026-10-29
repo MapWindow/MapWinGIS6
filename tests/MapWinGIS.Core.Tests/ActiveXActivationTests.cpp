@@ -44,6 +44,7 @@ namespace
     {
     public:
         using ProgressCallback = HRESULT(*)(void*, LONGLONG);
+        using CompletionCallback = HRESULT(*)(void*, LONGLONG);
 
         HRESULT STDMETHODCALLTYPE QueryInterface(
             REFIID interfaceId,
@@ -134,6 +135,8 @@ namespace
                 : parameters->rgvarg[0].llVal;
             ProgressCallback progressCallback = nullptr;
             void* progressContext = nullptr;
+            CompletionCallback completionCallback = nullptr;
+            void* completionContext = nullptr;
             {
                 std::lock_guard lock(_mutex);
                 _ownerThread = std::this_thread::get_id();
@@ -158,10 +161,18 @@ namespace
                 }
                 progressCallback = _progressCallback;
                 progressContext = _progressContext;
+                completionCallback = _completionCallback;
+                completionContext = _completionContext;
             }
-            return memberId == 1 && progressCallback != nullptr
-                ? progressCallback(progressContext, operationId)
-                : S_OK;
+            if (memberId == 1 && progressCallback != nullptr)
+            {
+                return progressCallback(progressContext, operationId);
+            }
+            if (memberId == 2 && completionCallback != nullptr)
+            {
+                return completionCallback(completionContext, operationId);
+            }
+            return S_OK;
         }
 
         void SetProgressCallback(
@@ -171,6 +182,15 @@ namespace
             std::lock_guard lock(_mutex);
             _progressCallback = callback;
             _progressContext = context;
+        }
+
+        void SetCompletionCallback(
+            const CompletionCallback callback,
+            void* const context) noexcept
+        {
+            std::lock_guard lock(_mutex);
+            _completionCallback = callback;
+            _completionContext = context;
         }
 
         [[nodiscard]] bool HasCompleted(const LONGLONG operationId) const
@@ -197,6 +217,8 @@ namespace
         std::vector<LONGLONG> _completedOperations;
         ProgressCallback _progressCallback = nullptr;
         void* _progressContext = nullptr;
+        CompletionCallback _completionCallback = nullptr;
+        void* _completionContext = nullptr;
     };
 
     class HostedProgressAlgorithm final : public GDALAlgorithm
@@ -299,6 +321,48 @@ namespace
     {
         return E_FAIL;
     }
+
+    HRESULT FailCompletion(void*, LONGLONG)
+    {
+        return E_FAIL;
+    }
+
+    struct ComEndAttempt final
+    {
+        IMapWinGISControlGdal* control = nullptr;
+        HRESULT result = E_FAIL;
+
+        static HRESULT TryEnd(void* context, const LONGLONG operationId)
+        {
+            auto& attempt = *static_cast<ComEndAttempt*>(context);
+            VARIANT_BOOL succeeded = VARIANT_FALSE;
+            VARIANT_BOOL cancelled = VARIANT_FALSE;
+            LONG errorCode = 0;
+            LONG callbackErrorCode = 0;
+            BSTR callbackError = nullptr;
+            BSTR summary = nullptr;
+            BSTR diagnostics = nullptr;
+            SAFEARRAY* warnings = nullptr;
+            attempt.result = attempt.control->EndGdalOperation(
+                operationId,
+                &succeeded,
+                &cancelled,
+                &errorCode,
+                &callbackErrorCode,
+                &callbackError,
+                &summary,
+                &diagnostics,
+                &warnings);
+            SysFreeString(callbackError);
+            SysFreeString(summary);
+            SysFreeString(diagnostics);
+            if (warnings != nullptr)
+            {
+                SafeArrayDestroy(warnings);
+            }
+            return S_OK;
+        }
+    };
 
     struct ComGdalResult final
     {
@@ -1073,6 +1137,34 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             EXPECT_FALSE(callbackFailureResult.callbackError.empty());
 
             eventSink->SetProgressCallback(nullptr, nullptr);
+            ComPtr<GdalEventSink> endSink;
+            endSink.Attach(new GdalEventSink());
+            DWORD endSinkCookie = 0;
+            ASSERT_TRUE(SUCCEEDED(connectionPoint->Advise(
+                endSink.Get(),
+                &endSinkCookie)));
+            ComEndAttempt endAttempt{gdalControl};
+            eventSink->SetCompletionCallback(&FailCompletion, nullptr);
+            endSink->SetCompletionCallback(&ComEndAttempt::TryEnd, &endAttempt);
+            LONGLONG callbackEndOperationId = 0;
+            ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
+                gdalControl,
+                L"mwg-test-activex diagnostics",
+                {},
+                &callbackEndOperationId)));
+            ComGdalResult callbackEndResult;
+            ASSERT_TRUE(SUCCEEDED(finishOperation(
+                callbackEndOperationId,
+                callbackEndResult)));
+            EXPECT_EQ(endAttempt.result, E_PENDING);
+            EXPECT_EQ(
+                callbackEndResult.callbackErrorCode,
+                static_cast<LONG>(E_FAIL));
+            EXPECT_FALSE(callbackEndResult.callbackError.empty());
+            eventSink->SetCompletionCallback(nullptr, nullptr);
+            endSink->SetCompletionCallback(nullptr, nullptr);
+            EXPECT_TRUE(SUCCEEDED(connectionPoint->Unadvise(endSinkCookie)));
+
             LONGLONG warningOperationId = 0;
             ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
                 gdalControl,

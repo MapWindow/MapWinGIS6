@@ -114,6 +114,7 @@ public:
         BSTR* summary,
         BSTR* diagnostics,
         SAFEARRAY** warnings) override;
+    STDMETHOD(Close)(DWORD saveOption) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnGdalDispatch(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -127,12 +128,19 @@ private:
     HRESULT FireGdalProgress(
         const mwg::activex::GdalOperationNotification& notification);
     HRESULT FireGdalOperationCompleted(const std::uint64_t operationId);
+    void DestroyGdalDispatchWindow() noexcept;
+    void RecordGdalCallbackError(
+        std::uint64_t operationId,
+        HRESULT result) noexcept;
 
     std::unique_ptr<mwg::VectorDataset> _dataset;
     std::optional<mwg::rendering::VectorRenderScene> _scene;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalOperationDispatcher _gdalDispatcher;
     mwg::activex::GdalDispatchWindow _gdalDispatchWindow;
+    bool _gdalDispatching = false;
+    bool _gdalDispatchWindowDestroyPending = false;
+    bool _gdalClosing = false;
     LONGLONG _featureCount = 0;
 };
 

@@ -108,10 +108,13 @@ operations, including completed results not yet ended. Repeated cancellation
 returns `S_FALSE`; cancellation of an unknown operation returns
 `E_INVALIDARG`; ending a still-running operation returns `E_PENDING`.
 Event-handler failures are reported separately from GDAL execution status with
-their HRESULT and message.
-Closing or destroying the control requests cancellation and discards queued
-events. A worker does not wait for the UI thread, but a GDAL driver without
-progress callbacks may continue until its current native call returns.
+their HRESULT and message. Result retrieval returns `E_PENDING` while an event
+handler is running, so handlers must retrieve results after event delivery
+returns. Destroying the control window suspends dispatch and requests
+cancellation; `IOleObject::Close` permanently shuts down the dispatcher.
+Reactivation resumes dispatch for retained results. A worker does not wait for
+the UI thread, but a GDAL driver without progress callbacks may continue until
+its current native call returns.
 
 This is a new v6 interface, not a binary-compatible implementation of the
 legacy `IGdalUtils` interface. The old interface uses a different IID and

@@ -10,11 +10,14 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <utility>
+
+#include <windows.h>
 
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 
@@ -28,6 +31,7 @@ namespace mwg::activex
             GdalCancellationToken cancellation;
             bool completed = false;
             bool completionPending = false;
+            bool notificationDeliveryInProgress = false;
             int callbackErrorCode = 0;
             std::string callbackError;
             std::optional<GdalOperationNotification> progress;
@@ -42,11 +46,93 @@ namespace mwg::activex
         WorkerFinishedCallback workerFinishedCallback = nullptr;
         void* workerFinishedContext = nullptr;
         bool wakePending = false;
+        bool suspended = false;
         bool stopping = false;
     };
 
     namespace
     {
+        int g_moduleAnchor = 0;
+
+        struct WorkerExitContext final
+        {
+            HMODULE module = nullptr;
+            HANDLE worker = nullptr;
+        };
+
+        DWORD WINAPI ReleaseModuleAfterWorkerExit(void* const parameter) noexcept
+        {
+            std::unique_ptr<WorkerExitContext> context(
+                static_cast<WorkerExitContext*>(parameter));
+            static_cast<void>(::WaitForSingleObject(context->worker, INFINITE));
+            ::CloseHandle(context->worker);
+            const HMODULE module = context->module;
+            context.reset();
+            ::FreeLibraryAndExitThread(module, 0);
+        }
+
+        [[nodiscard]] HMODULE AcquireModuleReference()
+        {
+            HMODULE module = nullptr;
+            if (!::GetModuleHandleExW(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                    reinterpret_cast<LPCWSTR>(&g_moduleAnchor),
+                    &module))
+            {
+                throw std::runtime_error(
+                    "The ActiveX module could not be pinned for a GDAL worker.");
+            }
+            return module;
+        }
+
+        void RetainModuleUntilWorkerExit(
+            std::thread& worker,
+            const HMODULE module) noexcept
+        {
+            HANDLE workerHandle = nullptr;
+            if (!::DuplicateHandle(
+                    ::GetCurrentProcess(),
+                    worker.native_handle(),
+                    ::GetCurrentProcess(),
+                    &workerHandle,
+                    SYNCHRONIZE,
+                    FALSE,
+                    0))
+            {
+                ::OutputDebugStringW(
+                    L"MapWinGIS: unable to duplicate a GDAL worker handle; retaining the module reference.\n");
+                return;
+            }
+
+            auto* const context = new (std::nothrow) WorkerExitContext{
+                module,
+                workerHandle};
+            if (context == nullptr)
+            {
+                ::CloseHandle(workerHandle);
+                ::OutputDebugStringW(
+                    L"MapWinGIS: unable to allocate a GDAL worker module-lifetime watcher; retaining the module reference.\n");
+                return;
+            }
+
+            HANDLE watcher = ::CreateThread(
+                nullptr,
+                0,
+                &ReleaseModuleAfterWorkerExit,
+                context,
+                0,
+                nullptr);
+            if (watcher == nullptr)
+            {
+                ::CloseHandle(workerHandle);
+                delete context;
+                ::OutputDebugStringW(
+                    L"MapWinGIS: unable to start a GDAL worker module-lifetime watcher; retaining the module reference.\n");
+                return;
+            }
+            ::CloseHandle(watcher);
+        }
+
         [[nodiscard]] bool HasPendingNotifications(
             const GdalOperationDispatcher::State& state) noexcept
         {
@@ -62,7 +148,7 @@ namespace mwg::activex
 
         void WakeOwner(GdalOperationDispatcher::State& state) noexcept
         {
-            if (state.stopping || state.wakePending ||
+            if (state.stopping || state.suspended || state.wakePending ||
                 state.wakeCallback == nullptr ||
                 !HasPendingNotifications(state))
             {
@@ -80,7 +166,8 @@ namespace mwg::activex
         {
             std::lock_guard lock(state->mutex);
             const auto operation = state->operations.find(operationId);
-            if (state->stopping || operation == state->operations.end() ||
+            if (state->stopping || state->suspended ||
+                operation == state->operations.end() ||
                 operation->second->completed)
             {
                 return;
@@ -218,6 +305,7 @@ namespace mwg::activex
         std::lock_guard lock(_state->mutex);
         _state->wakeCallback = callback;
         _state->wakeContext = context;
+        _state->suspended = callback == nullptr;
         _state->wakePending = false;
         WakeOwner(*_state);
     }
@@ -237,6 +325,7 @@ namespace mwg::activex
     {
         std::shared_ptr<State::Operation> operation;
         std::uint64_t operationId = 0;
+        HMODULE workerModule = nullptr;
         WorkerFinishedCallback workerFinishedCallback = nullptr;
         void* workerFinishedContext = nullptr;
         {
@@ -263,6 +352,7 @@ namespace mwg::activex
 
         try
         {
+            workerModule = AcquireModuleReference();
             std::thread worker(
                 Execute,
                 _state,
@@ -271,10 +361,16 @@ namespace mwg::activex
                 std::move(arguments),
                 workerFinishedCallback,
                 workerFinishedContext);
+            RetainModuleUntilWorkerExit(worker, workerModule);
+            workerModule = nullptr;
             worker.detach();
         }
         catch (...)
         {
+            if (workerModule != nullptr)
+            {
+                ::FreeLibrary(workerModule);
+            }
             std::lock_guard lock(_state->mutex);
             _state->operations.erase(operationId);
             throw;
@@ -319,6 +415,10 @@ namespace mwg::activex
         {
             return GdalEndResult::Pending;
         }
+        if (operation->second->notificationDeliveryInProgress)
+        {
+            return GdalEndResult::Pending;
+        }
 
         result = std::move(operation->second->result);
         result.callbackErrorCode = operation->second->callbackErrorCode;
@@ -341,11 +441,47 @@ namespace mwg::activex
         {
             return GdalEndResult::Pending;
         }
+        if (operation->second->notificationDeliveryInProgress)
+        {
+            return GdalEndResult::Pending;
+        }
 
         result = operation->second->result;
         result.callbackErrorCode = operation->second->callbackErrorCode;
         result.callbackError = operation->second->callbackError;
         return GdalEndResult::Ended;
+    }
+
+    bool GdalOperationDispatcher::BeginNotificationDelivery(
+        const std::uint64_t operationId) noexcept
+    {
+        std::lock_guard lock(_state->mutex);
+        const auto operation = _state->operations.find(operationId);
+        if (_state->stopping || _state->suspended ||
+            operation == _state->operations.end() ||
+            operation->second->notificationDeliveryInProgress)
+        {
+            return false;
+        }
+        operation->second->notificationDeliveryInProgress = true;
+        return true;
+    }
+
+    void GdalOperationDispatcher::EndNotificationDelivery(
+        const std::uint64_t operationId) noexcept
+    {
+        std::lock_guard lock(_state->mutex);
+        const auto operation = _state->operations.find(operationId);
+        if (operation != _state->operations.end())
+        {
+            operation->second->notificationDeliveryInProgress = false;
+        }
+    }
+
+    bool GdalOperationDispatcher::IsDispatchActive() const noexcept
+    {
+        std::lock_guard lock(_state->mutex);
+        return !_state->stopping && !_state->suspended;
     }
 
     std::vector<GdalOperationNotification>
@@ -399,6 +535,7 @@ namespace mwg::activex
         }
 
         _state->stopping = true;
+        _state->suspended = false;
         _state->wakeCallback = nullptr;
         _state->wakeContext = nullptr;
         _state->wakePending = false;
@@ -408,6 +545,27 @@ namespace mwg::activex
             operation->cancellation.Cancel();
             operation->progress.reset();
             operation->completionPending = false;
+        }
+    }
+
+    void GdalOperationDispatcher::Suspend() noexcept
+    {
+        std::lock_guard lock(_state->mutex);
+        if (_state->stopping)
+        {
+            return;
+        }
+
+        _state->suspended = true;
+        _state->wakeCallback = nullptr;
+        _state->wakeContext = nullptr;
+        _state->wakePending = false;
+        for (auto& [operationId, operation] : _state->operations)
+        {
+            static_cast<void>(operationId);
+            operation->cancellation.Cancel();
+            operation->progress.reset();
+            operation->completionPending = operation->completed;
         }
     }
 }

@@ -101,11 +101,16 @@ namespace mwg::activex
         [[nodiscard]] GdalEndResult End(
             std::uint64_t operationId,
             GdalOperationSnapshot& result);
+        [[nodiscard]] bool BeginNotificationDelivery(
+            std::uint64_t operationId) noexcept;
+        void EndNotificationDelivery(std::uint64_t operationId) noexcept;
+        [[nodiscard]] bool IsDispatchActive() const noexcept;
         [[nodiscard]] std::vector<GdalOperationNotification> DrainNotifications();
         void RecordCallbackError(
             std::uint64_t operationId,
             int errorCode,
             std::string message);
+        void Suspend() noexcept;
         void Shutdown() noexcept;
 
     private:
