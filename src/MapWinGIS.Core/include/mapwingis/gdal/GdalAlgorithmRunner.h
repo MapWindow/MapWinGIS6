@@ -15,43 +15,11 @@
 #include <vector>
 
 #include "mapwingis/core/Api.h"
-#include "mapwingis/gdal/GdalRuntime.h"
-
-class GDALDataset;
+#include "mapwingis/gdal/GdalOperationResult.h"
+#include "mapwingis/gdal/GdalProgress.h"
 
 namespace mwg
 {
-    /// Releases a dataset reference returned by GdalAlgorithmRunner.
-    struct MWG_CORE_API GdalDatasetDeleter
-    {
-        void operator()(GDALDataset* dataset) const noexcept;
-    };
-
-    /// Owns a GDAL dataset transferred from a GdalAlgorithmRunner.
-    using GdalDatasetPtr = std::unique_ptr<GDALDataset, GdalDatasetDeleter>;
-
-    /// Owns an operation's diagnostics and any returned datasets.
-    /// Keep the result alive while using outputs that depend on retained datasets.
-    /// Not thread-safe for shared instances. Diagnostic queries copy strings.
-    struct MWG_CORE_API GdalOperationResult
-    {
-        bool succeeded = false;
-        GdalDatasetPtr outputDataset;
-        std::vector<GdalDatasetPtr> retainedDatasets;
-        std::vector<GdalError> errors;
-        bool cancelled = false;
-
-        [[nodiscard]] bool Succeeded() const noexcept { return succeeded; }
-        [[nodiscard]] bool WasCancelled() const noexcept { return cancelled; }
-        /// Last failure/fatal code, or zero when there are only warnings.
-        [[nodiscard]] int LastErrorCode() const noexcept;
-        /// Last failure/fatal message, or an empty string.
-        [[nodiscard]] std::string ErrorMsg() const;
-        /// All diagnostics with severity and code, one per line.
-        [[nodiscard]] std::string DetailedErrorMsg() const;
-        [[nodiscard]] const std::vector<GdalError>& AllErrors() const noexcept { return errors; }
-    };
-
     /// Configures and runs one GDAL algorithm instance.
     ///
     /// Construct a new runner for each execution. Run() may be called once and
@@ -86,8 +54,8 @@ namespace mwg
         /// Sets a list of string-valued algorithm argument values.
         [[nodiscard]] bool SetArgument(std::string_view name, const std::vector<std::string>& value);
         /// Sets a dataset or dataset-list argument and retains a reference.
-        /// Dataset lists receive one value. The input pointer is borrowed.
-        [[nodiscard]] bool SetDatasetArgument(std::string_view name, GDALDataset* value);
+        /// Dataset lists receive one value. The dataset remains owned by the caller.
+        [[nodiscard]] bool SetDatasetArgument(std::string_view name, const GdalDatasetPtr& value);
 
         /// Validates configured values using the instantiated GDAL algorithm's
         /// argument metadata and constraints.

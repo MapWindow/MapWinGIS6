@@ -10,6 +10,7 @@
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "internal/GdalExecution.h"
+#include "internal/GdalProgressAdapterAccess.h"
 
 #include <algorithm>
 #include <cpl_error.h>
@@ -298,7 +299,7 @@ namespace mwg
     }
 
     bool GdalAlgorithmRunner::SetDatasetArgument(const std::string_view name,
-                                                 GDALDataset* value)
+                                                 const GdalDatasetPtr& value)
     {
         const detail::GdalExecutionLock lock;
         if (!CanConfigure(name))
@@ -328,12 +329,12 @@ namespace mwg
         bool succeeded = false;
         if (argument->GetType() == GAAT_DATASET)
         {
-            succeeded = argument->Set(value);
+            succeeded = argument->Set(value.get());
         }
         else
         {
             std::vector<GDALArgDatasetValue> datasets;
-            datasets.emplace_back(value);
+            datasets.emplace_back(value.get());
             succeeded = argument->Set(std::move(datasets));
         }
         AppendErrors(_impl->errors, scope);
@@ -430,7 +431,9 @@ namespace mwg
         GdalProgressAdapter adapter(std::move(progress), cancellationToken);
         GdalErrorScope scope;
         const std::size_t previousCount = _impl->errors.size();
-        const bool succeeded = _impl->algorithm->Run(adapter.Function(), adapter.UserData());
+        const bool succeeded = _impl->algorithm->Run(
+            detail::GdalProgressAdapterAccess::Function(adapter),
+            detail::GdalProgressAdapterAccess::UserData(adapter));
         AppendErrors(_impl->errors, scope);
 
         // A successful GDAL Run must be finalized even if a callback cancelled

@@ -357,7 +357,7 @@ TEST(GdalModernCapabilities, RunnerRetainsDatasetArgumentUntilRunAndReleasesIt)
     GdalDatasetPtr output;
     {
         GdalAlgorithmRunner runner("raster convert");
-        ASSERT_TRUE(runner.SetDatasetArgument("input", source.get()));
+        ASSERT_TRUE(runner.SetDatasetArgument("input", source));
         ASSERT_TRUE(runner.SetArgument("output-format", "MEM"));
         EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount + 2);
 
@@ -371,6 +371,17 @@ TEST(GdalModernCapabilities, RunnerRetainsDatasetArgumentUntilRunAndReleasesIt)
     EXPECT_EQ(ReadPixel(output.get(), 0, 0), 42);
     output.reset();
     EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount);
+}
+
+TEST(GdalModernCapabilities, RunnerRejectsEmptyDatasetArgument)
+{
+    GdalEnvironment::Initialize();
+    GdalAlgorithmRunner runner("raster convert");
+    const GdalDatasetPtr empty;
+
+    EXPECT_FALSE(runner.SetDatasetArgument("input", empty));
+    ASSERT_FALSE(runner.Errors().empty());
+    EXPECT_NE(runner.Errors().back().message.find("must not be null"), std::string::npos);
 }
 
 TEST(GdalModernCapabilities, RunnerRetainsDatasetListArgumentUntilRunAndReleasesIt)
@@ -392,7 +403,7 @@ TEST(GdalModernCapabilities, RunnerRetainsDatasetListArgumentUntilRunAndReleases
     GdalDatasetPtr output;
     {
         GdalAlgorithmRunner runner("raster mosaic");
-        ASSERT_TRUE(runner.SetDatasetArgument("input", source.get()));
+        ASSERT_TRUE(runner.SetDatasetArgument("input", source));
         ASSERT_TRUE(runner.SetArgument("output", ToUtf8(mosaicPath)));
         ASSERT_TRUE(runner.SetArgument("output-format", "VRT"));
         EXPECT_EQ(retainedSource->GetRefCount(), initialReferenceCount + 2);

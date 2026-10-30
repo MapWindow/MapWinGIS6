@@ -7,11 +7,18 @@
  * Provides process-safe driver registration, configuration scopes, structured
  * error capture, and cancellation-aware progress callbacks.
  */
-#include "mapwingis/gdal/GdalRuntime.h"
+#include "mapwingis/gdal/GdalConfig.h"
+#include "mapwingis/gdal/GdalDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
+#include "mapwingis/gdal/GdalProgress.h"
 #include "internal/GdalExecution.h"
+#include "internal/GdalProgressAdapterAccess.h"
 
+#include <exception>
+#include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include <cpl_conv.h>
@@ -119,17 +126,28 @@ namespace mwg
         CPLSetConfigOption(ownedName.c_str(), nullptr);
     }
 
-    ScopedGdalConfigOption::ScopedGdalConfigOption(const std::string_view name, const std::string_view value)
-        : _name(name)
+    struct ScopedGdalConfigOption::Impl
+    {
+        explicit Impl(const std::string_view name) : name(name) {}
+
+        std::string name;
+        std::optional<std::string> previousValue;
+    };
+
+    ScopedGdalConfigOption::ScopedGdalConfigOption(
+        const std::string_view name, const std::string_view value)
+        : _impl(std::make_unique<Impl>(name))
     {
         ValidateOptionName(name);
-        _previousValue = GetGlobalConfigOption(_name);
-        GdalConfig::SetOption(_name, value);
+        _impl->previousValue = GetGlobalConfigOption(_impl->name);
+        GdalConfig::SetOption(_impl->name, value);
     }
 
     ScopedGdalConfigOption::~ScopedGdalConfigOption()
     {
-        CPLSetConfigOption(_name.c_str(), _previousValue ? _previousValue->c_str() : nullptr);
+        CPLSetConfigOption(
+            _impl->name.c_str(),
+            _impl->previousValue ? _impl->previousValue->c_str() : nullptr);
     }
 
     GdalErrorScope::GdalErrorScope()
@@ -191,67 +209,83 @@ namespace mwg
         return _cancelled.load(std::memory_order_relaxed);
     }
 
-    GdalProgressAdapter::GdalProgressAdapter(Callback callback, const GdalCancellationToken* cancellationToken)
-        : _callback(std::move(callback)),
-          _cancellationToken(cancellationToken)
+    struct GdalProgressAdapter::Impl
+    {
+        Impl(Callback callback, const GdalCancellationToken* cancellationToken)
+            : callback(std::move(callback)), cancellationToken(cancellationToken)
+        {
+        }
+
+        Callback callback;
+        const GdalCancellationToken* cancellationToken;
+        bool cancelled = false;
+        std::exception_ptr callbackException;
+    };
+
+    GdalProgressAdapter::GdalProgressAdapter(
+        Callback callback, const GdalCancellationToken* cancellationToken)
+        : _impl(std::make_unique<Impl>(std::move(callback), cancellationToken))
     {
     }
 
-    GdalProgressAdapter::NativeCallback GdalProgressAdapter::Function() const noexcept
-    {
-        return &HandleProgress;
-    }
-
-    void* GdalProgressAdapter::UserData() noexcept
-    {
-        return this;
-    }
+    GdalProgressAdapter::~GdalProgressAdapter() = default;
 
     bool GdalProgressAdapter::WasCancelled() const noexcept
     {
-        return _cancelled;
+        return _impl->cancelled;
     }
 
     void GdalProgressAdapter::RethrowCallbackException() const
     {
-        if (_callbackException)
-            std::rethrow_exception(_callbackException);
+        if (_impl->callbackException)
+            std::rethrow_exception(_impl->callbackException);
     }
 
-    int __stdcall GdalProgressAdapter::HandleProgress(
+    detail::GdalProgressAdapterAccess::NativeCallback detail::GdalProgressAdapterAccess::Function(
+        const GdalProgressAdapter&) noexcept
+    {
+        return &HandleProgress;
+    }
+
+    void* detail::GdalProgressAdapterAccess::UserData(GdalProgressAdapter& adapter) noexcept
+    {
+        return adapter._impl.get();
+    }
+
+    int __stdcall detail::GdalProgressAdapterAccess::HandleProgress(
         const double progress, const char* message, void* userData) noexcept
     {
         if (userData == nullptr)
             return 0;
 
-        auto& adapter = *static_cast<GdalProgressAdapter*>(userData);
-        if (adapter._cancelled)
+        auto& impl = *static_cast<GdalProgressAdapter::Impl*>(userData);
+        if (impl.cancelled)
             return 0;
-        if (adapter._cancellationToken != nullptr && adapter._cancellationToken->IsCancellationRequested())
+        if (impl.cancellationToken != nullptr && impl.cancellationToken->IsCancellationRequested())
         {
-            adapter._cancelled = true;
+            impl.cancelled = true;
             return 0;
         }
 
         try
         {
             const detail::GdalCallbackScope callbackScope;
-            if (adapter._callback && !adapter._callback(progress, message != nullptr ? message : ""))
+            if (impl.callback && !impl.callback(progress, message != nullptr ? message : ""))
             {
-                adapter._cancelled = true;
+                impl.cancelled = true;
                 return 0;
             }
-            if (adapter._cancellationToken != nullptr &&
-                adapter._cancellationToken->IsCancellationRequested())
+            if (impl.cancellationToken != nullptr &&
+                impl.cancellationToken->IsCancellationRequested())
             {
-                adapter._cancelled = true;
+                impl.cancelled = true;
                 return 0;
             }
         }
         catch (...)
         {
-            adapter._callbackException = std::current_exception();
-            adapter._cancelled = true;
+            impl.callbackException = std::current_exception();
+            impl.cancelled = true;
             return 0;
         }
 

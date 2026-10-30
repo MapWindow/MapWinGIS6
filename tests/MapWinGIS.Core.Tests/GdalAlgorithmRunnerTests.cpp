@@ -4,8 +4,8 @@
  * @file GdalAlgorithmRunnerTests.cpp
  * @brief Tests generic GDAL algorithm configuration and execution.
  *
- * Covers typed and command-line arguments, structured failures, finalization,
- * output dataset ownership, and raster conversion equivalence.
+ * Covers typed and command-line arguments, progress and cancellation,
+ * structured failures, output dataset ownership, and raster conversion.
  */
 #include <gtest/gtest.h>
 
@@ -444,6 +444,20 @@ TEST(GdalAlgorithmRunner, ReportsProgressAndCancellation)
     EXPECT_TRUE(cancelled.Result().WasCancelled());
     ASSERT_FALSE(cancelled.Errors().empty());
     EXPECT_NE(cancelled.Errors().back().message.find("cancelled"), std::string::npos);
+
+    GdalAlgorithmRunner cancelledInCallback("mwg-test progress");
+    GdalCancellationToken callbackCancellation;
+    int callbackCount = 0;
+    EXPECT_FALSE(cancelledInCallback.Run(
+        [&callbackCancellation, &callbackCount](double, std::string_view)
+        {
+            ++callbackCount;
+            callbackCancellation.Cancel();
+            return true;
+        },
+        &callbackCancellation));
+    EXPECT_TRUE(cancelledInCallback.Result().WasCancelled());
+    EXPECT_EQ(callbackCount, 1);
 }
 
 TEST(GdalAlgorithmRunner, LogsWarningsWithoutTurningSuccessIntoFailure)

@@ -11,7 +11,9 @@
 
 #include "internal/Utf8.h"
 #include "internal/GdalExecution.h"
+#include "internal/GdalProgressAdapterAccess.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
+#include "mapwingis/gdal/GdalConfig.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/gdal/GdalTypedOptions.h"
 
@@ -270,7 +272,9 @@ namespace mwg
                     if (translateOptions == nullptr)
                         return false;
                     GDALVectorTranslateOptionsSetProgress(
-                        translateOptions.get(), adapter.Function(), adapter.UserData());
+                        translateOptions.get(),
+                        detail::GdalProgressAdapterAccess::Function(adapter),
+                        detail::GdalProgressAdapterAccess::UserData(adapter));
 
                     GDALDatasetH sources[] = {input.get()};
                     int usageError = FALSE;
@@ -417,7 +421,9 @@ namespace mwg
                 if (translateOptions == nullptr)
                     return false;
                 GDALTranslateOptionsSetProgress(
-                    translateOptions.get(), adapter.Function(), adapter.UserData());
+                    translateOptions.get(),
+                    detail::GdalProgressAdapterAccess::Function(adapter),
+                    detail::GdalProgressAdapterAccess::UserData(adapter));
 
                 int usageError = FALSE;
                 DatasetPtr output(static_cast<GDALDataset*>(
@@ -457,7 +463,9 @@ namespace mwg
                 if (warpOptions == nullptr)
                     return false;
                 GDALWarpAppOptionsSetProgress(
-                    warpOptions.get(), adapter.Function(), adapter.UserData());
+                    warpOptions.get(),
+                    detail::GdalProgressAdapterAccess::Function(adapter),
+                    detail::GdalProgressAdapterAccess::UserData(adapter));
 
                 GDALDatasetH sources[] = {input.get()};
                 int usageError = FALSE;
@@ -576,7 +584,8 @@ namespace mwg
                     dataset.get(), resampling.c_str(), static_cast<int>(overviewLevels->size()),
                     overviewLevels->data(),
                     static_cast<int>(bandList.size()), bandList.data(),
-                    adapter.Function(), adapter.UserData());
+                    detail::GdalProgressAdapterAccess::Function(adapter),
+                    detail::GdalProgressAdapterAccess::UserData(adapter));
                 const bool closed = CloseDataset(dataset);
                 return result == CE_None && closed;
             });

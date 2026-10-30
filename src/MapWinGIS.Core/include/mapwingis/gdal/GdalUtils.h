@@ -18,7 +18,8 @@
 
 #include "mapwingis/core/Api.h"
 #include "mapwingis/core/Error.h"
-#include "mapwingis/gdal/GdalAlgorithmRunner.h"
+#include "mapwingis/gdal/GdalOperationResult.h"
+#include "mapwingis/gdal/GdalProgress.h"
 
 namespace mwg
 {
