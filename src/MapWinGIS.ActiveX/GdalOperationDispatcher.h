@@ -16,7 +16,7 @@
 #include <string_view>
 #include <vector>
 
-#include "mapwingis/gdal/GdalRuntime.h"
+#include "mapwingis/gdal/GdalProgress.h"
 
 namespace mwg::activex
 {

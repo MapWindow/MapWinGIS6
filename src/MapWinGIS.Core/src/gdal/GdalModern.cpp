@@ -103,7 +103,7 @@ namespace mwg
 
             if (index > 0)
             {
-                if (!runner.SetDatasetArgument("input", previousOutput.get()))
+                if (!runner.SetDatasetArgument("input", previousOutput))
                 {
                     AppendRunnerErrors(result, runner);
                     return result;

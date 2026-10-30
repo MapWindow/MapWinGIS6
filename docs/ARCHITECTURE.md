@@ -78,6 +78,9 @@ expect.
 - `GdalProgressAdapter` maps GDAL progress callbacks to C++ callbacks and
   checks a thread-safe `GdalCancellationToken`. Re-throw callback exceptions
   with `RethrowCallbackException()` after GDAL returns.
+- Public GDAL headers separate configuration (`GdalConfig.h`), diagnostics
+  (`GdalDiagnostics.h`), progress (`GdalProgress.h`), and operation results
+  (`GdalOperationResult.h`). The native progress callback ABI is internal.
 - GDAL and PROJ data (`gdal-data`, `proj.db`) are deployed next to
   `MapWinGIS.Core.dll` by the build (`Directory.Build.targets`,
   `MwgDeployRuntimeData`). Code must point GDAL/PROJ at those locations via

@@ -26,7 +26,7 @@
 
 #include "internal/Utf8.h"
 #include "internal/GdalExecution.h"
-#include "mapwingis/gdal/GdalRuntime.h"
+#include "mapwingis/gdal/GdalConfig.h"
 
 namespace mwg
 {

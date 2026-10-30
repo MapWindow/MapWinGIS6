@@ -22,6 +22,7 @@
 #include <ogrsf_frmts.h>
 
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
+#include "mapwingis/gdal/GdalConfig.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/gdal/GdalUtils.h"
 #include "TestData.h"
