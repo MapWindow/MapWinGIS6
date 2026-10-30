@@ -57,6 +57,11 @@ expect.
   throwing when probing is a normal use case (e.g. `Open`/`TryOpen`).
 - `std::optional` reports absent *values* (null cells, missing doubles), not
   operational failure. Keep the two distinct.
+- Long-running GDAL algorithm operations deliberately report ordinary
+  execution failure through a boolean result and `GdalOperationResult`, which
+  preserves diagnostics and cancellation state. Invalid arguments and other
+  exceptional failures use `CoreError` subclasses; exceptions thrown by user
+  callbacks or log handlers propagate after GDAL returns.
 
 ## GDAL lifecycle
 

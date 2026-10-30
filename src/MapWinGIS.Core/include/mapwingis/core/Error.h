@@ -4,8 +4,8 @@
  * @file Error.h
  * @brief Declares exceptions used to report core operation failures.
  *
- * CoreError is the base exception and OpenFailed represents data source open
- * failures. The ActiveX layer translates these exceptions to MapWinGIS errors.
+ * CoreError is the base exception. Its subclasses identify common operation
+ * failures for callers and the ActiveX layer.
  */
 #pragma once
 
@@ -36,6 +36,16 @@ namespace mwg
     {
     public:
         MWG_CORE_API explicit OpenFailed(const std::string& message)
+            : CoreError(message)
+        {
+        }
+    };
+
+    /// An argument is invalid for the requested operation.
+    class InvalidArgument : public CoreError
+    {
+    public:
+        MWG_CORE_API explicit InvalidArgument(const std::string& message)
             : CoreError(message)
         {
         }

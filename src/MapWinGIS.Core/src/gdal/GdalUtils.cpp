@@ -375,7 +375,7 @@ namespace mwg
         return JoinErrors(_impl->errors);
     }
 
-    std::vector<GdalError> GdalUtils::Errors() const
+    const std::vector<GdalError>& GdalUtils::Errors() const noexcept
     {
         return _impl->errors;
     }

@@ -9,12 +9,13 @@
  */
 #include "mapwingis/gdal/GdalTypedOptions.h"
 
+#include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "internal/Utf8.h"
 
 #include <charconv>
+#include <cmath>
 #include <limits>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -80,7 +81,7 @@ namespace mwg
                               std::chars_format::general,
                               std::numeric_limits<double>::max_digits10);
             if (error != std::errc{})
-                throw std::runtime_error("Could not format a GDAL option value.");
+                throw InvalidArgument("Could not format a GDAL option value.");
             return {buffer, end};
         }
 
@@ -117,6 +118,8 @@ namespace mwg
                     }
                     else
                     {
+                        if (!std::isfinite(value[0]) || !std::isfinite(value[1]))
+                            throw InvalidArgument("GDAL mosaic resolution values must be finite.");
                         std::string text = FormatDouble(value[0]);
                         text += ',';
                         text += FormatDouble(value[1]);

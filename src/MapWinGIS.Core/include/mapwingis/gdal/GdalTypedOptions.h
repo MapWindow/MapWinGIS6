@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "mapwingis/core/Api.h"
+#include "mapwingis/core/Error.h"
 
 namespace mwg
 {
@@ -41,7 +42,8 @@ namespace mwg
      * Pass the result to ConfigureGdalAlgorithm() with the matching algorithm.
      * Configuration can open input datasets. Run() performs execution separately.
      * Configuration and execution failures return false with diagnostics in
-     * GdalAlgorithmRunner::Errors(). ToArgs() does not report invalid options.
+     * GdalAlgorithmRunner::Errors(). ToArgs() does not validate GDAL algorithm
+     * constraints.
      *
      * @par Thread safety and cost
      * Concurrent ToArgs() calls are safe if no thread modifies the source
@@ -53,8 +55,8 @@ namespace mwg
      * Exceptions from allocation and filesystem path conversion propagate to
      * the caller. No GDAL diagnostic is recorded for these exceptions.
      * @throws std::bad_alloc If memory allocation fails.
-     * @throws std::runtime_error If numeric formatting fails in
-     * RasterReprojectOptions or RasterMosaicOptions.
+     * @throws InvalidArgument If numeric formatting fails, including when a
+     * RasterMosaicOptions resolution value is not finite.
      */
 
     using GdalAlgorithmArgumentValue =

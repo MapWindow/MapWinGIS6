@@ -13,6 +13,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -544,6 +545,15 @@ TEST(GdalTypedOptions, ReprojectsRasterToTheRequestedCrsBoundsAndSize)
     int hasNoData = false;
     EXPECT_DOUBLE_EQ(band->GetNoDataValue(&hasNoData), 255);
     EXPECT_TRUE(hasNoData);
+}
+
+TEST(GdalTypedOptions, RejectsNonFiniteMosaicResolutionWithInvalidArgument)
+{
+    RasterMosaicOptions options;
+    options.resolution = std::array<double, 2>{
+        std::numeric_limits<double>::quiet_NaN(), 1.0};
+
+    EXPECT_THROW((void)options.ToArgs(), InvalidArgument);
 }
 
 TEST(GdalTypedOptions, MosaicsAdjacentRastersAtTheRequestedResolution)

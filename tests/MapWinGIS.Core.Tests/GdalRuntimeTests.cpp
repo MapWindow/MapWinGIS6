@@ -124,9 +124,17 @@ TEST(GdalRuntime, ScopedConfigurationRestoresGlobalValueWithoutChangingThreadLoc
     CPLSetConfigOption(optionName, nullptr);
 }
 
-TEST(GdalRuntime, RejectsEmptyConfigurationName)
+TEST(GdalRuntime, RejectsInvalidConfigurationNamesAndValues)
 {
-    EXPECT_THROW(GdalConfig::ClearOption(""), std::invalid_argument);
+    EXPECT_THROW(GdalConfig::ClearOption(""), InvalidArgument);
+    EXPECT_THROW(GdalConfig::SetOption(std::string_view("name\0suffix", 11), "value"),
+                 InvalidArgument);
+    EXPECT_THROW(GdalConfig::SetOption("name", std::string_view("value\0suffix", 12)),
+                 InvalidArgument);
+
+    constexpr std::string_view optionName = "MWG_TEST_EMPTY_CONFIG_VALUE";
+    EXPECT_NO_THROW(GdalConfig::SetOption(optionName, ""));
+    GdalConfig::ClearOption(optionName);
 }
 
 TEST(GdalRuntime, CapturesStructuredGdalErrors)

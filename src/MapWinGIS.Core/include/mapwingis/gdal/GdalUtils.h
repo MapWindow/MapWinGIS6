@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "mapwingis/core/Api.h"
+#include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 
 namespace mwg
@@ -37,7 +38,8 @@ namespace mwg
      * from that operation.
      *
      * Progress overloads use the same synchronous callback contract as
-     * GdalAlgorithmRunner::Run(). Existing signatures remain available.
+     * GdalAlgorithmRunner::Run(). They remain supported because they provide
+     * progress and cancellation to callers of the legacy utility methods.
      * Result().WasCancelled() distinguishes token/callback cancellation from
      * callback exceptions and other failures. GDAL execution is serialized
      * with runners and convenience operations, not with direct dataset access.
@@ -60,8 +62,9 @@ namespace mwg
         /// Returns all diagnostics from the most recent operation, one per line.
         [[nodiscard]] std::string DetailedErrorMsg() const;
 
-        /// Returns all warning and failure diagnostics from the most recent operation.
-        [[nodiscard]] std::vector<GdalError> Errors() const;
+        /// Returns all diagnostics from the most recent operation.
+        /// The reference remains valid until the next operation or destruction.
+        [[nodiscard]] const std::vector<GdalError>& Errors() const noexcept;
 
         /// Snapshots the most recent operation, including cancellation state.
         [[nodiscard]] GdalOperationResult Result() const;
@@ -95,6 +98,7 @@ namespace mwg
                             const GdalCancellationToken* cancellationToken = nullptr);
 
         /// Converts vector data with legacy GDALVectorTranslate command-line options.
+        /// @note useSharedConnection is accepted for source compatibility but has no effect.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool GdalVectorTranslate(const std::filesystem::path& sourceFilename,
                                  const std::filesystem::path& destinationFilename,
@@ -102,6 +106,7 @@ namespace mwg
                                  bool useSharedConnection = false);
 
         /// Legacy vector translation with synchronous progress and cancellation.
+        /// @note useSharedConnection is accepted for source compatibility but has no effect.
         [[nodiscard]] bool GdalVectorTranslate(
                                  const std::filesystem::path& sourceFilename,
                                  const std::filesystem::path& destinationFilename,
@@ -111,6 +116,7 @@ namespace mwg
                                  const GdalCancellationToken* cancellationToken = nullptr);
 
         /// Reprojects vector data from one EPSG code to another.
+        /// @note useSharedConnection is accepted for source compatibility but has no effect.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool GdalVectorReproject(const std::filesystem::path& sourceFilename,
                                  const std::filesystem::path& destinationFilename,
@@ -119,6 +125,7 @@ namespace mwg
                                  bool useSharedConnection = false);
 
         /// Legacy vector reprojection with synchronous progress and cancellation.
+        /// @note useSharedConnection is accepted for source compatibility but has no effect.
         [[nodiscard]] bool GdalVectorReproject(
                                  const std::filesystem::path& sourceFilename,
                                  const std::filesystem::path& destinationFilename,
@@ -131,6 +138,8 @@ namespace mwg
         /// Builds overview levels; band indexes are one-based, and an empty list selects all bands.
         /// Configuration options are scoped to this call and restored afterward.
         /// They are process-wide during execution and are not isolated from concurrent GDAL calls.
+        /// @throws InvalidArgument if a configuration option name is empty or
+        /// contains a null byte, or if its value contains a null byte.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool GdalBuildOverviews(const std::filesystem::path& sourceFilename,
                                 std::string_view resamplingMethod,
@@ -140,6 +149,8 @@ namespace mwg
                                     configOptions = {});
 
         /// Legacy overview building with synchronous progress and cancellation.
+        /// @throws InvalidArgument if a configuration option name is empty or
+        /// contains a null byte, or if its value contains a null byte.
         [[nodiscard]] bool GdalBuildOverviews(
                                 const std::filesystem::path& sourceFilename,
                                 std::string_view resamplingMethod,
@@ -150,6 +161,7 @@ namespace mwg
                                 const GdalCancellationToken* cancellationToken = nullptr);
 
         /// Clips subject features by the overlay dataset's geometry.
+        /// @note useSharedConnection is accepted for source compatibility but has no effect.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool ClipVectorWithVector(const std::filesystem::path& subjectFilename,
                                   const std::filesystem::path& overlayFilename,
@@ -157,6 +169,7 @@ namespace mwg
                                   bool useSharedConnection = true);
 
         /// Legacy clipping with synchronous progress and cancellation.
+        /// @note useSharedConnection is accepted for source compatibility but has no effect.
         [[nodiscard]] bool ClipVectorWithVector(
                                   const std::filesystem::path& subjectFilename,
                                   const std::filesystem::path& overlayFilename,
