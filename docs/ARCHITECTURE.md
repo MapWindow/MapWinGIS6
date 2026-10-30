@@ -133,10 +133,12 @@ resources are released with the control. Resizing updates the OpenGL viewport
 and staging buffers without changing ownership of map data.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
-coordinator nor a backend loads datasets or implements GIS rules. Core
-sequentially reads Polygon, MultiPolygon, CurvePolygon, and MultiSurface
-features into an owned vector scene, linearizing curved geometries. The
-coordinator tries the OpenGL backend for simple convex polygons with one ring.
+coordinator nor a backend loads datasets or implements GIS rules. Core selects
+the first dataset layer and sequentially reads Polygon, MultiPolygon,
+CurvePolygon, and MultiSurface features into an owned vector scene, linearizing
+curved geometries. The shared `ViewTransform` supplies the same centered,
+aspect-preserving scale and 12-pixel margin to both renderers. The coordinator
+tries the OpenGL backend for simple convex polygons with one ring.
 OpenGL uses a context created on a hidden, never-presented window, draws with
 fixed-function calls into a framebuffer object (OpenGL 3.0 or
 `GL_EXT_framebuffer_object`), and reads pixels back into a reusable CPU buffer

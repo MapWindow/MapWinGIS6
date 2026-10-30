@@ -57,11 +57,12 @@ interface IID or silently add vtable members to it.
 
 These are new interfaces, not the MapWinGIS 5 type-library interfaces, and the
 control does not claim binary or API compatibility with existing v5 clients.
-The control loads only the first vector layer and currently prepares
-Polygon/MultiPolygon scene data. It does not expose the broad v5 map, layer,
-shape, event, or editing API. It draws in source coordinates without
-reprojection. OpenGL only handles convex single-ring polygons; GDI handles
-the supported polygon scene as the CPU fallback.
+Core scene creation selects only the first vector layer and currently prepares
+Polygon/MultiPolygon scene data; the control requests that scene from Core. It
+does not expose the broad v5 map, layer, shape, event, or editing API. It draws
+in source coordinates without reprojection. OpenGL only handles convex
+single-ring polygons; GDI handles the supported polygon scene as the CPU
+fallback.
 
 Keep these gaps visible when extending the COM surface. Reuse Core behavior,
 add only the automation members required by a concrete use case, and retain a

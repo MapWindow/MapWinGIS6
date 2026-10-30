@@ -70,6 +70,7 @@
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\OpenGlVectorLayerRenderer.cpp" />
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\GdalOperationDispatcher.cpp" />
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\VectorLayerRenderer.cpp" />
+    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\ViewTransform.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
     <ClCompile Include="VectorLayerTests.cpp" />
     <ClCompile Include="VectorRenderSceneTests.cpp" />

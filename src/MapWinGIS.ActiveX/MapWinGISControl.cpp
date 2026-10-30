@@ -17,246 +17,17 @@
 #include <utility>
 #include <vector>
 
+#include "ComConversion.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 namespace
 {
-    [[nodiscard]] HRESULT CopyToBstr(const std::wstring_view value, BSTR* result) noexcept
-    {
-        if (result == nullptr)
-        {
-            return E_POINTER;
-        }
-
-        *result = ::SysAllocStringLen(
-            value.data(),
-            static_cast<UINT>(value.size()));
-        return *result != nullptr ? S_OK : E_OUTOFMEMORY;
-    }
-
-    [[nodiscard]] HRESULT BstrToUtf8(const BSTR value, std::string& result)
-    {
-        if (value == nullptr)
-        {
-            return E_INVALIDARG;
-        }
-
-        const UINT length = ::SysStringLen(value);
-        if (length > static_cast<UINT>(std::numeric_limits<int>::max()) ||
-            std::wstring_view(value, length).find(L'\0') != std::wstring_view::npos)
-        {
-            return E_INVALIDARG;
-        }
-        if (length == 0)
-        {
-            result.clear();
-            return S_OK;
-        }
-
-        const int required = ::WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            value,
-            static_cast<int>(length),
-            nullptr,
-            0,
-            nullptr,
-            nullptr);
-        if (required == 0)
-        {
-            return E_INVALIDARG;
-        }
-
-        result.resize(static_cast<std::size_t>(required));
-        if (::WideCharToMultiByte(
-                CP_UTF8,
-                WC_ERR_INVALID_CHARS,
-                value,
-                static_cast<int>(length),
-                result.data(),
-                required,
-                nullptr,
-                nullptr) == 0)
-        {
-            return E_INVALIDARG;
-        }
-        return S_OK;
-    }
-
-    [[nodiscard]] HRESULT Utf8ToBstr(const std::string_view value, BSTR* result)
-    {
-        if (result == nullptr)
-        {
-            return E_POINTER;
-        }
-        *result = nullptr;
-        if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        {
-            return E_INVALIDARG;
-        }
-        if (value.empty())
-        {
-            *result = ::SysAllocStringLen(nullptr, 0);
-            return *result != nullptr ? S_OK : E_OUTOFMEMORY;
-        }
-
-        const int required = ::MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            value.data(),
-            static_cast<int>(value.size()),
-            nullptr,
-            0);
-        if (required == 0)
-        {
-            return E_INVALIDARG;
-        }
-
-        BSTR converted = ::SysAllocStringLen(nullptr, static_cast<UINT>(required));
-        if (converted == nullptr)
-        {
-            return E_OUTOFMEMORY;
-        }
-        if (::MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                static_cast<int>(value.size()),
-                converted,
-                required) == 0)
-        {
-            ::SysFreeString(converted);
-            return E_INVALIDARG;
-        }
-
-        *result = converted;
-        return S_OK;
-    }
-
-    [[nodiscard]] HRESULT CopyStringArray(
-        SAFEARRAY* source,
-        std::vector<std::string>& values)
-    {
-        if (source == nullptr)
-        {
-            return S_OK;
-        }
-        if (::SafeArrayGetDim(source) != 1)
-        {
-            return E_INVALIDARG;
-        }
-
-        VARTYPE elementType = VT_EMPTY;
-        if (FAILED(::SafeArrayGetVartype(source, &elementType)) ||
-            elementType != VT_BSTR)
-        {
-            return E_INVALIDARG;
-        }
-
-        LONG lowerBound = 0;
-        LONG upperBound = -1;
-        HRESULT result = ::SafeArrayGetLBound(source, 1, &lowerBound);
-        if (FAILED(result))
-        {
-            return result;
-        }
-        result = ::SafeArrayGetUBound(source, 1, &upperBound);
-        if (FAILED(result))
-        {
-            return result;
-        }
-        if (upperBound < lowerBound)
-        {
-            return S_OK;
-        }
-
-        const auto count =
-            static_cast<unsigned long long>(
-                static_cast<long long>(upperBound) -
-                static_cast<long long>(lowerBound) + 1);
-        if (count > static_cast<unsigned long long>(values.max_size()))
-        {
-            return E_INVALIDARG;
-        }
-        values.reserve(static_cast<std::size_t>(count));
-
-        for (LONG index = lowerBound;; ++index)
-        {
-            BSTR argument = nullptr;
-            result = ::SafeArrayGetElement(source, &index, &argument);
-            if (FAILED(result))
-            {
-                return result;
-            }
-
-            std::string converted;
-            result = BstrToUtf8(argument, converted);
-            ::SysFreeString(argument);
-            if (FAILED(result))
-            {
-                return result;
-            }
-            values.push_back(std::move(converted));
-            if (index == upperBound)
-            {
-                break;
-            }
-        }
-        return S_OK;
-    }
-
-    [[nodiscard]] HRESULT CreateWarningArray(
-        const std::vector<std::string>& warnings,
-        SAFEARRAY** result)
-    {
-        if (result == nullptr)
-        {
-            return E_POINTER;
-        }
-        *result = nullptr;
-        if (warnings.empty())
-        {
-            return S_OK;
-        }
-        if (warnings.size() >
-            static_cast<std::size_t>(std::numeric_limits<LONG>::max()))
-        {
-            return E_INVALIDARG;
-        }
-
-        SAFEARRAY* array = ::SafeArrayCreateVector(
-            VT_BSTR,
-            0,
-            static_cast<ULONG>(warnings.size()));
-        if (array == nullptr)
-        {
-            return E_OUTOFMEMORY;
-        }
-
-        for (std::size_t offset = 0; offset < warnings.size(); ++offset)
-        {
-            BSTR warning = nullptr;
-            HRESULT status = Utf8ToBstr(warnings[offset], &warning);
-            if (FAILED(status))
-            {
-                ::SafeArrayDestroy(array);
-                return status;
-            }
-
-            LONG index = static_cast<LONG>(offset);
-            status = ::SafeArrayPutElement(array, &index, warning);
-            ::SysFreeString(warning);
-            if (FAILED(status))
-            {
-                ::SafeArrayDestroy(array);
-                return status;
-            }
-        }
-
-        *result = array;
-        return S_OK;
-    }
+    using mwg::activex::ComConversion::BstrToUtf8;
+    using mwg::activex::ComConversion::CopyStringArray;
+    using mwg::activex::ComConversion::CopyToBstr;
+    using mwg::activex::ComConversion::CreateStringArray;
+    using mwg::activex::ComConversion::Utf8ToBstr;
 
     [[nodiscard]] HRESULT SetComErrorInfo(
         const std::string& message,
@@ -268,17 +39,6 @@ namespace
             wideMessage,
             IID_IMapWinGISControlGdal,
             errorCode);
-    }
-
-    [[nodiscard]] std::string FormatHresult(const HRESULT errorCode)
-    {
-        return "COM event callback failed with HRESULT " +
-            std::to_string(static_cast<unsigned long>(errorCode)) + ".";
-    }
-
-    void UnlockActiveXModule(void*) noexcept
-    {
-        _AtlModule.Unlock();
     }
 
     [[nodiscard]] const wchar_t* BackendName(
@@ -311,6 +71,14 @@ namespace
     }
 }
 
+CMapWinGISControl::CMapWinGISControl() noexcept
+    : _gdalEvents(
+          m_vec,
+          &CMapWinGISControl::DispatchGdalNotifications,
+          this)
+{
+}
+
 STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
     BSTR algorithmPath,
     SAFEARRAY* arguments,
@@ -321,30 +89,10 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
         return E_POINTER;
     }
     *operationId = 0;
-    if (_gdalClosing)
+    const HRESULT dispatchWindowResult = _gdalEvents.EnsureDispatchWindow();
+    if (FAILED(dispatchWindowResult))
     {
-        return E_UNEXPECTED;
-    }
-    if (_gdalDispatchWindow == nullptr)
-    {
-        try
-        {
-            _gdalDispatchWindow =
-                std::make_shared<mwg::activex::GdalDispatchWindow>();
-        }
-        catch (const std::bad_alloc&)
-        {
-            return E_OUTOFMEMORY;
-        }
-    }
-    if (!_gdalDispatchWindow->IsWindow())
-    {
-        if (_gdalDispatchWindow->Create(
-                &CMapWinGISControl::DispatchGdalNotifications,
-                this) == nullptr)
-        {
-            return HRESULT_FROM_WIN32(::GetLastError());
-        }
+        return dispatchWindowResult;
     }
 
     std::string algorithm;
@@ -373,24 +121,20 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
         return SetComErrorInfo(exception.what(), E_INVALIDARG);
     }
 
-    _gdalDispatcher.SetWakeCallback(
-        &CMapWinGISControl::PostGdalDispatchMessage,
-        _gdalDispatchWindow->m_hWnd);
-    _gdalDispatcher.SetWorkerFinishedCallback(
-        &UnlockActiveXModule,
-        nullptr);
-    _AtlModule.Lock();
     try
     {
         *operationId = static_cast<LONGLONG>(
-            _gdalDispatcher.Begin(
+            _gdalEvents.Begin(
                 std::move(algorithm),
                 std::move(commandLineArguments)));
         return S_OK;
     }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
     catch (const std::exception& exception)
     {
-        _AtlModule.Unlock();
         return SetComErrorInfo(exception.what(), E_FAIL);
     }
 }
@@ -402,7 +146,7 @@ STDMETHODIMP CMapWinGISControl::CancelGdalOperation(const LONGLONG operationId)
         return E_INVALIDARG;
     }
 
-    switch (_gdalDispatcher.Cancel(static_cast<std::uint64_t>(operationId)))
+    switch (_gdalEvents.Cancel(static_cast<std::uint64_t>(operationId)))
     {
     case mwg::activex::GdalCancelResult::Requested:
         return S_OK;
@@ -446,26 +190,26 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
         return E_INVALIDARG;
     }
 
-    mwg::activex::GdalOperationSnapshot operationResult;
-    mwg::activex::GdalEndResult endResult = mwg::activex::GdalEndResult::NotFound;
+    mwg::activex::GdalOperationLookup resultLookup;
     try
     {
-        endResult = _gdalDispatcher.GetResult(
-            static_cast<std::uint64_t>(operationId),
-            operationResult);
+        resultLookup = _gdalEvents.GetResult(static_cast<std::uint64_t>(operationId));
     }
     catch (const std::bad_alloc&)
     {
         return E_OUTOFMEMORY;
     }
-    if (endResult == mwg::activex::GdalEndResult::Pending)
+    if (resultLookup.status == mwg::activex::GdalEndResult::Pending)
     {
         return E_PENDING;
     }
-    if (endResult == mwg::activex::GdalEndResult::NotFound)
+    if (resultLookup.status == mwg::activex::GdalEndResult::NotFound ||
+        !resultLookup.result.has_value())
     {
         return E_INVALIDARG;
     }
+    const mwg::activex::GdalOperationSnapshot& operationResult =
+        *resultLookup.result;
 
     BSTR summaryText = nullptr;
     BSTR callbackErrorText = nullptr;
@@ -494,7 +238,7 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
     }
 
     SAFEARRAY* warningArray = nullptr;
-    result = CreateWarningArray(operationResult.warnings, &warningArray);
+    result = CreateStringArray(operationResult.warnings, &warningArray);
     if (FAILED(result))
     {
         ::SysFreeString(callbackErrorText);
@@ -503,11 +247,9 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
         return result;
     }
 
-    mwg::activex::GdalOperationSnapshot endedResult;
-    const auto cleanupResult = _gdalDispatcher.End(
-        static_cast<std::uint64_t>(operationId),
-        endedResult);
-    if (cleanupResult != mwg::activex::GdalEndResult::Ended)
+    const mwg::activex::GdalOperationLookup cleanupResult =
+        _gdalEvents.End(static_cast<std::uint64_t>(operationId));
+    if (cleanupResult.status != mwg::activex::GdalEndResult::Ended)
     {
         ::SysFreeString(callbackErrorText);
         ::SysFreeString(summaryText);
@@ -516,7 +258,7 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
         {
             ::SafeArrayDestroy(warningArray);
         }
-        return cleanupResult == mwg::activex::GdalEndResult::Pending
+        return cleanupResult.status == mwg::activex::GdalEndResult::Pending
             ? E_PENDING
             : E_INVALIDARG;
     }
@@ -566,14 +308,10 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
 
         const std::filesystem::path datasetPath(pathText);
         std::unique_ptr<mwg::VectorDataset> dataset = mwg::VectorDataset::Open(datasetPath);
-        if (dataset->LayerCount() == 0)
-        {
-            throw mwg::CoreError("Vector dataset contains no layers");
-        }
-
-        mwg::VectorLayer& layer = dataset->Layer(0);
-        mwg::rendering::VectorRenderScene scene = mwg::rendering::CreateVectorRenderScene(layer);
-        const LONGLONG featureCount = static_cast<LONGLONG>(layer.FeatureCount());
+        mwg::rendering::VectorRenderScene scene =
+            mwg::rendering::CreateVectorRenderScene(*dataset);
+        const LONGLONG featureCount =
+            static_cast<LONGLONG>(dataset->Layer(0).FeatureCount());
 
         _dataset = std::move(dataset);
         _scene = std::move(scene);
@@ -675,25 +413,10 @@ LRESULT CMapWinGISControl::OnSize(
     LPARAM,
     BOOL& handled)
 {
-    if (!_gdalClosing && _gdalDispatchWindow != nullptr &&
-        _gdalDispatchWindow->IsWindow())
-    {
-        _gdalDispatcher.SetWakeCallback(
-            &CMapWinGISControl::PostGdalDispatchMessage,
-            _gdalDispatchWindow->m_hWnd);
-    }
+    _gdalEvents.OnSize();
     FireViewChange();
     handled = TRUE;
     return 0;
-}
-
-bool CMapWinGISControl::PostGdalDispatchMessage(void* const window) noexcept
-{
-    return ::PostMessageW(
-        static_cast<HWND>(window),
-        mwg::activex::kGdalDispatchMessage,
-        0,
-        0) != FALSE;
 }
 
 LRESULT CMapWinGISControl::OnGdalDispatch(
@@ -702,70 +425,7 @@ LRESULT CMapWinGISControl::OnGdalDispatch(
     LPARAM,
     BOOL& handled)
 {
-    handled = TRUE;
-    if (_gdalDispatching || !_gdalDispatcher.IsDispatchActive())
-    {
-        return 0;
-    }
-
-    _gdalDispatching = true;
-    struct DispatchGuard final
-    {
-        CMapWinGISControl& control;
-
-        ~DispatchGuard()
-        {
-            control._gdalDispatching = false;
-            if (control._gdalDispatchWindowDestroyPending)
-            {
-                control.DestroyGdalDispatchWindow();
-            }
-        }
-    } dispatchGuard{*this};
-
-    while (_gdalDispatcher.IsDispatchActive())
-    {
-        const auto notifications = _gdalDispatcher.DrainNotifications();
-        if (notifications.empty())
-        {
-            break;
-        }
-
-        for (const mwg::activex::GdalOperationNotification& notification :
-             notifications)
-        {
-            if (!_gdalDispatcher.IsDispatchActive())
-            {
-                break;
-            }
-            if (!_gdalDispatcher.BeginNotificationDelivery(
-                    notification.operationId))
-            {
-                continue;
-            }
-
-            struct NotificationGuard final
-            {
-                mwg::activex::GdalOperationDispatcher& dispatcher;
-                std::uint64_t operationId;
-
-                ~NotificationGuard()
-                {
-                    dispatcher.EndNotificationDelivery(operationId);
-                }
-            } notificationGuard{_gdalDispatcher, notification.operationId};
-
-            const HRESULT result =
-                notification.kind == mwg::activex::GdalNotificationKind::Progress
-                ? FireGdalProgress(notification)
-                : FireGdalOperationCompleted(notification.operationId);
-            if (FAILED(result))
-            {
-                RecordGdalCallbackError(notification.operationId, result);
-            }
-        }
-    }
-    return 0;
+    return _gdalEvents.OnDispatch(handled);
 }
 
 LRESULT CMapWinGISControl::OnDestroy(
@@ -774,15 +434,7 @@ LRESULT CMapWinGISControl::OnDestroy(
     LPARAM,
     BOOL& handled)
 {
-    if (_gdalClosing)
-    {
-        _gdalDispatcher.Shutdown();
-        DestroyGdalDispatchWindow();
-    }
-    else
-    {
-        _gdalDispatcher.Suspend();
-    }
+    _gdalEvents.OnDestroy();
     handled = FALSE;
     return 0;
 }
@@ -808,186 +460,8 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
 
 STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
 {
-    _gdalClosing = true;
-    _gdalDispatcher.Shutdown();
-    DestroyGdalDispatchWindow();
+    _gdalEvents.Close();
     return ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
-}
-
-void CMapWinGISControl::DestroyGdalDispatchWindow() noexcept
-{
-    if (_gdalDispatching)
-    {
-        _gdalDispatchWindowDestroyPending = true;
-        return;
-    }
-
-    _gdalDispatchWindowDestroyPending = false;
-    if (_gdalDispatchWindow != nullptr)
-    {
-        _gdalDispatchWindow->Destroy();
-    }
-}
-
-void CMapWinGISControl::RecordGdalCallbackError(
-    const std::uint64_t operationId,
-    const HRESULT result) noexcept
-{
-    try
-    {
-        _gdalDispatcher.RecordCallbackError(
-            operationId,
-            result,
-            FormatHresult(result));
-    }
-    catch (const std::bad_alloc&)
-    {
-        ::OutputDebugStringW(
-            L"MapWinGIS: unable to retain a COM event callback failure.\n");
-    }
-}
-
-HRESULT CMapWinGISControl::FireGdalProgress(
-    const mwg::activex::GdalOperationNotification& notification)
-{
-    BSTR message = nullptr;
-    HRESULT result = Utf8ToBstr(notification.message, &message);
-    if (FAILED(result))
-    {
-        return result;
-    }
-
-    std::vector<ATL::CComPtr<IUnknown>> sinks;
-    try
-    {
-        sinks.reserve(static_cast<std::size_t>(m_vec.GetSize()));
-        for (int index = 0; index < m_vec.GetSize(); ++index)
-        {
-            IUnknown* sink = m_vec.GetAt(index);
-            if (sink != nullptr)
-            {
-                sinks.emplace_back(sink);
-            }
-        }
-    }
-    catch (const std::bad_alloc&)
-    {
-        ::SysFreeString(message);
-        return E_OUTOFMEMORY;
-    }
-
-    HRESULT firstError = S_OK;
-    for (const ATL::CComPtr<IUnknown>& unknown : sinks)
-    {
-        if (!_gdalDispatcher.IsDispatchActive())
-        {
-            break;
-        }
-        ATL::CComQIPtr<IDispatch> sink(unknown);
-        if (sink == nullptr)
-        {
-            RecordGdalCallbackError(notification.operationId, E_NOINTERFACE);
-            if (SUCCEEDED(firstError))
-            {
-                firstError = E_NOINTERFACE;
-            }
-            continue;
-        }
-
-        VARIANTARG arguments[3]{};
-        arguments[0].vt = VT_BSTR;
-        arguments[0].bstrVal = message;
-        arguments[1].vt = VT_R8;
-        arguments[1].dblVal = notification.progress;
-        arguments[2].vt = VT_I8;
-        arguments[2].llVal = static_cast<LONGLONG>(notification.operationId);
-        DISPPARAMS parameters{arguments, nullptr, 3, 0};
-        result = sink->Invoke(
-            1,
-            IID_NULL,
-            LOCALE_USER_DEFAULT,
-            DISPATCH_METHOD,
-            &parameters,
-            nullptr,
-            nullptr,
-            nullptr);
-        if (FAILED(result) && SUCCEEDED(firstError))
-        {
-            firstError = result;
-        }
-        if (FAILED(result))
-        {
-            RecordGdalCallbackError(notification.operationId, result);
-        }
-        arguments[0].vt = VT_EMPTY;
-        arguments[0].bstrVal = nullptr;
-    }
-    ::SysFreeString(message);
-    return firstError;
-}
-
-HRESULT CMapWinGISControl::FireGdalOperationCompleted(
-    const std::uint64_t operationId)
-{
-    std::vector<ATL::CComPtr<IUnknown>> sinks;
-    try
-    {
-        sinks.reserve(static_cast<std::size_t>(m_vec.GetSize()));
-        for (int index = 0; index < m_vec.GetSize(); ++index)
-        {
-            IUnknown* sink = m_vec.GetAt(index);
-            if (sink != nullptr)
-            {
-                sinks.emplace_back(sink);
-            }
-        }
-    }
-    catch (const std::bad_alloc&)
-    {
-        return E_OUTOFMEMORY;
-    }
-
-    HRESULT firstError = S_OK;
-    for (const ATL::CComPtr<IUnknown>& unknown : sinks)
-    {
-        if (!_gdalDispatcher.IsDispatchActive())
-        {
-            break;
-        }
-        ATL::CComQIPtr<IDispatch> sink(unknown);
-        if (sink == nullptr)
-        {
-            RecordGdalCallbackError(operationId, E_NOINTERFACE);
-            if (SUCCEEDED(firstError))
-            {
-                firstError = E_NOINTERFACE;
-            }
-            continue;
-        }
-
-        VARIANTARG argument{};
-        argument.vt = VT_I8;
-        argument.llVal = static_cast<LONGLONG>(operationId);
-        DISPPARAMS parameters{&argument, nullptr, 1, 0};
-        const HRESULT result = sink->Invoke(
-            2,
-            IID_NULL,
-            LOCALE_USER_DEFAULT,
-            DISPATCH_METHOD,
-            &parameters,
-            nullptr,
-            nullptr,
-            nullptr);
-        if (FAILED(result) && SUCCEEDED(firstError))
-        {
-            firstError = result;
-        }
-        if (FAILED(result))
-        {
-            RecordGdalCallbackError(operationId, result);
-        }
-    }
-    return firstError;
 }
 
 HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
@@ -1018,6 +492,5 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
 
 CMapWinGISControl::~CMapWinGISControl()
 {
-    _gdalDispatcher.Shutdown();
-    DestroyGdalDispatchWindow();
+    _gdalEvents.Shutdown();
 }

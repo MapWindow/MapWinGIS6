@@ -185,6 +185,8 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
 - Append `<< value` to expectations on strings when the failure output
   matters.
 - Test files carry the same SPDX and Doxygen header as production files.
+- `ViewTransform` tests cover the shared scale and offset used by both GDI and
+  OpenGL renderers, including degenerate extents and zero-area targets.
 - Cover for each feature: happy path, empty/missing input, out-of-range
   indexes, null values, non-ASCII paths, write-then-reopen round-trips, and
   error cases.

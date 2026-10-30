@@ -179,6 +179,20 @@ namespace
         MidStreamFailureLayer _layer;
     };
 
+    class EmptyVectorDataset final : public GDALDataset
+    {
+    public:
+        int GetLayerCount() const override
+        {
+            return 0;
+        }
+
+        const OGRLayer* GetLayer(int) const override
+        {
+            return nullptr;
+        }
+    };
+
     class VectorRenderSceneTest : public testing::TestWithParam<const char*>
     {
     protected:
@@ -263,6 +277,43 @@ TEST(VectorRenderScene, LinearizesCurvedPolygonGeometry)
     ASSERT_EQ(scene.polygons.size(), 1u);
     ASSERT_EQ(scene.polygons.front().size(), 1u);
     EXPECT_GT(scene.polygons.front().front().size(), 5u);
+}
+
+TEST(VectorRenderScene, RejectsDatasetWithoutLayers)
+{
+    GdalEnvironment::Initialize();
+    const auto deregister = [](GDALDriver* driver)
+    {
+        GetGDALDriverManager()->DeregisterDriver(driver);
+        delete driver;
+    };
+    const std::unique_ptr<GDALDriver, decltype(deregister)> driver{
+        std::make_unique<GDALDriver>().release(),
+        deregister};
+    driver->SetDescription("MWGEmptyVector");
+    driver->SetMetadataItem(GDAL_DCAP_VECTOR, "YES");
+    driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
+    driver->pfnIdentify = [](GDALOpenInfo* info)
+    {
+        return std::string_view(info->pszFilename).starts_with(
+                   "MWG_VECTOR_NO_LAYERS:")
+                   ? TRUE
+                   : FALSE;
+    };
+    driver->pfnOpen = [](GDALOpenInfo* info) -> GDALDataset*
+    {
+        return std::string_view(info->pszFilename).starts_with(
+                   "MWG_VECTOR_NO_LAYERS:")
+                   ? new EmptyVectorDataset()
+                   : nullptr;
+    };
+    GetGDALDriverManager()->RegisterDriver(driver.get());
+
+    const auto dataset = VectorDataset::Open("MWG_VECTOR_NO_LAYERS:empty");
+    ASSERT_EQ(dataset->LayerCount(), 0);
+    EXPECT_THROW(
+        (void)rendering::CreateVectorRenderScene(*dataset),
+        CoreError);
 }
 
 TEST(VectorRenderScene, PropagatesMidStreamFeatureReadFailure)

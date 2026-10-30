@@ -118,4 +118,14 @@ namespace mwg::rendering
         }
         return scene;
     }
+
+    VectorRenderScene CreateVectorRenderScene(const VectorDataset& dataset)
+    {
+        if (dataset.LayerCount() == 0)
+        {
+            throw CoreError("Vector dataset contains no layers");
+        }
+
+        return CreateVectorRenderScene(dataset.Layer(0));
+    }
 }

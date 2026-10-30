@@ -15,13 +15,13 @@
 
 namespace mwg::activex
 {
-    enum class VectorRenderBackendKind
+    enum class VectorRenderBackendKind : int
     {
         OpenGL,
         Gdi
     };
 
-    enum class VectorRenderBackendPreference
+    enum class VectorRenderBackendPreference : int
     {
         Automatic,
         OpenGL,
