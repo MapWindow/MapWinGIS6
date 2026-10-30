@@ -10,9 +10,12 @@
  */
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -544,6 +547,58 @@ TEST(GdalTypedOptions, ReprojectsRasterToTheRequestedCrsBoundsAndSize)
     int hasNoData = false;
     EXPECT_DOUBLE_EQ(band->GetNoDataValue(&hasNoData), 255);
     EXPECT_TRUE(hasNoData);
+}
+
+TEST(GdalTypedOptions, RejectsNonFiniteMosaicResolutionWithInvalidArgument)
+{
+    RasterMosaicOptions options;
+    for (const double value : {std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity(),
+                               -std::numeric_limits<double>::infinity()})
+    {
+        for (std::size_t index = 0; index < 2; ++index)
+        {
+            std::array<double, 2> resolution{1.0, 1.0};
+            resolution[index] = value;
+            options.resolution = resolution;
+
+            EXPECT_THROW((void)options.ToArgs(), InvalidArgument) << "index: " << index;
+        }
+    }
+}
+
+TEST(GdalTypedOptions, PreservesNanNoDataValues)
+{
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    RasterReprojectOptions reproject;
+    reproject.inputNoData = std::vector<double>{nan};
+    reproject.outputNoData = std::vector<double>{nan};
+    const auto reprojectArgs = reproject.ToArgs();
+    for (const std::string_view name : {"src-nodata", "dst-nodata"})
+    {
+        const auto argument = std::find_if(
+            reprojectArgs.begin(), reprojectArgs.end(),
+            [name](const GdalAlgorithmArgument& arg) { return arg.name == name; });
+        ASSERT_NE(argument, reprojectArgs.end());
+        const auto& values = std::get<std::vector<std::string>>(argument->value);
+        ASSERT_EQ(values.size(), 1u);
+        EXPECT_TRUE(std::isnan(std::stod(values.front())));
+    }
+
+    RasterMosaicOptions mosaic;
+    mosaic.inputNoData = std::vector<double>{nan};
+    mosaic.outputNoData = std::vector<double>{nan};
+    const auto mosaicArgs = mosaic.ToArgs();
+    for (const std::string_view name : {"src-nodata", "dst-nodata"})
+    {
+        const auto argument = std::find_if(
+            mosaicArgs.begin(), mosaicArgs.end(),
+            [name](const GdalAlgorithmArgument& arg) { return arg.name == name; });
+        ASSERT_NE(argument, mosaicArgs.end());
+        const auto& values = std::get<std::vector<double>>(argument->value);
+        ASSERT_EQ(values.size(), 1u);
+        EXPECT_TRUE(std::isnan(values.front()));
+    }
 }
 
 TEST(GdalTypedOptions, MosaicsAdjacentRastersAtTheRequestedResolution)

@@ -81,3 +81,16 @@ dataset handles.
 The compatibility methods are native C++ APIs, not binary-compatible COM
 interfaces. The ActiveX wrapper translates its generic COM arguments and
 results to the core API; it does not expose these operation-specific methods.
+
+### Native error contracts
+
+Configuration helpers now throw `InvalidArgument`, a subclass of `CoreError`,
+instead of `std::invalid_argument`. Catch `InvalidArgument` or `CoreError`
+instead of `std::invalid_argument` or `std::logic_error`.
+The compatibility utilities still report some rejected arguments through
+`false` and diagnostics. See each method's declaration for its exceptions.
+
+`GdalUtils::Errors()` now returns a const reference without throwing.
+Rebuild native consumers because this changes the exported method's signature.
+The next operation replaces the diagnostics and invalidates references to
+individual entries. Use `Result()` to keep an independent snapshot.

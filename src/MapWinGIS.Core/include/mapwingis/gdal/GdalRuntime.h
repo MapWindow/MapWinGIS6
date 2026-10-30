@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "mapwingis/core/Api.h"
+#include "mapwingis/core/Error.h"
 
 namespace mwg
 {
@@ -43,7 +44,11 @@ namespace mwg
     public:
         GdalConfig() = delete;
 
+        /// @throws InvalidArgument if name is empty or contains a null byte,
+        /// or if value contains a null byte.
         static void SetOption(std::string_view name, std::string_view value);
+
+        /// @throws InvalidArgument if name is empty or contains a null byte.
         static void ClearOption(std::string_view name);
     };
 
@@ -54,6 +59,8 @@ namespace mwg
     class MWG_CORE_API ScopedGdalConfigOption
     {
     public:
+        /// @throws InvalidArgument if name is empty or contains a null byte,
+        /// or if value contains a null byte.
         ScopedGdalConfigOption(std::string_view name, std::string_view value);
         ~ScopedGdalConfigOption();
 

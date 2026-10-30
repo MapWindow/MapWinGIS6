@@ -13,6 +13,8 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <cpl_conv.h>
@@ -31,6 +33,10 @@ using namespace mwg;
 
 namespace
 {
+    static_assert(std::is_same_v<decltype(std::declval<const GdalUtils&>().Errors()),
+                                 const std::vector<GdalError>&>);
+    static_assert(noexcept(std::declval<const GdalUtils&>().Errors()));
+
     GdalDatasetPtr OpenDataset(const std::filesystem::path& path, const unsigned int flags)
     {
         const std::u8string pathUtf8 = path.u8string();
@@ -323,6 +329,49 @@ TEST(GdalUtils, RestoresDuplicateConfigurationOptionsInReverseOrder)
         {{kConfigName, "first"}, {kConfigName, "second"}}))
         << utils.DetailedErrorMsg();
     EXPECT_STREQ(CPLGetConfigOption(kConfigName, nullptr), "original");
+}
+
+TEST(GdalUtils, ReportsInvalidOverviewConfigurationThroughTheDocumentedContracts)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+    constexpr char kConfigName[] = "MWG_GDAL_UTILS_INVALID_OVERVIEW_OPTION";
+    const ScopedGdalConfigOption original(kConfigName, "original");
+    const std::string nullName("name\0suffix", 11);
+    const std::string nullValue("value\0suffix", 12);
+
+    for (const bool withProgress : {false, true})
+    {
+        GdalUtils utils;
+        const auto build = [&](const std::string_view resampling,
+                               const std::vector<std::pair<std::string, std::string>>& config)
+        {
+            return withProgress
+                ? utils.GdalBuildOverviews(input, resampling, {2}, {1}, config, {})
+                : utils.GdalBuildOverviews(input, resampling, {2}, {1}, config);
+        };
+
+        EXPECT_THROW((void)build("NEAREST", {{kConfigName, "temporary"}, {"", "value"}}),
+                     InvalidArgument);
+        EXPECT_STREQ(CPLGetConfigOption(kConfigName, nullptr), "original");
+
+        for (const auto& option : std::vector<std::pair<std::string, std::string>>{
+                 {nullName, "value"}, {kConfigName, nullValue}})
+        {
+            EXPECT_FALSE(build("NEAREST", {option}));
+            EXPECT_NE(utils.LastErrorCode(), 0);
+            EXPECT_NE(utils.DetailedErrorMsg().find("null bytes"), std::string::npos);
+            EXPECT_FALSE(utils.Result().Succeeded());
+            EXPECT_STREQ(CPLGetConfigOption(kConfigName, nullptr), "original");
+        }
+
+        EXPECT_FALSE(build(nullValue, {}));
+        EXPECT_NE(utils.LastErrorCode(), 0);
+        EXPECT_NE(utils.DetailedErrorMsg().find("resampling"), std::string::npos);
+        EXPECT_FALSE(utils.Result().Succeeded());
+    }
 }
 
 TEST(GdalUtils, ClipsVectorFeaturesWithAnOverlayDataset)

@@ -124,9 +124,32 @@ TEST(GdalRuntime, ScopedConfigurationRestoresGlobalValueWithoutChangingThreadLoc
     CPLSetConfigOption(optionName, nullptr);
 }
 
-TEST(GdalRuntime, RejectsEmptyConfigurationName)
+TEST(GdalRuntime, RejectsInvalidConfigurationNamesAndValues)
 {
-    EXPECT_THROW(GdalConfig::ClearOption(""), std::invalid_argument);
+    constexpr std::string_view nullName("name\0suffix", 11);
+    constexpr std::string_view nullValue("value\0suffix", 12);
+    EXPECT_THROW(GdalConfig::ClearOption(""), InvalidArgument);
+    EXPECT_THROW(GdalConfig::ClearOption(nullName), InvalidArgument);
+    EXPECT_THROW(GdalConfig::SetOption("", "value"), InvalidArgument);
+    EXPECT_THROW(GdalConfig::SetOption(nullName, "value"), InvalidArgument);
+    EXPECT_THROW(GdalConfig::SetOption("name", nullValue), InvalidArgument);
+
+    constexpr std::string_view optionName = "MWG_TEST_EMPTY_CONFIG_VALUE";
+    EXPECT_NO_THROW(GdalConfig::SetOption(optionName, ""));
+    GdalConfig::ClearOption(optionName);
+}
+
+TEST(GdalRuntime, RejectsInvalidScopedConfigurationWithoutChangingPreviousValue)
+{
+    constexpr char optionName[] = "MWG_TEST_INVALID_SCOPED_CONFIG";
+    const ScopedGdalConfigOption original(optionName, "original");
+
+    EXPECT_THROW((void)ScopedGdalConfigOption("", "value"), InvalidArgument);
+    EXPECT_THROW((void)ScopedGdalConfigOption(std::string_view("name\0suffix", 11), "value"),
+                 InvalidArgument);
+    EXPECT_THROW((void)ScopedGdalConfigOption(optionName, std::string_view("value\0suffix", 12)),
+                 InvalidArgument);
+    EXPECT_STREQ(CPLGetConfigOption(optionName, nullptr), "original");
 }
 
 TEST(GdalRuntime, CapturesStructuredGdalErrors)

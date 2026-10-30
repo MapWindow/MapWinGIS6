@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "mapwingis/core/Api.h"
+#include "mapwingis/core/Error.h"
 
 namespace mwg
 {
@@ -37,11 +38,14 @@ namespace mwg
      * Other present optional values, including empty strings, are emitted.
      * RasterReprojectOptions also omits empty inputNoData and outputNoData lists.
      * GDAL defines format inference and all other algorithm-specific defaults.
+     * Numeric arrays retain their values for GDAL validation. Mosaic resolution
+     * becomes a string and requires finite values. NoData values can be NaN.
      *
      * Pass the result to ConfigureGdalAlgorithm() with the matching algorithm.
      * Configuration can open input datasets. Run() performs execution separately.
      * Configuration and execution failures return false with diagnostics in
-     * GdalAlgorithmRunner::Errors(). ToArgs() does not report invalid options.
+     * GdalAlgorithmRunner::Errors(). ToArgs() does not validate GDAL algorithm
+     * constraints.
      *
      * @par Thread safety and cost
      * Concurrent ToArgs() calls are safe if no thread modifies the source
@@ -53,8 +57,8 @@ namespace mwg
      * Exceptions from allocation and filesystem path conversion propagate to
      * the caller. No GDAL diagnostic is recorded for these exceptions.
      * @throws std::bad_alloc If memory allocation fails.
-     * @throws std::runtime_error If numeric formatting fails in
-     * RasterReprojectOptions or RasterMosaicOptions.
+     * @throws InvalidArgument If a RasterMosaicOptions resolution value is not finite.
+     * @throws CoreError If numeric formatting fails.
      */
 
     using GdalAlgorithmArgumentValue =
@@ -142,6 +146,7 @@ namespace mwg
 
         /// Copies values for `raster reproject`. See @ref GdalTypedOptions for
         /// defaults, validation, exceptions, and thread-safety requirements.
+        /// @throws CoreError if numeric formatting fails.
         [[nodiscard]] GdalAlgorithmArguments ToArgs() const;
     };
 
@@ -266,6 +271,8 @@ namespace mwg
 
         /// Copies values for `raster mosaic`. See @ref GdalTypedOptions for
         /// defaults, validation, exceptions, and thread-safety requirements.
+        /// @throws InvalidArgument if a resolution value is not finite.
+        /// @throws CoreError if numeric formatting fails.
         [[nodiscard]] GdalAlgorithmArguments ToArgs() const;
     };
 

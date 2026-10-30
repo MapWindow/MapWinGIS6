@@ -12,7 +12,6 @@
 #include "internal/GdalExecution.h"
 
 #include <mutex>
-#include <stdexcept>
 #include <utility>
 
 #include <cpl_conv.h>
@@ -44,7 +43,7 @@ namespace mwg
         void ValidateOptionName(const std::string_view name)
         {
             if (name.empty() || name.find('\0') != std::string_view::npos)
-                throw std::invalid_argument("GDAL configuration option name must be non-empty and contain no null bytes.");
+                throw InvalidArgument("GDAL configuration option name must be non-empty and contain no null bytes.");
         }
 
         std::optional<std::string> GetGlobalConfigOption(const std::string& name)
@@ -107,7 +106,7 @@ namespace mwg
     {
         ValidateOptionName(name);
         if (value.find('\0') != std::string_view::npos)
-            throw std::invalid_argument("GDAL configuration option value cannot contain null bytes.");
+            throw InvalidArgument("GDAL configuration option value cannot contain null bytes.");
         const std::string ownedName(name);
         const std::string ownedValue(value);
         CPLSetConfigOption(ownedName.c_str(), ownedValue.c_str());
