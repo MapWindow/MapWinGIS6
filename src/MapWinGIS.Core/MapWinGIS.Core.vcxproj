@@ -73,6 +73,7 @@
     <ClCompile Include="src\gdal\GdalAlgorithmRunner.cpp" />
     <ClCompile Include="src\gdal\GdalEnvironment.cpp" />
     <ClCompile Include="src\gdal\GdalModern.cpp" />
+    <ClCompile Include="src\gdal\GdalOperationResult.cpp" />
     <ClCompile Include="src\gdal\GdalRuntime.cpp" />
     <ClCompile Include="src\gdal\GdalTypedOptions.cpp" />
     <ClCompile Include="src\gdal\GdalUtils.cpp" />

@@ -273,7 +273,7 @@ namespace mwg
                         return false;
                     GDALVectorTranslateOptionsSetProgress(
                         translateOptions.get(),
-                        detail::GdalProgressAdapterAccess::Function(adapter),
+                        detail::GdalProgressAdapterAccess::Function(),
                         detail::GdalProgressAdapterAccess::UserData(adapter));
 
                     GDALDatasetH sources[] = {input.get()};
@@ -422,7 +422,7 @@ namespace mwg
                     return false;
                 GDALTranslateOptionsSetProgress(
                     translateOptions.get(),
-                    detail::GdalProgressAdapterAccess::Function(adapter),
+                    detail::GdalProgressAdapterAccess::Function(),
                     detail::GdalProgressAdapterAccess::UserData(adapter));
 
                 int usageError = FALSE;
@@ -464,7 +464,7 @@ namespace mwg
                     return false;
                 GDALWarpAppOptionsSetProgress(
                     warpOptions.get(),
-                    detail::GdalProgressAdapterAccess::Function(adapter),
+                    detail::GdalProgressAdapterAccess::Function(),
                     detail::GdalProgressAdapterAccess::UserData(adapter));
 
                 GDALDatasetH sources[] = {input.get()};
@@ -584,7 +584,7 @@ namespace mwg
                     dataset.get(), resampling.c_str(), static_cast<int>(overviewLevels->size()),
                     overviewLevels->data(),
                     static_cast<int>(bandList.size()), bandList.data(),
-                    detail::GdalProgressAdapterAccess::Function(adapter),
+                    detail::GdalProgressAdapterAccess::Function(),
                     detail::GdalProgressAdapterAccess::UserData(adapter));
                 const bool closed = CloseDataset(dataset);
                 return result == CE_None && closed;

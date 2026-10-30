@@ -37,8 +37,8 @@ namespace mwg
     /// Adapts GDAL progress to a C++ callback and cancellation token.
     ///
     /// Progress callbacks run synchronously on the thread executing GDAL.
-    /// Keep the adapter alive and unmoved through the GDAL operation; its
-    /// cancellation token must also outlive the operation. If a callback
+    /// Keep the adapter alive through the GDAL operation; its cancellation
+    /// token must also outlive the operation. If a callback
     /// throws, the adapter cancels the operation and preserves the exception
     /// for RethrowCallbackException().
     class MWG_CORE_API GdalProgressAdapter

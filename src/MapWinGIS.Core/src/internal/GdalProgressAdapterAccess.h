@@ -18,7 +18,7 @@ namespace mwg::detail
     public:
         using NativeCallback = int(__stdcall*)(double, const char*, void*);
 
-        [[nodiscard]] static NativeCallback Function(const GdalProgressAdapter& adapter) noexcept;
+        [[nodiscard]] static NativeCallback Function() noexcept;
         [[nodiscard]] static void* UserData(GdalProgressAdapter& adapter) noexcept;
 
     private:

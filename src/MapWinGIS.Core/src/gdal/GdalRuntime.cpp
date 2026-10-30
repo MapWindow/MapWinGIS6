@@ -241,8 +241,7 @@ namespace mwg
             std::rethrow_exception(_impl->callbackException);
     }
 
-    detail::GdalProgressAdapterAccess::NativeCallback detail::GdalProgressAdapterAccess::Function(
-        const GdalProgressAdapter&) noexcept
+    detail::GdalProgressAdapterAccess::NativeCallback detail::GdalProgressAdapterAccess::Function() noexcept
     {
         return &HandleProgress;
     }

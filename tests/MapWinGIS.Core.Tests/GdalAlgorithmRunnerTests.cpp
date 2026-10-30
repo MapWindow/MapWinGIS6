@@ -460,6 +460,22 @@ TEST(GdalAlgorithmRunner, ReportsProgressAndCancellation)
     EXPECT_EQ(callbackCount, 1);
 }
 
+TEST(GdalAlgorithmRunner, ReportsProgressCallbackExceptionsAsFailures)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+
+    GdalAlgorithmRunner runner("mwg-test progress");
+    EXPECT_FALSE(runner.Run([](double, std::string_view) -> bool
+    {
+        throw std::runtime_error("callback failure");
+    }));
+
+    EXPECT_FALSE(runner.Result().WasCancelled());
+    ASSERT_FALSE(runner.Errors().empty());
+    EXPECT_NE(runner.Errors().back().message.find("callback failure"), std::string::npos);
+}
+
 TEST(GdalAlgorithmRunner, LogsWarningsWithoutTurningSuccessIntoFailure)
 {
     GdalEnvironment::Initialize();
