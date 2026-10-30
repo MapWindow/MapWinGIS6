@@ -44,9 +44,6 @@
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\include;$(MSBuildProjectDirectory)\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MWG_CORE_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <Link>
-      <AdditionalOptions>/WHOLEARCHIVE:"$(OutDir)MwGdalCore.lib" %(AdditionalOptions)</AdditionalOptions>
-    </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
@@ -63,19 +60,20 @@
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
     <ClInclude Include="include\mapwingis\rendering\VectorRenderScene.h" />
+    <ClInclude Include="src\internal\GdalExecution.h" />
     <ClInclude Include="src\internal\Utf8.h" />
+    <ClInclude Include="src\internal\VectorLayerAccess.h" />
   </ItemGroup>
 
   <ItemGroup>
+    <ClCompile Include="src\gdal\GdalAlgorithmRunner.cpp" />
     <ClCompile Include="src\gdal\GdalEnvironment.cpp" />
+    <ClCompile Include="src\gdal\GdalModern.cpp" />
+    <ClCompile Include="src\gdal\GdalRuntime.cpp" />
+    <ClCompile Include="src\gdal\GdalTypedOptions.cpp" />
+    <ClCompile Include="src\gdal\GdalUtils.cpp" />
     <ClCompile Include="src\vector\VectorDataset.cpp" />
     <ClCompile Include="src\rendering\VectorRenderScene.cpp" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\MwGdalCore\MwGdalCore.vcxproj">
-      <Project>{5D2B77F3-53B2-4D95-99DD-B2A15772F5E8}</Project>
-    </ProjectReference>
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
