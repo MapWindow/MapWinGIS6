@@ -22,11 +22,10 @@ and operation results; GDAL execution and dataset ownership remain in Core.
 
 ## Module design
 
-- `MwGdalCore` is a native static library linked into `MapWinGIS.Core.dll`.
-  It contains GDAL execution support, including `GdalAlgorithmRunner`, and
-  has no COM, ATL or MFC dependency. The runner configures algorithms through
-  GDAL's registry, returns structured diagnostics, and transfers dataset
-  ownership with `GdalDatasetPtr`.
+- GDAL execution support, including `GdalAlgorithmRunner`, is implemented in
+  `MapWinGIS.Core.dll`. The runner configures algorithms through GDAL's
+  registry, returns structured diagnostics, and transfers dataset ownership
+  with `GdalDatasetPtr`.
 - Public API lives in `src/MapWinGIS.Core/include/mapwingis/<area>/`, grouped
   by area (`core`, `gdal`, `vector`, ...). All of it is in namespace `mwg`.
 - Implementation lives in `src/MapWinGIS.Core/src/<area>/`, mirroring the

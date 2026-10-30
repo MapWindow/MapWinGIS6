@@ -45,9 +45,9 @@ temporary directory and do not commit generated shapefiles or databases.
 
 ## Architecture across files
 
-`MapWinGIS.Core.dll` contains the public native API and application logic.
-`MwGdalCore` is a static library linked into it for GDAL execution support.
-Public headers live under `src/MapWinGIS.Core/include/mapwingis/<area>/`.
+`MapWinGIS.Core.dll` contains the public native API, application logic, and
+GDAL execution support. Public headers live under
+`src/MapWinGIS.Core/include/mapwingis/<area>/`.
 Implementations mirror those areas under `src/MapWinGIS.Core/src/<area>/`.
 Put private shared code under `src/MapWinGIS.Core/src/internal/`.
 

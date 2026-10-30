@@ -22,6 +22,7 @@
 #include <thread>
 #include <vector>
 
+#include <Windows.h>
 #include <gdal_priv.h>
 #include <gdalalgorithm.h>
 
@@ -347,6 +348,20 @@ TEST(GdalAlgorithmRunner, SetsAllSupportedArgumentTypes)
     ASSERT_TRUE(runner.SetArgument("labels", std::vector<std::string>{"one", "two"}));
     EXPECT_TRUE(runner.Run()) << LastError(runner);
     EXPECT_TRUE(runner.Finalize());
+}
+
+TEST(GdalAlgorithmRunner, ExportsFinalizeFromCoreDll)
+{
+    HMODULE coreModule = GetModuleHandleW(L"MapWinGIS.Core.dll");
+    ASSERT_NE(coreModule, nullptr);
+
+#if defined(_WIN64)
+    constexpr char kFinalizeSymbol[] = "?Finalize@GdalAlgorithmRunner@mwg@@QEAA_NXZ";
+#else
+    constexpr char kFinalizeSymbol[] = "?Finalize@GdalAlgorithmRunner@mwg@@QAE_NXZ";
+#endif
+
+    EXPECT_NE(GetProcAddress(coreModule, kFinalizeSymbol), nullptr);
 }
 
 TEST(GdalAlgorithmRunner, ExposesUsageMetadataAndReportsUnknownAlgorithms)

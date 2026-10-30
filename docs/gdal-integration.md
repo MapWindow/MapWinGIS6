@@ -1,9 +1,9 @@
 # GDAL integration
 
 MapWinGIS6 provides a native C++20 interface to GDAL through
-`MapWinGIS.Core.dll`. `MwGdalCore` implements GDAL algorithm execution;
-`MapWinGIS.Core` configures GDAL's runtime data paths and exposes the public
-headers under `mapwingis/gdal/`. The Core DLL does not use COM, ATL, or MFC.
+`MapWinGIS.Core.dll`, which configures GDAL's runtime data paths, implements
+GDAL algorithm execution, and exposes the public headers under
+`mapwingis/gdal/`. The Core DLL does not use COM, ATL, or MFC.
 
 ## Requirements and runtime setup
 

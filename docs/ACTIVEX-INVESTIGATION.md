@@ -6,10 +6,10 @@ they do not define the final architecture.
 
 ## What exists
 
-`MapWinGIS.Core.dll` is a native C++20 DLL with GDAL setup and OGR-backed
-vector dataset and layer access. `MwGdalCore` provides GDAL execution support
-as a static library. The solution contains those projects and the GoogleTest
-project; the core has no COM, ATL, MFC, or rendering dependency.
+`MapWinGIS.Core.dll` is a native C++20 DLL with GDAL setup and execution support
+and OGR-backed vector dataset and layer access. The solution contains the Core
+and ActiveX projects and the GoogleTest project; Core has no COM, ATL, MFC, or
+rendering dependency.
 
 The public vector API can open a dataset, enumerate layers, inspect extents
 and attributes, and read feature geometry as WKT. It has no map/layer state
