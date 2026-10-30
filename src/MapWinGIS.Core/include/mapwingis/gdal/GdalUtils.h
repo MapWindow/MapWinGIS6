@@ -63,7 +63,9 @@ namespace mwg
         [[nodiscard]] std::string DetailedErrorMsg() const;
 
         /// Returns all diagnostics from the most recent operation.
-        /// The reference remains valid until the next operation or destruction.
+        /// The next operation replaces the contents and invalidates references
+        /// to individual diagnostics. Use Result() for an independent snapshot.
+        /// The vector reference remains valid until destruction.
         [[nodiscard]] const std::vector<GdalError>& Errors() const noexcept;
 
         /// Snapshots the most recent operation, including cancellation state.
@@ -138,8 +140,10 @@ namespace mwg
         /// Builds overview levels; band indexes are one-based, and an empty list selects all bands.
         /// Configuration options are scoped to this call and restored afterward.
         /// They are process-wide during execution and are not isolated from concurrent GDAL calls.
-        /// @throws InvalidArgument if a configuration option name is empty or
-        /// contains a null byte, or if its value contains a null byte.
+        /// Returns false with diagnostics for null bytes in resamplingMethod
+        /// or configuration option names or values.
+        /// @throws InvalidArgument if a configuration option name is empty
+        /// and the null-byte checks pass.
         [[nodiscard, deprecated("Use GdalAlgorithmRunner and typed GDAL options instead.")]]
         bool GdalBuildOverviews(const std::filesystem::path& sourceFilename,
                                 std::string_view resamplingMethod,
@@ -149,8 +153,10 @@ namespace mwg
                                     configOptions = {});
 
         /// Legacy overview building with synchronous progress and cancellation.
-        /// @throws InvalidArgument if a configuration option name is empty or
-        /// contains a null byte, or if its value contains a null byte.
+        /// Returns false with diagnostics for null bytes in resamplingMethod
+        /// or configuration option names or values.
+        /// @throws InvalidArgument if a configuration option name is empty
+        /// and the null-byte checks pass.
         [[nodiscard]] bool GdalBuildOverviews(
                                 const std::filesystem::path& sourceFilename,
                                 std::string_view resamplingMethod,

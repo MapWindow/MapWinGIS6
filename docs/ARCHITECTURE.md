@@ -51,17 +51,20 @@ expect.
 
 ## Errors
 
-- Operations that can fail throw `CoreError` (or a subclass such as
-  `OpenFailed`); see `mapwingis/core/Error.h`.
+- Operations that can fail throw `CoreError` or a subclass such as
+  `OpenFailed` or `InvalidArgument`. See `mapwingis/core/Error.h`.
 - Offer a `TryX` companion that returns `nullptr`/`std::optional` instead of
   throwing when probing is a normal use case (e.g. `Open`/`TryOpen`).
 - `std::optional` reports absent *values* (null cells, missing doubles), not
   operational failure. Keep the two distinct.
 - Long-running GDAL algorithm operations deliberately report ordinary
   execution failure through a boolean result and `GdalOperationResult`, which
-  preserves diagnostics and cancellation state. Invalid arguments and other
-  exceptional failures use `CoreError` subclasses; exceptions thrown by user
-  callbacks or log handlers propagate after GDAL returns.
+  preserves diagnostics and cancellation state. Rejected algorithm arguments
+  and compatibility utility arguments can also produce failure diagnostics.
+  Configuration helpers and typed conversions throw `InvalidArgument` for
+  invalid values that they check. Callback re-entry throws `CoreError`.
+  Progress callback exceptions become failure diagnostics.
+  Diagnostic-capture and log-handler exceptions propagate after GDAL returns.
 
 ## GDAL lifecycle
 
