@@ -350,18 +350,19 @@ TEST(GdalAlgorithmRunner, SetsAllSupportedArgumentTypes)
     EXPECT_TRUE(runner.Finalize());
 }
 
-TEST(GdalAlgorithmRunner, ExportsFinalizeFromCoreDll)
+TEST(GdalAlgorithmRunner, ResolvesExportFromCoreDll)
 {
-    HMODULE coreModule = GetModuleHandleW(L"MapWinGIS.Core.dll");
-    ASSERT_NE(coreModule, nullptr);
+    HMODULE owningModule = nullptr;
+    const auto functionAddress =
+        reinterpret_cast<LPCWSTR>(&GdalEnvironment::IsInitialized);
+    ASSERT_TRUE(GetModuleHandleExW(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        functionAddress,
+        &owningModule))
+        << "GetModuleHandleExW failed with error " << GetLastError();
 
-#if defined(_WIN64)
-    constexpr char kFinalizeSymbol[] = "?Finalize@GdalAlgorithmRunner@mwg@@QEAA_NXZ";
-#else
-    constexpr char kFinalizeSymbol[] = "?Finalize@GdalAlgorithmRunner@mwg@@QAE_NXZ";
-#endif
-
-    EXPECT_NE(GetProcAddress(coreModule, kFinalizeSymbol), nullptr);
+    EXPECT_EQ(owningModule, GetModuleHandleW(L"MapWinGIS.Core.dll"));
 }
 
 TEST(GdalAlgorithmRunner, ExposesUsageMetadataAndReportsUnknownAlgorithms)

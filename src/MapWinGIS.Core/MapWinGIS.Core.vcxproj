@@ -60,7 +60,9 @@
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
     <ClInclude Include="include\mapwingis\rendering\VectorRenderScene.h" />
+    <ClInclude Include="src\internal\GdalExecution.h" />
     <ClInclude Include="src\internal\Utf8.h" />
+    <ClInclude Include="src\internal\VectorLayerAccess.h" />
   </ItemGroup>
 
   <ItemGroup>
