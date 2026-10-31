@@ -138,6 +138,42 @@ state; hosts and renderers read from it.
   The map does not reproject; layers in different coordinate reference
   systems do not align until coordinate transformations are implemented.
 
+## Viewport
+
+`mwg::Viewport` (`mapwingis/map/Viewport.h`) is the view of map coordinates on
+a pixel area. It converts between map and screen coordinates and fits an
+extent, typically `Map::GetExtent()`, into the display area. It does not
+reference a `Map` and holds no windowing, COM, or rendering state. It is a
+small copyable value type, like `Extent`, so renderers and navigation code can
+take snapshots.
+
+- **Coordinates.** Map X increases right and map Y increases up. Screen X
+  increases right and screen Y increases down, in pixels from the top-left
+  corner. Screen coordinates are continuous `double` values: pixel `(i, j)`
+  covers `[i, i + 1) x [j, j + 1)`. `ToPixel` rounds down to the containing
+  pixel; round only there.
+- **State.** A size in pixels plus, once set, a view: the map point at the
+  viewport center and one resolution (map units per pixel) for both axes. The
+  visible extent is derived from these, so it always has the viewport's
+  aspect ratio and geometry is never distorted. Resizing keeps the center and
+  resolution.
+- **Validity.** A viewport is valid when both dimensions are positive and it
+  has a view. On an invalid viewport, transformations return `std::nullopt`
+  and `VisibleExtent` returns an empty `Extent`. A zero-sized viewport keeps
+  its view. Non-finite inputs or results give `std::nullopt`; negative sizes,
+  non-finite views, and invalid padding throw `InvalidArgument`.
+- **Fitting.** `FitExtent` centers the extent and picks the smallest
+  resolution that shows it on both axes, so the other axis expands. Padding
+  is kept free on every side. Extent edges map to the centers of the
+  outermost pixels inside the padding, so pixel rounding never pushes
+  boundary geometry outside the viewport. A zero-span axis does not constrain
+  the resolution; a single point keeps the current resolution. Invalid
+  extents and zero-sized viewports return `false` without changing the view.
+- **Limits.** Sizes are limited to `kMaxDimension` pixels. Centers are clamped
+  to `±kMaxCoordinate` and resolutions to `[MinResolution(center),
+  kMaxResolution]`, where the minimum is relative to the center's magnitude so
+  that pixels stay many representable doubles wide.
+
 ## ActiveX and rendering architecture
 
 The first ActiveX and rendering vertical slice is implemented across the
