@@ -10,7 +10,6 @@
 #pragma once
 
 #include "ActiveXModule.h"
-#include "GdalDispatchWindow.h"
 #include "resource.h"
 
 #include <memory>
@@ -21,7 +20,7 @@
 
 #include "mapwingis/rendering/VectorRenderScene.h"
 #include "mapwingis/vector/VectorDataset.h"
-#include "GdalOperationDispatcher.h"
+#include "GdalEventSource.h"
 #include "VectorLayerRenderer.h"
 
 class ATL_NO_VTABLE CMapWinGISControl :
@@ -53,6 +52,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
         0>
 {
 public:
+    CMapWinGISControl();
+
     DECLARE_REGISTRY_RESOURCEID(IDR_MAPWINGISCONTROL)
     DECLARE_NOT_AGGREGATABLE(CMapWinGISControl)
     DECLARE_PROTECT_FINAL_CONSTRUCT()
@@ -124,23 +125,10 @@ public:
     ~CMapWinGISControl();
 
 private:
-    static bool PostGdalDispatchMessage(void* window) noexcept;
-    HRESULT FireGdalProgress(
-        const mwg::activex::GdalOperationNotification& notification);
-    HRESULT FireGdalOperationCompleted(const std::uint64_t operationId);
-    void DestroyGdalDispatchWindow() noexcept;
-    void RecordGdalCallbackError(
-        std::uint64_t operationId,
-        HRESULT result) noexcept;
-
     std::unique_ptr<mwg::VectorDataset> _dataset;
     std::optional<mwg::rendering::VectorRenderScene> _scene;
     mwg::activex::VectorLayerRenderer _renderer;
-    mwg::activex::GdalOperationDispatcher _gdalDispatcher;
-    std::shared_ptr<mwg::activex::GdalDispatchWindow> _gdalDispatchWindow;
-    bool _gdalDispatching = false;
-    bool _gdalDispatchWindowDestroyPending = false;
-    bool _gdalClosing = false;
+    mwg::activex::GdalEventSource _gdalEvents;
     LONGLONG _featureCount = 0;
 };
 

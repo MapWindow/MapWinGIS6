@@ -16,11 +16,12 @@
 #include <stdexcept>
 #include <vector>
 
+#include "ViewTransform.h"
+
 namespace mwg::activex
 {
     namespace
     {
-        constexpr int kMargin = 12;
         constexpr COLORREF kFillColor = RGB(61, 122, 169);
         constexpr COLORREF kOutlineColor = RGB(24, 58, 82);
 
@@ -100,20 +101,18 @@ namespace mwg::activex
 
         [[nodiscard]] double ToDeviceX(
             const rendering::Point& point,
-            const rendering::VectorRenderScene& scene,
-            const double scale,
-            const double left) noexcept
+            const ViewTransform& transform,
+            const double originX) noexcept
         {
-            return left + (point.x - scene.extent.xMin) * scale;
+            return originX + transform.ToDeviceX(point);
         }
 
         [[nodiscard]] double ToDeviceY(
             const rendering::Point& point,
-            const rendering::VectorRenderScene& scene,
-            const double scale,
-            const double top) noexcept
+            const ViewTransform& transform,
+            const double originY) noexcept
         {
-            return top + (scene.extent.yMax - point.y) * scale;
+            return originY + transform.ToDeviceY(point);
         }
 
         [[nodiscard]] bool IsDrawableCoordinate(const double value) noexcept
@@ -127,9 +126,9 @@ namespace mwg::activex
         /// whole scene instead of being partially rasterized.
         [[nodiscard]] bool HasDrawableCoordinates(
             const rendering::VectorRenderScene& scene,
-            const double scale,
-            const double left,
-            const double top) noexcept
+            const ViewTransform& transform,
+            const double originX,
+            const double originY) noexcept
         {
             for (const rendering::Polygon& polygon : scene.polygons)
             {
@@ -137,8 +136,8 @@ namespace mwg::activex
                 {
                     for (const rendering::Point& point : ring)
                     {
-                        if (!IsDrawableCoordinate(ToDeviceX(point, scene, scale, left)) ||
-                            !IsDrawableCoordinate(ToDeviceY(point, scene, scale, top)))
+                        if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
+                            !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
                         {
                             return false;
                         }
@@ -151,14 +150,13 @@ namespace mwg::activex
 
         [[nodiscard]] POINT ToPoint(
             const rendering::Point& point,
-            const rendering::VectorRenderScene& scene,
-            const double scale,
-            const double left,
-            const double top) noexcept
+            const ViewTransform& transform,
+            const double originX,
+            const double originY) noexcept
         {
             return {
-                static_cast<LONG>(std::lround(ToDeviceX(point, scene, scale, left))),
-                static_cast<LONG>(std::lround(ToDeviceY(point, scene, scale, top)))};
+                static_cast<LONG>(std::lround(ToDeviceX(point, transform, originX))),
+                static_cast<LONG>(std::lround(ToDeviceY(point, transform, originY)))};
         }
     }
 
@@ -173,28 +171,28 @@ namespace mwg::activex
             return E_INVALIDARG;
         }
 
-        const double availableWidth = static_cast<double>(bounds.right - bounds.left - 2 * kMargin);
-        const double availableHeight = static_cast<double>(bounds.bottom - bounds.top - 2 * kMargin);
-        if (availableWidth <= 0.0 || availableHeight <= 0.0)
+        const double targetWidth =
+            static_cast<double>(bounds.right) - static_cast<double>(bounds.left);
+        const double targetHeight =
+            static_cast<double>(bounds.bottom) - static_cast<double>(bounds.top);
+        if (targetWidth <= 2.0 * ViewTransform::kMargin ||
+            targetHeight <= 2.0 * ViewTransform::kMargin)
         {
             return S_OK;
         }
 
-        const double scale = std::min(
-            availableWidth / scene.extent.Width(),
-            availableHeight / scene.extent.Height());
-        if (!std::isfinite(scale) || scale <= 0.0)
+        const auto transform = ViewTransform::Create(
+            scene.extent,
+            targetWidth,
+            targetHeight);
+        if (!transform.has_value())
         {
             return E_INVALIDARG;
         }
 
-        const double drawingWidth = scene.extent.Width() * scale;
-        const double drawingHeight = scene.extent.Height() * scale;
-        const double left = static_cast<double>(bounds.left) +
-                            (static_cast<double>(bounds.right - bounds.left) - drawingWidth) / 2.0;
-        const double top = static_cast<double>(bounds.top) +
-                           (static_cast<double>(bounds.bottom - bounds.top) - drawingHeight) / 2.0;
-        if (!HasDrawableCoordinates(scene, scale, left, top))
+        const double originX = static_cast<double>(bounds.left);
+        const double originY = static_cast<double>(bounds.top);
+        if (!HasDrawableCoordinates(scene, *transform, originX, originY))
         {
             return E_INVALIDARG;
         }
@@ -244,7 +242,7 @@ namespace mwg::activex
                     ringCounts.push_back(static_cast<int>(ring.size()));
                     for (const rendering::Point& point : ring)
                     {
-                        points.push_back(ToPoint(point, scene, scale, left, top));
+                        points.push_back(ToPoint(point, *transform, originX, originY));
                     }
                 }
 

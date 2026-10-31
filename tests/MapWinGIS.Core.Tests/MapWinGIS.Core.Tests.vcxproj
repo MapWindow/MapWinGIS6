@@ -60,6 +60,7 @@
     <ClCompile Include="GdalTypedOptionsTests.cpp" />
     <ClCompile Include="GdalModernCapabilitiesTests.cpp" />
     <ClCompile Include="GdalOperationDispatcherTests.cpp" />
+    <ClCompile Include="ComConversionTests.cpp" />
     <ClCompile Include="GdalUtilsTests.cpp" />
     <ClCompile Include="ActiveXActivationTests.cpp" />
     <ClCompile Include="Main.cpp" />
@@ -69,7 +70,9 @@
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\GdiVectorLayerRenderer.cpp" />
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\OpenGlVectorLayerRenderer.cpp" />
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\GdalOperationDispatcher.cpp" />
+    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\ComConversion.cpp" />
     <ClCompile Include="..\..\src\MapWinGIS.ActiveX\VectorLayerRenderer.cpp" />
+    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\ViewTransform.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
     <ClCompile Include="VectorLayerTests.cpp" />
     <ClCompile Include="VectorRenderSceneTests.cpp" />

@@ -33,6 +33,9 @@ internal interface IMapWinGISControlGdal
 }
 
 internal sealed record GdalOperationResult(
+    long OperationId,
+    long CompletedOperationId,
+    GdalProgressNotification[] ProgressEvents,
     bool Succeeded,
     bool Cancelled,
     int ErrorCode,
@@ -41,6 +44,11 @@ internal sealed record GdalOperationResult(
     string Summary,
     string Diagnostics,
     string[] Warnings);
+
+internal sealed record GdalProgressNotification(
+    long OperationId,
+    double Progress,
+    string Message);
 
 internal static class GdalOperationClient
 {
@@ -67,10 +75,13 @@ internal static class GdalOperationClient
         var control = (IMapWinGISControlGdal)automationObject;
         var completed = new TaskCompletionSource<long>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var progressEvents = new List<GdalProgressNotification>();
         long operationId = 0;
+        long completedOperationId = 0;
 
         GdalProgressEvent onProgress = (id, fraction, message) =>
         {
+            progressEvents.Add(new GdalProgressNotification(id, fraction, message));
             if (id == operationId)
             {
                 progress?.Report((fraction, message));
@@ -78,6 +89,7 @@ internal static class GdalOperationClient
         };
         GdalCompletedEvent onCompleted = id =>
         {
+            completedOperationId = id;
             if (id == operationId)
             {
                 completed.TrySetResult(id);
@@ -137,6 +149,9 @@ internal static class GdalOperationClient
                 out string[] warnings);
 
             return new GdalOperationResult(
+                operationId,
+                completedOperationId,
+                [.. progressEvents],
                 succeeded,
                 cancelled,
                 errorCode,

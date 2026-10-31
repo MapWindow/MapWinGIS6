@@ -105,6 +105,7 @@ namespace mwg::rendering
 
         VectorRenderScene scene;
         scene.extent = layer.GetExtent();
+        scene.sourceFeatureCount = layer.FeatureCount();
         detail::VectorLayerAccess::ForEachGeometry(
             layer,
             [&scene](const OGRGeometry& geometry)
@@ -117,5 +118,15 @@ namespace mwg::rendering
             throw CoreError("Vector layer contains no polygon geometry to render");
         }
         return scene;
+    }
+
+    VectorRenderScene CreateVectorRenderScene(const VectorDataset& dataset)
+    {
+        if (dataset.LayerCount() == 0)
+        {
+            throw CoreError("Vector dataset contains no layers");
+        }
+
+        return CreateVectorRenderScene(dataset.Layer(0));
     }
 }

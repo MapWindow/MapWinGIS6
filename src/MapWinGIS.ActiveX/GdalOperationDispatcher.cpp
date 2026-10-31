@@ -104,10 +104,13 @@ namespace mwg::activex
                 return;
             }
 
-            auto* const context = new (std::nothrow) WorkerExitContext{
-                module,
-                workerHandle};
-            if (context == nullptr)
+            std::unique_ptr<WorkerExitContext> context;
+            try
+            {
+                context = std::make_unique<WorkerExitContext>(
+                    WorkerExitContext{module, workerHandle});
+            }
+            catch (const std::bad_alloc&)
             {
                 ::CloseHandle(workerHandle);
                 ::OutputDebugStringW(
@@ -119,17 +122,17 @@ namespace mwg::activex
                 nullptr,
                 0,
                 &ReleaseModuleAfterWorkerExit,
-                context,
+                context.get(),
                 0,
                 nullptr);
             if (watcher == nullptr)
             {
                 ::CloseHandle(workerHandle);
-                delete context;
                 ::OutputDebugStringW(
                     L"MapWinGIS: unable to start a GDAL worker module-lifetime watcher; retaining the module reference.\n");
                 return;
             }
+            static_cast<void>(context.release()); // The watcher now owns this context.
             ::CloseHandle(watcher);
         }
 
@@ -401,55 +404,53 @@ namespace mwg::activex
         return GdalCancelResult::Requested;
     }
 
-    GdalEndResult GdalOperationDispatcher::End(
-        const std::uint64_t operationId,
-        GdalOperationSnapshot& result)
+    GdalOperationLookup GdalOperationDispatcher::End(
+        const std::uint64_t operationId)
     {
         std::lock_guard lock(_state->mutex);
         const auto operation = _state->operations.find(operationId);
         if (operation == _state->operations.end())
         {
-            return GdalEndResult::NotFound;
+            return {GdalEndResult::NotFound, std::nullopt};
         }
         if (!operation->second->completed)
         {
-            return GdalEndResult::Pending;
+            return {GdalEndResult::Pending, std::nullopt};
         }
         if (operation->second->notificationDeliveryInProgress)
         {
-            return GdalEndResult::Pending;
+            return {GdalEndResult::Pending, std::nullopt};
         }
 
-        result = std::move(operation->second->result);
+        GdalOperationSnapshot result = std::move(operation->second->result);
         result.callbackErrorCode = operation->second->callbackErrorCode;
         result.callbackError = std::move(operation->second->callbackError);
         _state->operations.erase(operation);
-        return GdalEndResult::Ended;
+        return {GdalEndResult::Ended, std::move(result)};
     }
 
-    GdalEndResult GdalOperationDispatcher::GetResult(
-        const std::uint64_t operationId,
-        GdalOperationSnapshot& result) const
+    GdalOperationLookup GdalOperationDispatcher::GetResult(
+        const std::uint64_t operationId) const
     {
         std::lock_guard lock(_state->mutex);
         const auto operation = _state->operations.find(operationId);
         if (operation == _state->operations.end())
         {
-            return GdalEndResult::NotFound;
+            return {GdalEndResult::NotFound, std::nullopt};
         }
         if (!operation->second->completed)
         {
-            return GdalEndResult::Pending;
+            return {GdalEndResult::Pending, std::nullopt};
         }
         if (operation->second->notificationDeliveryInProgress)
         {
-            return GdalEndResult::Pending;
+            return {GdalEndResult::Pending, std::nullopt};
         }
 
-        result = operation->second->result;
+        GdalOperationSnapshot result = operation->second->result;
         result.callbackErrorCode = operation->second->callbackErrorCode;
         result.callbackError = operation->second->callbackError;
-        return GdalEndResult::Ended;
+        return {GdalEndResult::Ended, std::move(result)};
     }
 
     bool GdalOperationDispatcher::BeginNotificationDelivery(

@@ -23,6 +23,8 @@ The .NET 10 WinForms host exercises the real ActiveX control through `AxHost`
 using registration-free COM activation from its embedded application
 manifest. It has a visible manual mode and an `--automated` mode that uses the
 same host, resize, repaint, and dispose paths, with no COM registry changes.
+The automated checks also run a GDAL raster conversion and check progress and
+completion events, including operation IDs and progress arguments.
 From an interactive Windows desktop session, run:
 
 ```powershell
@@ -185,6 +187,8 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
 - Append `<< value` to expectations on strings when the failure output
   matters.
 - Test files carry the same SPDX and Doxygen header as production files.
+- `ViewTransform` tests cover the shared scale and offset used by both GDI and
+  OpenGL renderers, including degenerate extents and zero-area targets.
 - Cover for each feature: happy path, empty/missing input, out-of-range
   indexes, null values, non-ASCII paths, write-then-reopen round-trips, and
   error cases.

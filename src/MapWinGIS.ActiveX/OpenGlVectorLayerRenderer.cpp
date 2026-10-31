@@ -25,6 +25,8 @@
 
 #pragma comment(lib, "opengl32.lib")
 
+#include "ViewTransform.h"
+
 namespace mwg::activex
 {
     // OpenGL 3.0 and GL_EXT_framebuffer_object share these enum values.
@@ -104,8 +106,6 @@ namespace mwg::activex
 
     namespace
     {
-        constexpr int kMargin = 12;
-
         class ScopedCurrentContext final
         {
         public:
@@ -258,30 +258,25 @@ namespace mwg::activex
         Release();
     }
 
-    bool OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+    std::optional<std::wstring_view> OpenGlVectorLayerRenderer::GetTargetRejectionReason(
         const int width,
         const int height,
         const int maximumWidth,
-        const int maximumHeight,
-        std::wstring_view& rejectionReason) noexcept
+        const int maximumHeight) noexcept
     {
         if (width <= 0 || height <= 0)
         {
-            rejectionReason = L"The OpenGL target dimensions must be positive.";
-            return false;
+            return L"The OpenGL target dimensions must be positive.";
         }
 
         if (maximumWidth <= 0 || maximumHeight <= 0)
         {
-            rejectionReason = L"OpenGL did not report a usable maximum framebuffer size.";
-            return false;
+            return L"OpenGL did not report a usable maximum framebuffer size.";
         }
 
         if (width > maximumWidth || height > maximumHeight)
         {
-            rejectionReason =
-                L"The OpenGL target exceeds the detected maximum framebuffer or viewport size.";
-            return false;
+            return L"The OpenGL target exceeds the detected maximum framebuffer or viewport size.";
         }
 
         const std::size_t pixelWidth = static_cast<std::size_t>(width);
@@ -289,13 +284,10 @@ namespace mwg::activex
         if (pixelWidth > std::numeric_limits<std::size_t>::max() / pixelHeight ||
             pixelWidth * pixelHeight > kMaxStagingBufferBytes / kBytesPerPixel)
         {
-            rejectionReason =
-                L"The OpenGL frame exceeds the 64 MiB CPU staging-buffer budget.";
-            return false;
+            return L"The OpenGL frame exceeds the 64 MiB CPU staging-buffer budget.";
         }
 
-        rejectionReason = {};
-        return true;
+        return std::nullopt;
     }
 
     bool OpenGlVectorLayerRenderer::Initialize() noexcept
@@ -400,8 +392,18 @@ namespace mwg::activex
             return false;
         }
 
-        _framebufferFunctions.reset(new (std::nothrow) FramebufferFunctions{});
-        if (_framebufferFunctions == nullptr || !_framebufferFunctions->Load())
+        try
+        {
+            _framebufferFunctions = std::make_unique<FramebufferFunctions>();
+        }
+        catch (const std::bad_alloc&)
+        {
+            _lastFailureReason =
+                L"OpenGL could not allocate its framebuffer function table.";
+            return false;
+        }
+
+        if (!_framebufferFunctions->Load())
         {
             _framebufferFunctions.reset();
             _lastFailureReason =
@@ -499,108 +501,72 @@ namespace mwg::activex
         }
     }
 
-#ifdef MWG_ENABLE_RENDERER_TEST_HOOKS
-    void OpenGlVectorLayerRenderer::SimulateContextLossForTesting() noexcept
-    {
-        // Keep the stale handles so Draw observes the failure itself; Release
-        // later tolerates the already-released DC and destroyed window.
-        if (_window != nullptr)
-        {
-            if (_deviceContext != nullptr)
-            {
-                ReleaseDC(_window, _deviceContext);
-            }
-            DestroyWindow(_window);
-        }
-    }
-#endif
-
-    HRESULT OpenGlVectorLayerRenderer::Draw(
+    OpenGlVectorLayerRenderer::TargetValidation
+    OpenGlVectorLayerRenderer::ValidateTarget(
         const HDC deviceContext,
         const RECT& bounds,
         const rendering::VectorRenderScene& scene) noexcept
     {
-        _lastFailureReason = L"OpenGL did not render this frame.";
         if (deviceContext == nullptr)
         {
             _lastFailureReason = L"The OpenGL target device context is invalid.";
-            return E_INVALIDARG;
+            return {E_INVALIDARG, std::nullopt};
         }
 
         if (!IsSupported(scene))
         {
             _lastFailureReason =
                 L"The scene uses geometry that the OpenGL backend does not support.";
-            return S_FALSE;
+            return {S_FALSE, std::nullopt};
         }
 
-        if (scene.extent.IsEmpty() ||
-            scene.extent.Width() <= 0.0 ||
+        if (scene.extent.IsEmpty() || scene.extent.Width() <= 0.0 ||
             scene.extent.Height() <= 0.0)
         {
             _lastFailureReason = L"The scene extent is invalid for OpenGL rendering.";
-            return E_INVALIDARG;
+            return {E_INVALIDARG, std::nullopt};
         }
 
         const std::int64_t width = GetWidth(bounds);
         const std::int64_t height = GetHeight(bounds);
-        if (width <= 2 * kMargin || height <= 2 * kMargin ||
+        if (width <= 2 * static_cast<std::int64_t>(ViewTransform::kMargin) ||
+            height <= 2 * static_cast<std::int64_t>(ViewTransform::kMargin) ||
             width > std::numeric_limits<int>::max() ||
             height > std::numeric_limits<int>::max())
         {
             _lastFailureReason = L"The OpenGL target has invalid or too-small dimensions.";
-            return S_FALSE;
+            return {S_FALSE, std::nullopt};
         }
 
-        const std::size_t pixelWidth = static_cast<std::size_t>(width);
-        const std::size_t pixelHeight = static_cast<std::size_t>(height);
-        std::wstring_view rejectionReason;
-        if (!IsTargetWithinLimits(
+        const auto rejectionReason = GetTargetRejectionReason(
+            static_cast<int>(width),
+            static_cast<int>(height),
+            std::numeric_limits<int>::max(),
+            std::numeric_limits<int>::max());
+        if (rejectionReason.has_value())
+        {
+            _lastFailureReason = *rejectionReason;
+            return {S_FALSE, std::nullopt};
+        }
+
+        return {
+            S_OK,
+            Target{
                 static_cast<int>(width),
                 static_cast<int>(height),
-                std::numeric_limits<int>::max(),
-                std::numeric_limits<int>::max(),
-                rejectionReason))
-        {
-            _lastFailureReason = rejectionReason;
-            return S_FALSE;
-        }
+                static_cast<std::size_t>(width),
+                static_cast<std::size_t>(height)}};
+    }
 
-        // Keep the flag set until a replacement context initializes, so a
-        // transient recreation failure is retried on later draws.
-        if (_contextInvalid)
-        {
-            Release();
-            _initializationFailed = false;
-            _initializationFailureReason = {};
-        }
-
-        if (!Initialize())
-        {
-            return S_FALSE;
-        }
-        _contextInvalid = false;
-
-        if (!IsTargetWithinLimits(
-                static_cast<int>(width),
-                static_cast<int>(height),
-                _maximumTargetWidth,
-                _maximumTargetHeight,
-                rejectionReason))
-        {
-            _lastFailureReason = rejectionReason;
-            return S_FALSE;
-        }
-
-        const std::size_t pixelCount = pixelWidth * pixelHeight;
-        const std::size_t stagingBytes = pixelCount * kBytesPerPixel;
+    bool OpenGlVectorLayerRenderer::EnsureStaging(
+        const std::size_t stagingBytes) noexcept
+    {
         try
         {
-            // Allocate exactly the accepted size and free the old buffer
-            // first, so neither retained capacity nor the resize peak can
-            // exceed the staging budget enforced by IsTargetWithinLimits.
             if (_rgbaPixels.capacity() < stagingBytes)
             {
+                // Drop retained capacity before reserve to avoid overlapping
+                // allocations that exceed the 64 MiB staging budget.
                 std::vector<unsigned char>().swap(_rgbaPixels);
                 _rgbaPixels.reserve(stagingBytes);
             }
@@ -609,12 +575,29 @@ namespace mwg::activex
         catch (const std::bad_alloc&)
         {
             _lastFailureReason = L"OpenGL could not allocate its CPU staging buffers.";
-            return S_FALSE;
+            return false;
         }
         catch (const std::length_error&)
         {
             _lastFailureReason = L"The OpenGL CPU staging-buffer size is not representable.";
-            return S_FALSE;
+            return false;
+        }
+        return true;
+    }
+
+    HRESULT OpenGlVectorLayerRenderer::RenderScene(
+        const rendering::VectorRenderScene& scene,
+        const Target& target) noexcept
+    {
+        const auto transform = ViewTransform::Create(
+            scene.extent,
+            static_cast<double>(target.width),
+            static_cast<double>(target.height));
+        if (!transform.has_value())
+        {
+            _lastFailureReason =
+                L"The scene extent cannot be represented in the OpenGL viewport.";
+            return E_INVALIDARG;
         }
 
         const ScopedCurrentContext currentContext(_deviceContext, _renderingContext);
@@ -626,9 +609,7 @@ namespace mwg::activex
             return E_FAIL;
         }
 
-        const int viewportWidth = static_cast<int>(width);
-        const int viewportHeight = static_cast<int>(height);
-        if (!ResizeFramebuffer(viewportWidth, viewportHeight))
+        if (!ResizeFramebuffer(target.width, target.height))
         {
             _lastFailureReason =
                 L"OpenGL could not allocate a complete framebuffer for this target.";
@@ -636,30 +617,20 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        const double availableWidth = static_cast<double>(width - 2 * kMargin);
-        const double availableHeight = static_cast<double>(height - 2 * kMargin);
-        const double scale = std::min(
-            availableWidth / scene.extent.Width(),
-            availableHeight / scene.extent.Height());
-        if (!std::isfinite(scale) || scale <= 0.0)
-        {
-            _lastFailureReason = L"The scene extent cannot be represented in the OpenGL viewport.";
-            return E_INVALIDARG;
-        }
-
-        const double drawingWidth = scene.extent.Width() * scale;
-        const double drawingHeight = scene.extent.Height() * scale;
-        const double left = (static_cast<double>(width) - drawingWidth) / 2.0;
-        const double top = (static_cast<double>(height) - drawingHeight) / 2.0;
-
         while (glGetError() != GL_NO_ERROR)
         {
         }
 
-        glViewport(0, 0, viewportWidth, viewportHeight);
+        glViewport(0, 0, target.width, target.height);
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();
-        glOrtho(0.0, static_cast<double>(width), static_cast<double>(height), 0.0, -1.0, 1.0);
+        glOrtho(
+            0.0,
+            static_cast<double>(target.width),
+            static_cast<double>(target.height),
+            0.0,
+            -1.0,
+            1.0);
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
         glDisable(GL_DITHER);
@@ -691,9 +662,7 @@ namespace mwg::activex
             for (std::size_t index = 0; index < count; ++index)
             {
                 const rendering::Point& point = ring[index];
-                const double x = left + (point.x - scene.extent.xMin) * scale;
-                const double y = top + (scene.extent.yMax - point.y) * scale;
-                glVertex2d(x, y);
+                glVertex2d(transform->ToDeviceX(point), transform->ToDeviceY(point));
             }
             glEnd();
 
@@ -702,9 +671,7 @@ namespace mwg::activex
             for (std::size_t index = 0; index < count; ++index)
             {
                 const rendering::Point& point = ring[index];
-                const double x = left + (point.x - scene.extent.xMin) * scale;
-                const double y = top + (scene.extent.yMax - point.y) * scale;
-                glVertex2d(x, y);
+                glVertex2d(transform->ToDeviceX(point), transform->ToDeviceY(point));
             }
             glEnd();
         }
@@ -714,8 +681,8 @@ namespace mwg::activex
         glReadPixels(
             0,
             0,
-            viewportWidth,
-            viewportHeight,
+            target.width,
+            target.height,
             GL_RGBA,
             GL_UNSIGNED_BYTE,
             _rgbaPixels.data());
@@ -728,14 +695,25 @@ namespace mwg::activex
             return E_FAIL;
         }
 
-        for (std::size_t row = 0; row < pixelHeight / 2; ++row)
+        return S_OK;
+    }
+
+    HRESULT OpenGlVectorLayerRenderer::CopyToDeviceContext(
+        const HDC deviceContext,
+        const RECT& bounds,
+        const Target& target) noexcept
+    {
+        const std::size_t pixelCount = target.pixelWidth * target.pixelHeight;
+        for (std::size_t row = 0; row < target.pixelHeight / 2; ++row)
         {
-            for (std::size_t column = 0; column < pixelWidth; ++column)
+            for (std::size_t column = 0; column < target.pixelWidth; ++column)
             {
-                const std::size_t topPixel = (row * pixelWidth + column) * 4;
+                const std::size_t topPixel =
+                    (row * target.pixelWidth + column) * kBytesPerPixel;
                 const std::size_t bottomPixel =
-                    ((pixelHeight - row - 1) * pixelWidth + column) * 4;
-                for (std::size_t channel = 0; channel < 4; ++channel)
+                    ((target.pixelHeight - row - 1) * target.pixelWidth + column) *
+                    kBytesPerPixel;
+                for (std::size_t channel = 0; channel < kBytesPerPixel; ++channel)
                 {
                     std::swap(
                         _rgbaPixels[topPixel + channel],
@@ -746,15 +724,15 @@ namespace mwg::activex
 
         for (std::size_t pixel = 0; pixel < pixelCount; ++pixel)
         {
-            const std::size_t offset = pixel * 4;
+            const std::size_t offset = pixel * kBytesPerPixel;
             std::swap(_rgbaPixels[offset], _rgbaPixels[offset + 2]);
             _rgbaPixels[offset + 3] = 255;
         }
 
         BITMAPINFO bitmapInfo{};
         bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bitmapInfo.bmiHeader.biWidth = viewportWidth;
-        bitmapInfo.bmiHeader.biHeight = -viewportHeight;
+        bitmapInfo.bmiHeader.biWidth = target.width;
+        bitmapInfo.bmiHeader.biHeight = -target.height;
         bitmapInfo.bmiHeader.biPlanes = 1;
         bitmapInfo.bmiHeader.biBitCount = 32;
         bitmapInfo.bmiHeader.biCompression = BI_RGB;
@@ -763,22 +741,92 @@ namespace mwg::activex
             deviceContext,
             bounds.left,
             bounds.top,
-            static_cast<DWORD>(viewportWidth),
-            static_cast<DWORD>(viewportHeight),
+            static_cast<DWORD>(target.width),
+            static_cast<DWORD>(target.height),
             0,
             0,
             0,
-            static_cast<UINT>(viewportHeight),
+            static_cast<UINT>(target.height),
             _rgbaPixels.data(),
             &bitmapInfo,
             DIB_RGB_COLORS);
-        if (copiedRows != viewportHeight)
+        if (copiedRows != target.height)
         {
             _lastFailureReason =
                 L"OpenGL rendered the frame, but Windows could not present its pixels.";
             return E_FAIL;
         }
-
         return S_OK;
+    }
+
+#ifdef MWG_ENABLE_RENDERER_TEST_HOOKS
+    void OpenGlVectorLayerRenderer::SimulateContextLossForTesting() noexcept
+    {
+        // Keep the stale handles so Draw observes the failure itself; Release
+        // later tolerates the already-released DC and destroyed window.
+        if (_window != nullptr)
+        {
+            if (_deviceContext != nullptr)
+            {
+                ReleaseDC(_window, _deviceContext);
+            }
+            DestroyWindow(_window);
+        }
+    }
+#endif
+
+    HRESULT OpenGlVectorLayerRenderer::Draw(
+        const HDC deviceContext,
+        const RECT& bounds,
+        const rendering::VectorRenderScene& scene) noexcept
+    {
+        _lastFailureReason = L"OpenGL did not render this frame.";
+        const TargetValidation validation = ValidateTarget(deviceContext, bounds, scene);
+        if (!validation.target.has_value())
+        {
+            return validation.result;
+        }
+        const Target& target = *validation.target;
+
+        // Keep the flag set until a replacement context initializes, so a
+        // transient recreation failure is retried on later draws.
+        if (_contextInvalid)
+        {
+            Release();
+            _initializationFailed = false;
+            _initializationFailureReason = {};
+        }
+
+        if (!Initialize())
+        {
+            return S_FALSE;
+        }
+        _contextInvalid = false;
+
+        const auto rejectionReason = GetTargetRejectionReason(
+            target.width,
+            target.height,
+            _maximumTargetWidth,
+            _maximumTargetHeight);
+        if (rejectionReason.has_value())
+        {
+            _lastFailureReason = *rejectionReason;
+            return S_FALSE;
+        }
+
+        const std::size_t stagingBytes =
+            target.pixelWidth * target.pixelHeight * kBytesPerPixel;
+        if (!EnsureStaging(stagingBytes))
+        {
+            return S_FALSE;
+        }
+
+        const HRESULT renderResult = RenderScene(scene, target);
+        if (FAILED(renderResult) || renderResult == S_FALSE)
+        {
+            return renderResult;
+        }
+
+        return CopyToDeviceContext(deviceContext, bounds, target);
     }
 }

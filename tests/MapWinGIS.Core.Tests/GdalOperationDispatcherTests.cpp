@@ -227,12 +227,11 @@ TEST(GdalOperationDispatcher, RunsRasterConversionAndDeliversCompletionOnOwnerTh
     }
     ASSERT_TRUE(completedOnOwnerThread);
 
-    mwg::activex::GdalOperationSnapshot result;
-    ASSERT_EQ(
-        dispatcher.End(operationId, result),
-        mwg::activex::GdalEndResult::Ended);
-    ASSERT_TRUE(result.succeeded) << result.diagnostics;
-    EXPECT_FALSE(result.cancelled);
+    auto result = dispatcher.End(operationId);
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(result.result.has_value());
+    ASSERT_TRUE(result.result->succeeded) << result.result->diagnostics;
+    EXPECT_FALSE(result.result->cancelled);
 
     mwg::GdalDatasetPtr converted(static_cast<GDALDataset*>(
         GDALOpen(ToUtf8(output).c_str(), GA_ReadOnly)));
@@ -303,12 +302,11 @@ TEST(GdalOperationDispatcher, CancellationIsIdempotentAndReportedSeparately)
     }
     ASSERT_TRUE(completed);
 
-    mwg::activex::GdalOperationSnapshot result;
-    ASSERT_EQ(
-        dispatcher.End(operationId, result),
-        mwg::activex::GdalEndResult::Ended);
-    EXPECT_FALSE(result.succeeded);
-    EXPECT_TRUE(result.cancelled);
+    auto result = dispatcher.End(operationId);
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(result.result.has_value());
+    EXPECT_FALSE(result.result->succeeded);
+    EXPECT_TRUE(result.result->cancelled);
 }
 
 TEST(GdalOperationDispatcher, PreservesWarningsAndReportsInvalidAndFailedOperations)
@@ -329,11 +327,10 @@ TEST(GdalOperationDispatcher, PreservesWarningsAndReportsInvalidAndFailedOperati
             signal,
             operationId,
             std::chrono::steady_clock::now() + 10s));
-        mwg::activex::GdalOperationSnapshot result;
-        EXPECT_EQ(
-            dispatcher.End(operationId, result),
-            mwg::activex::GdalEndResult::Ended);
-        return result;
+        auto result = dispatcher.End(operationId);
+        EXPECT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+        EXPECT_TRUE(result.result.has_value());
+        return result.result.value_or(mwg::activex::GdalOperationSnapshot{});
     };
 
     const auto invalid = runToCompletion("raster convert", {"--unknown-option"});
@@ -400,11 +397,14 @@ TEST(GdalOperationDispatcher, CoalescesProgressAndKeepsConcurrentOperationIdsDis
     EXPECT_EQ(completions[first], 1);
     EXPECT_EQ(completions[second], 1);
 
-    mwg::activex::GdalOperationSnapshot result;
-    EXPECT_EQ(dispatcher.End(first, result), mwg::activex::GdalEndResult::Ended);
-    EXPECT_TRUE(result.succeeded);
-    EXPECT_EQ(dispatcher.End(second, result), mwg::activex::GdalEndResult::Ended);
-    EXPECT_TRUE(result.succeeded);
+    const auto firstResult = dispatcher.End(first);
+    ASSERT_EQ(firstResult.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(firstResult.result.has_value());
+    EXPECT_TRUE(firstResult.result->succeeded);
+    const auto secondResult = dispatcher.End(second);
+    ASSERT_EQ(secondResult.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(secondResult.result.has_value());
+    EXPECT_TRUE(secondResult.result->succeeded);
 }
 
 TEST(GdalOperationDispatcher, ShutdownCancelsWorkersWithoutWaitingForOwnerDispatch)
@@ -437,18 +437,19 @@ TEST(GdalOperationDispatcher, ShutdownCancelsWorkersWithoutWaitingForOwnerDispat
         std::chrono::steady_clock::now() - shutdownStart,
         100ms);
 
-    mwg::activex::GdalOperationSnapshot result;
     const auto completionDeadline = std::chrono::steady_clock::now() + 10s;
-    auto endResult = dispatcher.GetResult(operationId, result);
-    while (endResult == mwg::activex::GdalEndResult::Pending &&
+    auto result = dispatcher.GetResult(operationId);
+    while (result.status == mwg::activex::GdalEndResult::Pending &&
            std::chrono::steady_clock::now() < completionDeadline)
     {
         std::this_thread::sleep_for(1ms);
-        endResult = dispatcher.GetResult(operationId, result);
+        result = dispatcher.GetResult(operationId);
     }
-    ASSERT_EQ(endResult, mwg::activex::GdalEndResult::Ended);
-    EXPECT_EQ(dispatcher.End(operationId, result), mwg::activex::GdalEndResult::Ended);
-    EXPECT_TRUE(result.cancelled);
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+    const auto ended = dispatcher.End(operationId);
+    ASSERT_EQ(ended.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(ended.result.has_value());
+    EXPECT_TRUE(ended.result->cancelled);
     EXPECT_TRUE(dispatcher.DrainNotifications().empty());
 }
 
@@ -469,21 +470,19 @@ TEST(GdalOperationDispatcher, NotificationDeliveryDefersEndUntilCallbacksReturn)
         std::chrono::steady_clock::now() + 10s));
 
     ASSERT_TRUE(dispatcher.BeginNotificationDelivery(operationId));
-    mwg::activex::GdalOperationSnapshot result;
-    EXPECT_EQ(
-        dispatcher.End(operationId, result),
-        mwg::activex::GdalEndResult::Pending);
+    auto result = dispatcher.End(operationId);
+    EXPECT_EQ(result.status, mwg::activex::GdalEndResult::Pending);
     constexpr int callbackError = -1;
     dispatcher.RecordCallbackError(
         operationId,
         callbackError,
         "event callback failed");
     dispatcher.EndNotificationDelivery(operationId);
-    EXPECT_EQ(
-        dispatcher.End(operationId, result),
-        mwg::activex::GdalEndResult::Ended);
-    EXPECT_EQ(result.callbackErrorCode, callbackError);
-    EXPECT_EQ(result.callbackError, "event callback failed");
+    result = dispatcher.End(operationId);
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(result.result.has_value());
+    EXPECT_EQ(result.result->callbackErrorCode, callbackError);
+    EXPECT_EQ(result.result->callbackError, "event callback failed");
 }
 
 TEST(GdalOperationDispatcher, CompletionRemainsAvailableWhenWakeCallbackFails)
@@ -513,11 +512,10 @@ TEST(GdalOperationDispatcher, CompletionRemainsAvailableWhenWakeCallbackFails)
     ASSERT_TRUE(completed);
     EXPECT_GT(signal.attempts.load(), 0);
 
-    mwg::activex::GdalOperationSnapshot result;
-    EXPECT_EQ(
-        dispatcher.End(operationId, result),
-        mwg::activex::GdalEndResult::Ended);
-    EXPECT_TRUE(result.succeeded);
+    const auto result = dispatcher.End(operationId);
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(result.result.has_value());
+    EXPECT_TRUE(result.result->succeeded);
 }
 
 TEST(GdalOperationDispatcher, ResumesNotificationsWithoutCancellingActiveOperations)
@@ -554,14 +552,13 @@ TEST(GdalOperationDispatcher, ResumesNotificationsWithoutCancellingActiveOperati
         second,
         std::chrono::steady_clock::now() + 10s));
 
-    mwg::activex::GdalOperationSnapshot result;
-    EXPECT_EQ(
-        dispatcher.End(first, result),
-        mwg::activex::GdalEndResult::Ended);
-    EXPECT_TRUE(result.succeeded);
-    EXPECT_FALSE(result.cancelled);
-    EXPECT_EQ(
-        dispatcher.End(second, result),
-        mwg::activex::GdalEndResult::Ended);
-    EXPECT_TRUE(result.succeeded);
+    const auto firstResult = dispatcher.End(first);
+    ASSERT_EQ(firstResult.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(firstResult.result.has_value());
+    EXPECT_TRUE(firstResult.result->succeeded);
+    EXPECT_FALSE(firstResult.result->cancelled);
+    const auto secondResult = dispatcher.End(second);
+    ASSERT_EQ(secondResult.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(secondResult.result.has_value());
+    EXPECT_TRUE(secondResult.result->succeeded);
 }

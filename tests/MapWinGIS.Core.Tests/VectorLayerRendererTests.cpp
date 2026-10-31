@@ -13,6 +13,7 @@
 
 #include "OpenGlVectorLayerRenderer.h"
 #include "VectorLayerRenderer.h"
+#include "ViewTransform.h"
 
 namespace
 {
@@ -86,6 +87,7 @@ namespace
     {
         return {
             mwg::Extent{0.0, 0.0, 10.0, 10.0},
+            0,
             {{{{1.0, 1.0}, {9.0, 1.0}, {9.0, 9.0}, {1.0, 9.0}, {1.0, 1.0}}}}};
     }
 }
@@ -171,6 +173,7 @@ TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
 
     mwg::rendering::VectorRenderScene scene{
         mwg::Extent{-3.0, -3.0, 3.0, 3.0},
+        0,
         {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}};
 
     mwg::activex::OpenGlVectorLayerRenderer renderer;
@@ -256,31 +259,105 @@ TEST(VectorLayerRenderer, FallsBackToCpuWhenOpenGlStagingBudgetIsExceeded)
 
 TEST(VectorLayerRenderer, AppliesDetectedFramebufferLimitWithoutRequiringOpenGl)
 {
-    std::wstring_view rejectionReason;
-
-    EXPECT_TRUE(mwg::activex::OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+    EXPECT_FALSE(mwg::activex::OpenGlVectorLayerRenderer::GetTargetRejectionReason(
         1280,
         720,
         4096,
-        4096,
-        rejectionReason));
-    EXPECT_TRUE(rejectionReason.empty());
+        4096).has_value());
 
-    EXPECT_FALSE(mwg::activex::OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+    const auto framebufferRejection =
+        mwg::activex::OpenGlVectorLayerRenderer::GetTargetRejectionReason(
         2048,
         720,
         1024,
-        4096,
-        rejectionReason));
+        4096);
+    ASSERT_TRUE(framebufferRejection.has_value());
     EXPECT_EQ(
-        rejectionReason,
+        *framebufferRejection,
         L"The OpenGL target exceeds the detected maximum framebuffer or viewport size.");
 
     // A viewport limit smaller than the renderbuffer limit must also reject.
-    EXPECT_FALSE(mwg::activex::OpenGlVectorLayerRenderer::IsTargetWithinLimits(
+    EXPECT_TRUE(mwg::activex::OpenGlVectorLayerRenderer::GetTargetRejectionReason(
         1024,
         900,
         4096,
-        800,
-        rejectionReason));
+        800).has_value());
+}
+
+TEST(VectorLayerRenderer, ComputesExpectedSharedTransform)
+{
+    const mwg::Extent extent{0.0, 0.0, 10.0, 10.0};
+    const auto transform =
+        mwg::activex::ViewTransform::Create(extent, 120.0, 100.0);
+
+    ASSERT_TRUE(transform.has_value());
+    EXPECT_DOUBLE_EQ(transform->scale, 7.6);
+    EXPECT_DOUBLE_EQ(transform->offsetX, 22.0);
+    EXPECT_DOUBLE_EQ(transform->offsetY, 12.0);
+    EXPECT_DOUBLE_EQ(transform->ToDeviceX({0.0, 10.0}), 22.0);
+    EXPECT_DOUBLE_EQ(transform->ToDeviceY({0.0, 10.0}), 12.0);
+    EXPECT_DOUBLE_EQ(transform->ToDeviceX({10.0, 0.0}), 98.0);
+    EXPECT_DOUBLE_EQ(transform->ToDeviceY({10.0, 0.0}), 88.0);
+}
+
+TEST(VectorLayerRenderer, GdiAndOpenGlDrawAtTheSharedTransformCoordinates)
+{
+    BitmapSurface gdiSurface(120, 100);
+    BitmapSurface openGlSurface(120, 100);
+    ASSERT_TRUE(gdiSurface.IsValid());
+    ASSERT_TRUE(openGlSurface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    const auto scene = MakeConvexPolygonScene();
+    ASSERT_NE(
+        FillRect(gdiSurface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)),
+        0);
+
+    mwg::activex::GdiVectorLayerRenderer gdiRenderer;
+    ASSERT_EQ(gdiRenderer.Draw(gdiSurface.Get(), bounds, scene), S_OK);
+    EXPECT_EQ(GetPixel(gdiSurface.Get(), 60, 50), RGB(61, 122, 169));
+    EXPECT_EQ(GetPixel(gdiSurface.Get(), 95, 50), GetSysColor(COLOR_WINDOW));
+
+    mwg::activex::OpenGlVectorLayerRenderer openGlRenderer;
+    const HRESULT openGlResult = openGlRenderer.Draw(
+        openGlSurface.Get(),
+        bounds,
+        scene);
+    if (openGlResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(openGlResult, S_OK);
+
+    const POINT samplePoints[] = {
+        {60, 50},
+        {85, 50},
+        {25, 50},
+        {95, 50}};
+    for (const POINT point : samplePoints)
+    {
+        EXPECT_EQ(
+            GetPixel(gdiSurface.Get(), point.x, point.y),
+            GetPixel(openGlSurface.Get(), point.x, point.y))
+            << "at (" << point.x << ", " << point.y << ")";
+    }
+}
+
+TEST(VectorLayerRenderer, RejectsDegenerateExtentsAndZeroAreaTargets)
+{
+    EXPECT_FALSE(mwg::activex::ViewTransform::Create(
+        mwg::Extent{1.0, 0.0, 1.0, 10.0},
+        120.0,
+        100.0).has_value());
+    EXPECT_FALSE(mwg::activex::ViewTransform::Create(
+        mwg::Extent{0.0, 1.0, 10.0, 1.0},
+        120.0,
+        100.0).has_value());
+    EXPECT_FALSE(mwg::activex::ViewTransform::Create(
+        mwg::Extent{0.0, 0.0, 10.0, 10.0},
+        0.0,
+        100.0).has_value());
+    EXPECT_FALSE(mwg::activex::ViewTransform::Create(
+        mwg::Extent{0.0, 0.0, 10.0, 10.0},
+        120.0,
+        0.0).has_value());
 }

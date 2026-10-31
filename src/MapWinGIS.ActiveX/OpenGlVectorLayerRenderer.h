@@ -12,7 +12,9 @@
 
 #include <Windows.h>
 
+#include <cstddef>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -30,18 +32,18 @@ namespace mwg::activex
         OpenGlVectorLayerRenderer& operator=(const OpenGlVectorLayerRenderer&) = delete;
 
         /**
-         * @brief Checks a target against detected size limits and the staging budget.
+         * @brief Returns why a target exceeds detected size or staging limits.
          *
          * @p maximumWidth and @p maximumHeight are the effective per-axis
          * limits: the smaller of the renderbuffer size and the viewport
          * dimensions, because `glViewport` silently clamps larger targets.
+         * Returns an empty optional when the target is acceptable.
          */
-        [[nodiscard]] static bool IsTargetWithinLimits(
+        [[nodiscard]] static std::optional<std::wstring_view> GetTargetRejectionReason(
             int width,
             int height,
             int maximumWidth,
-            int maximumHeight,
-            std::wstring_view& rejectionReason) noexcept;
+            int maximumHeight) noexcept;
 
         /**
          * @brief Draws a scene of simple convex single-ring polygons.
@@ -75,11 +77,35 @@ namespace mwg::activex
 
     private:
         struct FramebufferFunctions;
+        struct Target final
+        {
+            int width = 0;
+            int height = 0;
+            std::size_t pixelWidth = 0;
+            std::size_t pixelHeight = 0;
+        };
+        struct TargetValidation final
+        {
+            HRESULT result = E_INVALIDARG;
+            std::optional<Target> target;
+        };
 
         [[nodiscard]] bool Initialize() noexcept;
         [[nodiscard]] bool InitializeFramebuffer() noexcept;
         [[nodiscard]] bool ResizeFramebuffer(int width, int height) noexcept;
         void Release() noexcept;
+        [[nodiscard]] TargetValidation ValidateTarget(
+            HDC deviceContext,
+            const RECT& bounds,
+            const rendering::VectorRenderScene& scene) noexcept;
+        [[nodiscard]] bool EnsureStaging(std::size_t stagingBytes) noexcept;
+        [[nodiscard]] HRESULT RenderScene(
+            const rendering::VectorRenderScene& scene,
+            const Target& target) noexcept;
+        [[nodiscard]] HRESULT CopyToDeviceContext(
+            HDC deviceContext,
+            const RECT& bounds,
+            const Target& target) noexcept;
 
         HWND _window{};
         HDC _deviceContext{};

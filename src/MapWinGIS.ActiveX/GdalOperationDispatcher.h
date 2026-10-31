@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,7 +21,7 @@
 
 namespace mwg::activex
 {
-    enum class GdalNotificationKind
+    enum class GdalNotificationKind : int
     {
         Progress,
         Completed,
@@ -46,7 +47,7 @@ namespace mwg::activex
         std::vector<std::string> warnings;
     };
 
-    enum class GdalCancelResult
+    enum class GdalCancelResult : int
     {
         Requested,
         AlreadyRequested,
@@ -54,11 +55,18 @@ namespace mwg::activex
         NotFound,
     };
 
-    enum class GdalEndResult
+    enum class GdalEndResult : int
     {
         Ended,
         Pending,
         NotFound,
+    };
+
+    struct GdalOperationLookup final
+    {
+        GdalEndResult status = GdalEndResult::NotFound;
+        // Present exactly when status is Ended.
+        std::optional<GdalOperationSnapshot> result;
     };
 
     /**
@@ -68,9 +76,11 @@ namespace mwg::activex
      * PostMessage. It is never a COM callback. Progress messages are coalesced
      * to one per operation; completion messages are retained. At most sixteen
      * operation results can be outstanding, bounding both active work and the
-     * notification queue. The owner calls DrainNotifications() and End() on
-     * its dispatch thread. Shutdown requests cancellation and detaches workers;
-     * workers retain only native state and never wait for owner-thread work.
+     * notification queue. Control-facing methods are called on the control's
+     * owner thread; cancellation is internally synchronized and may be
+     * requested from another thread. Shutdown requests cancellation and
+     * detaches workers; workers retain only native state and never wait for
+     * owner-thread work.
      */
     class GdalOperationDispatcher final
     {
@@ -81,37 +91,58 @@ namespace mwg::activex
         using WorkerFinishedCallback = void(*)(void*) noexcept;
         static constexpr std::size_t kMaxOutstandingOperations = 16;
 
+        /// \throws std::bad_alloc when its shared worker state cannot be created.
         GdalOperationDispatcher();
         ~GdalOperationDispatcher();
 
         GdalOperationDispatcher(const GdalOperationDispatcher&) = delete;
         GdalOperationDispatcher& operator=(const GdalOperationDispatcher&) = delete;
 
+        /// Sets the wakeup callback on the owner thread; the callback must not block.
         void SetWakeCallback(WakeCallback callback, void* context) noexcept;
+        /// Sets the worker-completion callback on the owner thread.
         void SetWorkerFinishedCallback(
             WorkerFinishedCallback callback,
             void* context) noexcept;
+        /// Starts work; call from the owner thread.
+        /// \throws std::runtime_error when stopping or at capacity.
+        /// \throws std::bad_alloc when operation state cannot be allocated.
+        /// \throws std::system_error when worker creation or state locking fails.
         [[nodiscard]] std::uint64_t Begin(
             std::string algorithmPath,
             std::vector<std::string> arguments);
+        /// Thread-safe cancellation request; it does not wait for the worker.
         [[nodiscard]] GdalCancelResult Cancel(std::uint64_t operationId) noexcept;
-        [[nodiscard]] GdalEndResult GetResult(
-            std::uint64_t operationId,
-            GdalOperationSnapshot& result) const;
-        [[nodiscard]] GdalEndResult End(
-            std::uint64_t operationId,
-            GdalOperationSnapshot& result);
+        /// Must be called on the owner thread.
+        /// \throws std::bad_alloc when copying the completed result fails.
+        /// \throws std::system_error when state locking fails.
+        [[nodiscard]] GdalOperationLookup GetResult(
+            std::uint64_t operationId) const;
+        /// Must be called on the owner thread.
+        /// \throws std::system_error when state locking fails.
+        [[nodiscard]] GdalOperationLookup End(std::uint64_t operationId);
+        /// Begins owner-thread delivery; call EndNotificationDelivery afterward.
         [[nodiscard]] bool BeginNotificationDelivery(
             std::uint64_t operationId) noexcept;
+        /// Completes owner-thread delivery begun by BeginNotificationDelivery.
         void EndNotificationDelivery(std::uint64_t operationId) noexcept;
+        /// Safe to query from any thread.
         [[nodiscard]] bool IsDispatchActive() const noexcept;
+        /// Drains notifications on the owner thread.
+        /// \throws std::bad_alloc when the notification list cannot be allocated.
+        /// \throws std::system_error when state locking fails.
         [[nodiscard]] std::vector<GdalOperationNotification> DrainNotifications();
+        /// Records a callback failure on the owner thread.
+        /// \throws std::bad_alloc when the message cannot be stored.
+        /// \throws std::system_error when state locking fails.
         void RecordCallbackError(
             std::uint64_t operationId,
             int errorCode,
             std::string message);
         /// Stops owner-thread notifications without cancelling active operations.
+        /// Call on the owner thread.
         void Suspend() noexcept;
+        /// Requests cancellation and detaches workers; safe from any thread.
         void Shutdown() noexcept;
 
     private:
