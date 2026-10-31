@@ -164,6 +164,34 @@ namespace mwg
         /// \throws InvalidArgument when paddingPixels is negative or not finite.
         bool FitExtent(const Extent& extent, double paddingPixels = 0.0);
 
+        /// Moves the view by a map-coordinate delta: the visible extent
+        /// shifts by (deltaX, deltaY), so positive deltaX shows content
+        /// further right (east) and positive deltaY content further up
+        /// (north). The center is clamped to the limits. Returns true when
+        /// the view changed; false without a view or for a zero delta.
+        /// The size is not needed, so a zero-sized viewport can be panned.
+        /// \throws InvalidArgument when a delta is not finite.
+        bool Pan(double deltaX, double deltaY);
+
+        /// Zooms around the viewport center: the resolution is divided by
+        /// factor, so a factor above 1 zooms in and below 1 zooms out. The
+        /// center is kept and the resolution is clamped to the limits.
+        /// Returns true when the view changed; false without a view or when
+        /// the resolution is already at the limit in that direction.
+        /// \throws InvalidArgument when factor is not a finite positive number.
+        bool Zoom(double factor);
+
+        /// Zooms around a screen position: the resolution is divided by
+        /// factor as in Zoom, and the map coordinate under anchor stays
+        /// under anchor. The anchor may lie outside the viewport. When the
+        /// limits clamp the result, the resolution or center is clamped and
+        /// the anchored coordinate may move. Returns true when the view
+        /// changed; false when the viewport is not valid or the view is
+        /// already at the limit.
+        /// \throws InvalidArgument when factor is not a finite positive number
+        ///         or an anchor coordinate is not finite.
+        bool ZoomAt(const ScreenPoint& anchor, double factor);
+
         /// Map extent covered by the whole viewport, or an empty Extent when
         /// the viewport is not valid.
         [[nodiscard]] Extent VisibleExtent() const noexcept;
@@ -179,6 +207,10 @@ namespace mwg
         [[nodiscard]] std::optional<MapPoint> ScreenToMap(const ScreenPoint& point) const noexcept;
 
     private:
+        /// Applies a clamped view and returns true when it differs from the
+        /// current one.
+        bool ApplyView(const MapPoint& center, double resolution) noexcept;
+
         int _width = 0;
         int _height = 0;
         bool _hasView = false;
