@@ -551,6 +551,76 @@ TEST(VectorLayerRenderer, DrawsIntoBoundsWithAnOffsetOrigin)
     EXPECT_EQ(GetPixel(surface.Get(), 10, 10), GetSysColor(COLOR_WINDOW));
 }
 
+TEST(VectorLayerRenderer, GdiAndOpenGlAgreeAtFractionalRectangleEdges)
+{
+    BitmapSurface gdiSurface(120, 100);
+    BitmapSurface openGlSurface(120, 100);
+    ASSERT_TRUE(gdiSurface.IsValid());
+    ASSERT_TRUE(openGlSurface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    mwg::Viewport viewport(120, 100);
+    viewport.SetView({60.0, 50.0}, 1.0);
+    mwg::activex::GdiVectorLayerRenderer gdi;
+    mwg::activex::OpenGlVectorLayerRenderer openGl;
+    for (const double fraction : {0.25, 0.75})
+    {
+        const auto scene = MakeMapScene({
+            MakeRectangleLayer({20.0 + fraction, 20.0 + fraction,
+                                90.0 + fraction, 80.0 + fraction})});
+        ASSERT_NE(FillRect(gdiSurface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+        ASSERT_EQ(gdi.Draw(gdiSurface.Get(), bounds, scene, viewport), S_OK);
+        const HRESULT result = openGl.Draw(openGlSurface.Get(), bounds, scene, viewport);
+        if (result == S_FALSE)
+        {
+            GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+        }
+        ASSERT_EQ(result, S_OK);
+        for (int offset = -2; offset <= 2; ++offset)
+        {
+            for (const mwg::PixelPoint pixel : {
+                     mwg::PixelPoint{20 + offset, 50}, {90 + offset, 50},
+                     {60, 19 + offset}, {60, 79 + offset}})
+            {
+                EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel.x, pixel.y),
+                          GetPixel(openGlSurface.Get(), pixel.x, pixel.y))
+                    << pixel.x << ", " << pixel.y << ", fraction " << fraction;
+            }
+        }
+    }
+}
+
+TEST(VectorLayerRenderer, OverlappingLayersDrawBottomFirst)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    mwg::Viewport viewport(120, 100);
+    viewport.SetView({60.0, 50.0}, 1.0);
+    auto scene = MakeMapScene({
+        MakeRectangleLayer({40.25, 30.25, 80.25, 70.25}),
+        MakeRectangleLayer({20.25, 10.25, 100.25, 90.25})});
+    mwg::activex::GdiVectorLayerRenderer gdi;
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    // The top layer's fill must cover the bottom layer's outline.
+    EXPECT_EQ(GetPixel(surface.Get(), 40, 50), kFill);
+    std::swap(scene.layers[0], scene.layers[1]);
+    ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(GetPixel(surface.Get(), 40, 50), RGB(24, 58, 82));
+
+    mwg::activex::OpenGlVectorLayerRenderer openGl;
+    const HRESULT result = openGl.Draw(surface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+    EXPECT_EQ(GetPixel(surface.Get(), 40, 50), RGB(24, 58, 82));
+    std::swap(scene.layers[0], scene.layers[1]);
+    ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(GetPixel(surface.Get(), 40, 50), kFill);
+}
+
 TEST(VectorLayerRenderer, DrawsVerySmallAndVeryElongatedTargets)
 {
     BitmapSurface surface(2000, 400);

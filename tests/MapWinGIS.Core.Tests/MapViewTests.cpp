@@ -180,7 +180,7 @@ TEST_F(MapViewTest, ResizeHandlesTinyAndElongatedSizes)
     for (const auto& size : sizes)
     {
         ASSERT_NO_THROW((void)_view.Resize(size[0], size[1]));
-        ASSERT_TRUE(_view.FitToMap(0.0)) << size[0] << " x " << size[1];
+        ASSERT_TRUE(_view.FitToMap()) << size[0] << " x " << size[1];
         const Viewport& viewport = _view.GetViewport();
         EXPECT_TRUE(viewport.IsValid());
         // The resolution is the same on both axes, so the map is not distorted.
@@ -191,6 +191,31 @@ TEST_F(MapViewTest, ResizeHandlesTinyAndElongatedSizes)
         EXPECT_TRUE(IsVisible(viewport, {0.0, 0.0, 10.0, 5.0}));
     }
     EXPECT_THROW((void)_view.Resize(Viewport::kMaxDimension + 1, 10), InvalidArgument);
+}
+
+TEST_F(MapViewTest, DegenerateExtentsCompleteTheInitialFit)
+{
+    const Extent extents[] = {
+        {4.0, 2.0, 4.0, 8.0}, {2.0, 4.0, 8.0, 4.0}, {4.0, 4.0, 4.0, 4.0}};
+    for (const Extent& extent : extents)
+    {
+        MapView view;
+        view.AddLayer(OpenRectangles({extent}));
+        EXPECT_FALSE(view.GetViewport().HasView());
+        ASSERT_TRUE(view.Resize(200, 100));
+        ASSERT_TRUE(view.GetViewport().IsValid());
+        EXPECT_TRUE(IsVisible(view.GetViewport(), extent));
+        const double resolution = *view.GetViewport().Resolution();
+        EXPECT_FALSE(view.Resize(200, 100)) << "the initial fit must not remain pending";
+        EXPECT_DOUBLE_EQ(*view.GetViewport().Resolution(), resolution);
+        if (extent.Width() == 0.0 && extent.Height() == 0.0)
+        {
+            EXPECT_DOUBLE_EQ(resolution, Viewport::kDefaultPointResolution);
+            ASSERT_TRUE(view.Resize(400, 200));
+            ASSERT_TRUE(view.FitToMap());
+            EXPECT_DOUBLE_EQ(*view.GetViewport().Resolution(), resolution);
+        }
+    }
 }
 
 TEST_F(MapViewTest, MapChangesRebuildTheSceneAndReportARedraw)

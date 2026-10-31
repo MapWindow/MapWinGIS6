@@ -320,21 +320,29 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
             throw mwg::CoreError("Vector dataset contains no layers");
         }
 
-        // The first dataset layer goes on top of the map. A layer that
-        // cannot be rendered is rejected so the host gets the error now
-        // instead of a layer that never draws.
+        // Validate before AddLayer can auto-fit or schedule a pending fit.
+        mwg::Map candidate;
+        candidate.AddLayer(dataset);
+        const mwg::rendering::MapRenderScene scene =
+            mwg::rendering::CreateMapRenderScene(candidate);
+        for (const mwg::rendering::SkippedLayer& skipped : scene.skippedLayers)
+        {
+            if (skipped.reason == mwg::rendering::LayerSkipReason::Failed)
+            {
+                throw mwg::CoreError(skipped.message);
+            }
+        }
+        const LONGLONG count = scene.layers.empty()
+            ? static_cast<LONGLONG>(dataset->Layer(0).FeatureCount())
+            : static_cast<LONGLONG>(scene.layers.front().scene.sourceFeatureCount);
+        if (count < 0 || count > std::numeric_limits<LONGLONG>::max() - _featureCount)
+        {
+            throw mwg::CoreError("Map feature count is out of range");
+        }
+
         const mwg::LayerId id = _view.AddLayer(std::move(dataset));
         try
         {
-            for (const mwg::rendering::SkippedLayer& skipped : _view.Scene().skippedLayers)
-            {
-                if (skipped.layerId == id &&
-                    skipped.reason == mwg::rendering::LayerSkipReason::Failed)
-                {
-                    throw mwg::CoreError(skipped.message);
-                }
-            }
-
             // Until the control exposes navigation, every load shows the
             // whole map so that each loaded layer is visible.
             (void)_view.FitToMap();
@@ -345,8 +353,13 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
             throw;
         }
 
+        _featureCount += count;
         FireViewChange();
         return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
     }
     catch (const std::exception& exception)
     {
@@ -357,6 +370,16 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
             IID_IMapWinGISControl,
             E_FAIL);
     }
+}
+
+STDMETHODIMP CMapWinGISControl::ClearLayers()
+{
+    if (_view.ClearLayers())
+    {
+        _featureCount = 0;
+        FireViewChange();
+    }
+    return S_OK;
 }
 
 STDMETHODIMP CMapWinGISControl::get_LayerLoaded(VARIANT_BOOL* loaded)
@@ -377,27 +400,8 @@ STDMETHODIMP CMapWinGISControl::get_FeatureCount(LONGLONG* count)
         return E_POINTER;
     }
 
-    *count = 0;
-    try
-    {
-        const mwg::Map& map = _view.GetMap();
-        LONGLONG total = 0;
-        for (int position = 0; position < map.LayerCount(); ++position)
-        {
-            total += static_cast<LONGLONG>(map.Layer(position).Source().FeatureCount());
-        }
-        *count = total;
-        return S_OK;
-    }
-    catch (const std::exception& exception)
-    {
-        const CA2W message(exception.what(), CP_UTF8);
-        return AtlReportError(
-            CLSID_MapWinGISControl,
-            message,
-            IID_IMapWinGISControl,
-            E_FAIL);
-    }
+    *count = _featureCount;
+    return S_OK;
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingBackend(BSTR* backend)
@@ -530,6 +534,28 @@ STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
     return ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
 }
 
+STDMETHODIMP CMapWinGISControl::SetObjectRects(LPCRECT position, LPCRECT clip)
+{
+    if (position == nullptr || clip == nullptr)
+    {
+        return E_POINTER;
+    }
+    const HRESULT result =
+        ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>::SetObjectRects(position, clip);
+    if (SUCCEEDED(result) && m_bWndLess)
+    {
+        const LONGLONG width = static_cast<LONGLONG>(position->right) - position->left;
+        const LONGLONG height = static_cast<LONGLONG>(position->bottom) - position->top;
+        if (ResizeView(
+                static_cast<LONG>(std::clamp<LONGLONG>(width, 0, mwg::Viewport::kMaxDimension)),
+                static_cast<LONG>(std::clamp<LONGLONG>(height, 0, mwg::Viewport::kMaxDimension))))
+        {
+            FireViewChange();
+        }
+    }
+    return result;
+}
+
 HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
 {
     if (drawInfo.hdcDraw == nullptr || drawInfo.prcBounds == nullptr)
@@ -551,9 +577,6 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
         return E_FAIL;
     }
 
-    // Windowless hosts never send WM_SIZE, and a host may draw before it
-    // does, so the drawn bounds also define the viewport size. Bounds
-    // outside the supported size range are not drawn.
     const LONGLONG width = static_cast<LONGLONG>(bounds.right) - bounds.left;
     const LONGLONG height = static_cast<LONGLONG>(bounds.bottom) - bounds.top;
     if (width <= 0 || height <= 0 ||
@@ -561,12 +584,16 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
     {
         return S_OK;
     }
-    (void)ResizeView(static_cast<LONG>(width), static_cast<LONG>(height));
-
     try
     {
         const mwg::rendering::MapRenderScene& scene = _view.Scene();
-        const mwg::Viewport& viewport = _view.GetViewport();
+        // Printing and scaled draws use a snapshot, never the live viewport.
+        mwg::Viewport viewport = _view.GetViewport();
+        viewport.SetSize(static_cast<int>(width), static_cast<int>(height));
+        if (!viewport.HasView())
+        {
+            (void)viewport.FitExtent(_view.GetMap().GetExtent(), mwg::MapView::kDefaultPadding);
+        }
         if (scene.layers.empty() || !viewport.IsValid())
         {
             return S_OK;

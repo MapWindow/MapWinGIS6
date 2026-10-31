@@ -10,8 +10,10 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <gdal_priv.h>
@@ -20,6 +22,7 @@
 #include "TestData.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/map/Map.h"
+#include "mapwingis/map/MapView.h"
 #include "mapwingis/rendering/MapRenderScene.h"
 #include "mapwingis/vector/VectorDataset.h"
 
@@ -28,6 +31,64 @@ using namespace mwg::test;
 
 namespace
 {
+    class ThrowingLayer final : public OGRLayer
+    {
+    public:
+        explicit ThrowingLayer(const bool allocationFailure)
+            : _allocationFailure(allocationFailure),
+              _definition(OGRFeatureDefn::CreateFeatureDefn("throwing"))
+        {
+            _definition->Reference();
+            _definition->SetGeomType(wkbPolygon);
+        }
+
+        ~ThrowingLayer() override { _definition->Release(); }
+        void ResetReading() override {}
+        const OGRFeatureDefn* GetLayerDefn() const override { return _definition; }
+        int TestCapability(const char*) const override { return FALSE; }
+        GIntBig GetFeatureCount(int) override { return 1; }
+
+        OGRFeature* GetNextFeature() override
+        {
+            if (_allocationFailure)
+            {
+                throw std::bad_alloc();
+            }
+            throw std::runtime_error("Simulated geometry read exception");
+        }
+
+    protected:
+        OGRErr IGetExtent(int, OGREnvelope* extent, bool) override
+        {
+            extent->MinX = 0.0;
+            extent->MinY = 0.0;
+            extent->MaxX = 1.0;
+            extent->MaxY = 1.0;
+            return OGRERR_NONE;
+        }
+
+    private:
+        bool _allocationFailure;
+        OGRFeatureDefn* _definition;
+    };
+
+    class ThrowingDataset final : public GDALDataset
+    {
+    public:
+        explicit ThrowingDataset(const bool allocationFailure)
+            : _layer(allocationFailure)
+        {
+        }
+        int GetLayerCount() const override { return 1; }
+        const OGRLayer* GetLayer(const int index) const override
+        {
+            return index == 0 ? &_layer : nullptr;
+        }
+
+    private:
+        ThrowingLayer _layer;
+    };
+
     /// Writes a GeoPackage whose only layer holds one line string.
     std::filesystem::path MakeLineDataset(const std::filesystem::path& directory)
     {
@@ -186,6 +247,51 @@ TEST_F(MapRenderSceneTest, DuplicateLayersAreSeparateSceneLayers)
     ASSERT_EQ(scene.layers.size(), 2U);
     EXPECT_EQ(scene.layers[0].layerId, first);
     EXPECT_EQ(scene.layers[1].layerId, second);
+}
+
+TEST_F(MapRenderSceneTest, IsolatesStandardExceptionsButPropagatesAllocationFailures)
+{
+    GdalEnvironment::Initialize();
+    const auto deregister = [](GDALDriver* driver)
+    {
+        GetGDALDriverManager()->DeregisterDriver(driver);
+        delete driver;
+    };
+    const std::unique_ptr<GDALDriver, decltype(deregister)> driver{
+        std::make_unique<GDALDriver>().release(), deregister};
+    driver->SetDescription("MWGThrowingGeometry");
+    driver->SetMetadataItem(GDAL_DCAP_VECTOR, "YES");
+    driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
+    driver->pfnIdentify = [](GDALOpenInfo* info)
+    {
+        return std::string_view(info->pszFilename).starts_with("MWG_THROWING:") ? TRUE : FALSE;
+    };
+    driver->pfnOpen = [](GDALOpenInfo* info) -> GDALDataset*
+    {
+        const std::string_view name(info->pszFilename);
+        return name.starts_with("MWG_THROWING:")
+            ? std::make_unique<ThrowingDataset>(name.ends_with("allocation")).release()
+            : nullptr;
+    };
+    GetGDALDriverManager()->RegisterDriver(driver.get());
+
+    MapView view;
+    const LayerId below = view.AddLayer(OpenRectangles({{0, 0, 1, 1}}));
+    const LayerId failed = view.AddLayer(VectorDataset::Open("MWG_THROWING:runtime"));
+    const LayerId above = view.AddLayer(OpenRectangles({{2, 2, 3, 3}}));
+    const auto& scene = view.Scene();
+    ASSERT_EQ(scene.layers.size(), 2U);
+    EXPECT_EQ(scene.layers[0].layerId, below);
+    EXPECT_EQ(scene.layers[1].layerId, above);
+    ASSERT_EQ(scene.skippedLayers.size(), 1U);
+    EXPECT_EQ(scene.skippedLayers[0].layerId, failed);
+    EXPECT_EQ(scene.skippedLayers[0].reason, rendering::LayerSkipReason::Failed);
+    EXPECT_EQ(scene.skippedLayers[0].message, "Simulated geometry read exception");
+    const auto* polygons = scene.layers[0].scene.polygons.data();
+    EXPECT_EQ(view.Scene().layers[0].scene.polygons.data(), polygons);
+
+    view.AddLayer(VectorDataset::Open("MWG_THROWING:allocation"));
+    EXPECT_THROW((void)view.Scene(), std::bad_alloc);
 }
 
 TEST_F(MapRenderSceneTest, SceneIsASnapshotThatOutlivesTheMapLayers)

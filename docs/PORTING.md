@@ -52,13 +52,18 @@ The initial `MapWinGIS.ocx` exposes a deliberately small v6 automation
 contract. `IMapWinGISControl` reports Core initialization, loads a vector
 dataset, and reports whether a layer is loaded and its feature count.
 `IMapWinGISControl2` adds renderer preference, active backend, and status.
+`IMapWinGISControl3` adds `ClearLayers` and is the default automation interface.
+Loads add layers, including duplicate loads of one dataset. Call `ClearLayers`
+before switching or refreshing datasets. It releases all layers and resets
+the cached feature total while keeping the viewport.
 New members belong on a new derived interface; do not change a published
 interface IID or silently add vtable members to it.
 
 These are new interfaces, not the MapWinGIS 5 type-library interfaces, and the
 control does not claim binary or API compatibility with existing v5 clients.
-Core scene creation selects only the first vector layer and currently prepares
-Polygon/MultiPolygon scene data; the control requests that scene from Core. It
+Each control load selects the first dataset layer. Core prepares an ordered
+scene for all visible map layers, including Polygon, MultiPolygon,
+CurvePolygon, and MultiSurface geometry. It
 does not expose the broad v5 map, layer, shape, event, or editing API. It draws
 in source coordinates without reprojection. OpenGL only handles convex
 single-ring polygons; GDI handles the supported polygon scene as the CPU

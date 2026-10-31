@@ -197,6 +197,16 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
   resizing, and scene invalidation; and `VectorLayerRendererTests.cpp` draws
   layers with different extents into memory bitmaps and samples the pixels at
   `Viewport::MapToScreen` positions, for GDI and, when available, OpenGL.
+- Native `ActiveXMapTest` cases activate the real OCX through its class factory
+  without registration. They cover stacked loads, rejected loads, cached
+  feature totals, dataset release through `ClearLayers`, `WM_SIZE`, and draws
+  into alternate-sized targets that must not change the live fitting size.
+- Renderer regressions compare edge-adjacent pixels at quarter- and
+  three-quarter-pixel rectangle coordinates for GDI and OpenGL. Overlapping
+  layers make drawing order visible: the top fill covers the bottom outline.
+  Map view tests fit point and zero-span extents, and tiny targets with default
+  padding. Map scene tests isolate standard geometry-read exceptions, reuse
+  the resulting scene, and let allocation failures propagate.
 - Navigation is tested without input events: `ViewportTests.cpp` covers the
   pan, center-zoom, and anchored-zoom calculations and their limits, and
   `MapViewTests.cpp` covers zoom to map and layer, zoom in and out, empty and
