@@ -73,6 +73,18 @@ $ignoredOptions = @(
 )
 $ignoredOptionPrefixes = @('/Fo', '/Fd', '/Fe', '/Fp', '/ILK:', '/PDB:', '/IMPLIB:', '/OUT:', '/MP')
 
+# Link differences that are deliberate (docs/CMAKE-MIGRATION.md). They are
+# reported under 'explained' and do not count as lost options.
+$explainedLinkDifferences = [ordered]@{
+    '^/manifest(:embed|uac:.*)?$'      = 'CMake''s vs_link wrapper generates and embeds the manifest with mt.exe; the embedded manifest is identical'
+    '^/tlbid:1$'                       = 'Only used when a type library resource is embedded'
+    '^/libpath:<vcpkg_installed>/'     = 'vcpkg auto-link replaced by imported targets with full library paths'
+    '^lib:<vcpkg_installed>/.*\*\.lib$' = 'vcpkg auto-link replaced by imported targets with full library paths'
+    '^lib:<vcpkg_installed>/'          = 'Library from an imported target (find_package)'
+    '^lib:odbc(cp)?32\.lib$'           = 'MSBuild default library; unused, not in CMake''s default list'
+    '^/version:0\.0$'                  = 'CMake default image version; MSBuild leaves it at 0.0 too'
+}
+
 # MSBuild project names that differ from the CMake target names.
 $targetNames = @{ 'Translate' = 'MapWinGIS.Samples.Translate' }
 
@@ -214,6 +226,8 @@ function ConvertTo-OptionSet([string[]] $arguments, [string] $baseDir, [hashtabl
                 break
             }
         }
+        # Linker options are case-insensitive (/DEBUG and /debug are the same).
+        if ($isLink) { $arg = $arg.ToLowerInvariant() }
         $options.Add($arg)
     }
 
@@ -458,11 +472,32 @@ if ($CMakeBuildDir) {
 
     $linkDiff = [ordered]@{}
     foreach ($binary in ($msbuildCommands.Links.Keys | Sort-Object)) {
-        if (-not $cmakeCommands.Links.ContainsKey($binary)) { continue }
+        if (-not $cmakeCommands.Links.ContainsKey($binary)) {
+            # A binary that CMake builds but that was up to date has no link
+            # line in the log; that is not parity.
+            $cmakeTarget = [System.IO.Path]::GetFileNameWithoutExtension($binary)
+            if ($CMakeBuildLog -and ($cmakeTargets -contains $cmakeTarget)) {
+                Write-Warning "$binary was not linked in $CMakeBuildLog; delete it and rebuild to compare its link options."
+            }
+            continue
+        }
         $diff = Compare-OptionSets $msbuildCommands.Links[$binary] $cmakeCommands.Links[$binary]
+        $explained = [ordered]@{}
+        $lost = @(); $added = @()
+        foreach ($pair in @(@{ Items = $diff.Lost; Kind = 'lost' }, @{ Items = $diff.Added; Kind = 'added' })) {
+            foreach ($option in $pair.Items) {
+                $reason = $null
+                foreach ($pattern in $explainedLinkDifferences.Keys) {
+                    if ($option -match $pattern) { $reason = $explainedLinkDifferences[$pattern]; break }
+                }
+                if ($reason) { $explained["$($pair.Kind) $option"] = $reason }
+                elseif ($pair.Kind -eq 'lost') { $lost += $option }
+                else { $added += $option }
+            }
+        }
         if ($diff.Lost.Count -or $diff.Added.Count) {
-            $linkDiff[$binary] = $diff
-            $lostTotal += $diff.Lost.Count
+            $linkDiff[$binary] = [pscustomobject]@{ Lost = $lost; Added = $added; Explained = $explained }
+            $lostTotal += $lost.Count
         }
     }
 
