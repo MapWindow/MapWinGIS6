@@ -65,10 +65,12 @@
     <ClInclude Include="include\mapwingis\map\Viewport.h" />
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
+    <ClInclude Include="include\mapwingis\raster\RasterDataset.h" />
     <ClInclude Include="include\mapwingis\rendering\MapRenderScene.h" />
     <ClInclude Include="include\mapwingis\rendering\VectorRenderScene.h" />
     <ClInclude Include="src\internal\GdalExecution.h" />
     <ClInclude Include="src\internal\GdalProgressAdapterAccess.h" />
+    <ClInclude Include="src\internal\CoordinateTransformation.h" />
     <ClInclude Include="src\internal\Utf8.h" />
     <ClInclude Include="src\internal\VectorLayerAccess.h" />
     <ClInclude Include="src\internal\VectorRenderSceneBuilder.h" />
@@ -86,6 +88,7 @@
     <ClCompile Include="src\map\MapView.cpp" />
     <ClCompile Include="src\map\Viewport.cpp" />
     <ClCompile Include="src\vector\VectorDataset.cpp" />
+    <ClCompile Include="src\raster\RasterDataset.cpp" />
     <ClCompile Include="src\rendering\MapRenderScene.cpp" />
     <ClCompile Include="src\rendering\VectorRenderScene.cpp" />
   </ItemGroup>

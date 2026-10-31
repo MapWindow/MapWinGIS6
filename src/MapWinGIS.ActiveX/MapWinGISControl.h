@@ -4,16 +4,19 @@
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
- * Provides automation for vector loading and map navigation, file drop, GDAL
- * operations, rendering preferences, and painting polygon layers. The control
- * owns one Core MapView, the only map and view state; it forwards host events
- * to it and draws its render scene through its viewport.
+ * Provides automation for vector, raster, and XYZ tile loading, map
+ * navigation, layer ordering, file drop, GDAL operations, and rendering
+ * preferences. The control owns one Core MapView, the only map and view
+ * state; it forwards host events to it and draws its render scene through its
+ * viewport.
  */
 #pragma once
 
 #include "ActiveXModule.h"
 #include "resource.h"
 
+#include <array>
+#include <chrono>
 #include <cstdint>
 
 #include <atlctl.h>
@@ -39,8 +42,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
     public ATL::IDispatchImpl<
-        IMapWinGISControl4,
-        &IID_IMapWinGISControl4,
+        IMapWinGISControl7,
+        &IID_IMapWinGISControl7,
         &LIBID_MapWinGISActiveXLib,
         1,
         0>,
@@ -59,6 +62,9 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl7)
+        COM_INTERFACE_ENTRY(IMapWinGISControl6)
+        COM_INTERFACE_ENTRY(IMapWinGISControl5)
         COM_INTERFACE_ENTRY(IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IMapWinGISControl3)
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
@@ -66,7 +72,7 @@ public:
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
         COM_INTERFACE_ENTRY(IDropTarget)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
-        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl4)
+        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl7)
         COM_INTERFACE_ENTRY(IViewObjectEx)
         COM_INTERFACE_ENTRY(IViewObject2)
         COM_INTERFACE_ENTRY(IViewObject)
@@ -89,12 +95,17 @@ public:
 
     BEGIN_MSG_MAP(CMapWinGISControl)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
+        MESSAGE_HANDLER(WM_KEYDOWN, OnKeyDown)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
         MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
         MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
         MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChanged)
         MESSAGE_HANDLER(WM_CANCELMODE, OnCancelMode)
+        MESSAGE_HANDLER(WM_POINTERDOWN, OnPointerDown)
+        MESSAGE_HANDLER(WM_POINTERUPDATE, OnPointerUpdate)
+        MESSAGE_HANDLER(WM_POINTERUP, OnPointerUp)
+        MESSAGE_HANDLER(WM_POINTERCAPTURECHANGED, OnPointerCaptureChanged)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
         CHAIN_MSG_MAP(ATL::CComControl<CMapWinGISControl>)
     END_MSG_MAP()
@@ -114,6 +125,31 @@ public:
         VARIANT_BOOL* changed) override;
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
     STDMETHOD(LoadVectorDataset)(BSTR path) override;
+    STDMETHOD(LoadRasterDataset)(BSTR path) override;
+    STDMETHOD(Pan)(double deltaX, double deltaY, VARIANT_BOOL* changed) override;
+    STDMETHOD(ZoomAt)(
+        double screenX,
+        double screenY,
+        double factor,
+        VARIANT_BOOL* changed) override;
+    STDMETHOD(ZoomInBy)(double factor, VARIANT_BOOL* changed) override;
+    STDMETHOD(ZoomOutBy)(double factor, VARIANT_BOOL* changed) override;
+    STDMETHOD(get_CanGoBack)(VARIANT_BOOL* canGoBack) override;
+    STDMETHOD(get_CanGoForward)(VARIANT_BOOL* canGoForward) override;
+    STDMETHOD(GoBack)(VARIANT_BOOL* changed) override;
+    STDMETHOD(GoForward)(VARIANT_BOOL* changed) override;
+    STDMETHOD(AnimateZoomToMap)(LONG durationMilliseconds) override;
+    STDMETHOD(AnimateZoomToLayer)(LONGLONG layerId, LONG durationMilliseconds) override;
+    STDMETHOD(get_IsAnimating)(VARIANT_BOOL* isAnimating) override;
+    STDMETHOD(StopAnimation)() override;
+    STDMETHOD(MoveLayer)(
+        LONGLONG layerId,
+        LONG newPosition,
+        VARIANT_BOOL* changed) override;
+    STDMETHOD(LoadXyzTileLayer)(
+        BSTR urlTemplate,
+        LONG minimumZoom,
+        LONG maximumZoom) override;
     STDMETHOD(ClearLayers)() override;
     STDMETHOD(get_LayerLoaded)(VARIANT_BOOL* loaded) override;
     STDMETHOD(get_FeatureCount)(LONGLONG* count) override;
@@ -153,12 +189,17 @@ public:
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnKeyDown(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseWheel(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonDown(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseMove(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonUp(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnCaptureChanged(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnCancelMode(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnPointerDown(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnPointerUpdate(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnPointerUp(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnPointerCaptureChanged(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnGdalDispatch(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled);
     static void DispatchGdalNotifications(void* control) noexcept;
@@ -178,13 +219,28 @@ private:
     HRESULT SetPointerCapture(bool capture) noexcept;
     /// Ends a drag and optionally releases capture still owned by this control.
     void EndPan(bool releaseCapture) noexcept;
+    void EndTouchNavigation() noexcept;
+    bool UpdateTouchPointer(UINT32 pointerId, LPARAM position) noexcept;
+    void ApplyTouchGesture() noexcept;
+
+    struct TouchPointer
+    {
+        UINT32 id = 0;
+        mwg::ScreenPoint position{};
+        bool active = false;
+    };
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
     mwg::ScreenPoint _lastPanPosition{};
+    std::array<TouchPointer, 2> _touchPointers{};
+    mwg::ScreenPoint _lastTouchCenter{};
+    double _lastTouchDistance = 0.0;
+    std::chrono::steady_clock::time_point _lastAnimationTick{};
     bool _isPanning = false;
+    bool _isTouchNavigating = false;
     bool _dropAcceptsFiles = false;
 };
 

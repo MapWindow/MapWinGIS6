@@ -8,9 +8,10 @@
  * visibility, and calculates the combined extent of its layers. It holds no
  * windowing, COM, or rendering-backend state.
  *
- * Layer coordinates are used as stored in their source. The map assumes all
- * layers use compatible coordinates; it does not reproject, so layers in
- * different coordinate reference systems do not align.
+ * The first layer with a declared coordinate reference system sets the map
+ * coordinate system. Layers in another declared system are reprojected into
+ * it; layers with a missing coordinate system can only be combined with
+ * similarly unreferenced layers.
  */
 #pragma once
 
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "mapwingis/core/Api.h"
 #include "mapwingis/core/Extent.h"
@@ -25,6 +27,7 @@
 namespace mwg
 {
     class Map;
+    class RasterDataset;
     class VectorDataset;
     class VectorLayer;
 
@@ -52,7 +55,7 @@ namespace mwg
         AllLayers,
     };
 
-    /// One layer of a Map: a vector layer of a dataset plus map-level state.
+    /// One vector or raster layer of a Map plus map-level state.
     ///
     /// Owned by its Map. A MapLayer reference stays valid until that layer is
     /// removed, the map is cleared, or the map is destroyed; adding, removing,
@@ -72,10 +75,17 @@ namespace mwg
         [[nodiscard]] LayerId Id() const noexcept;
 
         /// The vector layer displayed by this map layer.
-        [[nodiscard]] VectorLayer& Source() const noexcept;
+        /// Vector source. Throws CoreError when this is a raster layer.
+        [[nodiscard]] VectorLayer& Source() const;
 
         /// The dataset that owns Source().
-        [[nodiscard]] VectorDataset& Dataset() const noexcept;
+        /// Dataset owning Source(). Throws CoreError for raster layers.
+        [[nodiscard]] VectorDataset& Dataset() const;
+
+        /// Raster source, or nullptr for a vector layer.
+        [[nodiscard]] RasterDataset* RasterSource() const noexcept;
+
+        [[nodiscard]] bool IsRaster() const noexcept;
 
         /// 0-based index of Source() within Dataset().
         [[nodiscard]] int SourceLayerIndex() const noexcept;
@@ -84,8 +94,8 @@ namespace mwg
         /// Map::SetLayerVisible.
         [[nodiscard]] bool IsVisible() const noexcept;
 
-        /// Extent of the source layer, read from the layer on every call so
-        /// that edits to the source are reflected. Empty when the layer has no
+        /// Extent in the map coordinate system, read from the source layer
+        /// on every call so edits are reflected. Empty when the layer has no
         /// geometry or its extent is not valid (see Extent::IsValid).
         /// May read the whole layer for formats that don't store an extent;
         /// the source layer caches the result.
@@ -128,11 +138,18 @@ namespace mwg
         /// Adds layer layerIndex of dataset on top of the map and returns its
         /// new identity. The map shares ownership of the dataset; the dataset
         /// is released when its last map layer is removed and no other owner
-        /// remains.
+        /// remains. Raster source ownership follows the same rule.
         /// \throws InvalidArgument when dataset is null or layerIndex is out of
         ///         range.
         /// \throws CoreError when the map has exhausted its layer identity space.
         LayerId AddLayer(std::shared_ptr<VectorDataset> dataset, int layerIndex = 0);
+
+        /// Adds a raster source on top of the map and returns its identity.
+        /// Its data is shared with the map until the layer is removed.
+        /// \throws InvalidArgument when dataset is null or its coordinate
+        ///         system cannot be combined with the map's.
+        /// \throws CoreError when the map has exhausted its identity space.
+        LayerId AddRasterLayer(std::shared_ptr<RasterDataset> dataset);
 
         /// Removes the layer with this identity. Returns false, and changes
         /// nothing, when the map has no such layer.
@@ -154,6 +171,11 @@ namespace mwg
         /// has no layer with this identity.
         [[nodiscard]] std::optional<int> LayerPosition(LayerId id) const noexcept;
 
+        /// Moves a layer to a new 0-based position. Returns false when the
+        /// layer is unknown or already at that position.
+        /// \throws InvalidArgument when position is outside the collection.
+        bool MoveLayer(LayerId id, int position);
+
         /// Shows or hides a layer. Returns false when the map has no layer
         /// with this identity.
         bool SetLayerVisible(LayerId id, bool visible) noexcept;
@@ -163,6 +185,10 @@ namespace mwg
         /// given set of layer extents. Reads each layer's extent; see
         /// MapLayer::GetExtent for the cost.
         [[nodiscard]] Extent GetExtent(ExtentScope scope = ExtentScope::VisibleLayers) const;
+
+        /// Coordinate reference system of the first added layer, as WKT.
+        /// Empty when the map is empty or that layer has no CRS.
+        [[nodiscard]] std::string CoordinateSystemWkt() const;
 
     private:
         class Impl;

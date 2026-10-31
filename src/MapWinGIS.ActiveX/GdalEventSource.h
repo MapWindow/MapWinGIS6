@@ -35,6 +35,7 @@ namespace mwg::activex
         GdalEventSource& operator=(const GdalEventSource&) = delete;
 
         [[nodiscard]] HRESULT EnsureDispatchWindow() noexcept;
+        [[nodiscard]] HRESULT SetAnimationTimer(bool enabled) noexcept;
         [[nodiscard]] std::uint64_t Begin(
             std::string algorithmPath,
             std::vector<std::string> arguments);

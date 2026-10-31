@@ -13,7 +13,9 @@
  */
 #pragma once
 
+#include <chrono>
 #include <memory>
+#include <optional>
 
 #include "mapwingis/core/Api.h"
 #include "mapwingis/map/Map.h"
@@ -22,15 +24,17 @@
 
 namespace mwg
 {
+    class RasterDataset;
     class VectorDataset;
 
     /// A map, the viewport it is shown in, and its render scene.
     ///
     /// Redraws: every mutator returns whether the displayed frame may have
     /// changed. Hosts request a redraw when it returns true and draw Scene()
-    /// through GetViewport(). Changes to the layer collection or visibility
-    /// mark the scene stale; Scene() rebuilds it on the next call. Edits to
-    /// source geometry are not observed; call InvalidateScene after them.
+    /// through GetViewport(). Changes to the layer collection, visibility, or
+    /// order mark the scene stale; unchanged vector geometry is reused.
+    /// Raster layers are read for the current viewport window. Edits to source
+    /// geometry are not observed; call InvalidateScene after them.
     ///
     /// Initial view: while the viewport has no view, adding a layer fits the
     /// viewport to the map. A fit that cannot happen because the viewport has
@@ -40,6 +44,7 @@ namespace mwg
     ///
     /// Navigation: FitToMap, ZoomToLayer, ZoomIn, ZoomOut, ZoomAt, and Pan
     /// change the viewport; they depend on no window, input, or renderer.
+    /// Changed views are retained in a bounded back/forward history.
     /// A later fit replaces a pending fit, and a navigation operation that
     /// changes the view cancels it, so the latest request wins.
     ///
@@ -67,6 +72,11 @@ namespace mwg
         /// \throws InvalidArgument as Map::AddLayer does.
         LayerId AddLayer(std::shared_ptr<VectorDataset> dataset, int layerIndex = 0);
 
+        /// Adds a raster layer on top of the map; fits the view to the map
+        /// when the viewport has no view yet.
+        /// \throws InvalidArgument as Map::AddRasterLayer does.
+        LayerId AddRasterLayer(std::shared_ptr<RasterDataset> dataset);
+
         /// Removes a layer; see Map::RemoveLayer. The view is kept.
         bool RemoveLayer(LayerId id) noexcept;
 
@@ -77,6 +87,11 @@ namespace mwg
         /// Shows or hides a layer and returns true when its visibility
         /// changed. Returns false when the map has no such layer.
         bool SetLayerVisible(LayerId id, bool visible) noexcept;
+
+        /// Moves a layer to a new 0-based drawing position. Returns false
+        /// when its position did not change or the identity is unknown.
+        /// \throws InvalidArgument when position is outside the collection.
+        bool MoveLayer(LayerId id, int position);
 
         /// Changes the viewport size, keeping the center and resolution so
         /// the map neither moves nor changes scale; see Viewport::SetSize.
@@ -134,20 +149,76 @@ namespace mwg
         /// \throws InvalidArgument as Viewport::Pan does.
         bool Pan(double deltaX, double deltaY);
 
-        /// The render scene of the current map, rebuilt first when the map
-        /// changed since the last call; see rendering::CreateMapRenderScene.
+        /// Groups subsequent view changes into one navigation-history entry.
+        /// Returns false when a group is active or no view exists.
+        bool BeginNavigationGesture() noexcept;
+
+        /// Ends an active navigation group and records its aggregate change.
+        /// Returns true when the group changed the view.
+        bool EndNavigationGesture() noexcept;
+
+        /// True when a prior view can be restored.
+        [[nodiscard]] bool CanGoBack() const noexcept;
+
+        /// True when a forward view can be restored.
+        [[nodiscard]] bool CanGoForward() const noexcept;
+
+        /// Restores the previous view, preserving the current viewport size.
+        /// Returns false when no prior view exists.
+        bool GoBack() noexcept;
+
+        /// Restores the next view, preserving the current viewport size.
+        /// Returns false when no forward view exists.
+        bool GoForward() noexcept;
+
+        /// Starts an eased transition to the full visible map extent.
+        /// The host advances it by calling AdvanceTransition from its timer.
+        /// Returns false when no transition is needed or the viewport/map
+        /// cannot provide a target view.
+        /// \throws InvalidArgument when duration is not positive.
+        bool BeginTransitionToMap(std::chrono::milliseconds duration);
+
+        /// Starts an eased transition to one layer's extent.
+        /// \throws InvalidArgument when duration is not positive.
+        bool BeginTransitionToLayer(
+            LayerId id,
+            std::chrono::milliseconds duration);
+
+        /// Advances an active transition by elapsed time and returns true
+        /// when the viewport changed.
+        /// \throws InvalidArgument when elapsed time is negative.
+        bool AdvanceTransition(std::chrono::milliseconds elapsed);
+
+        /// Cancels an active transition, retaining its current view.
+        /// The partial transition is recorded as one history entry.
+        bool CancelTransition() noexcept;
+
+        [[nodiscard]] bool IsTransitioning() const noexcept;
+
+        /// Render scene of the current map and viewport. Raster layers contain
+        /// viewport-sized windows; unchanged vector geometry is cached by
+        /// layer identity across map changes.
         /// The reference stays valid for the lifetime of the MapView; a later
         /// call that rebuilds the scene replaces its contents.
         /// \throws std::bad_alloc when memory runs out.
         [[nodiscard]] const rendering::MapRenderScene& Scene();
 
-        /// Marks the render scene stale, for example after source geometry
-        /// was edited. Returns true: the frame must be redrawn.
+        /// Marks the render scene and per-layer geometry cache stale, for
+        /// example after source geometry was edited. Returns true: the frame
+        /// must be redrawn.
         bool InvalidateScene() noexcept;
 
     private:
+        struct NavigationState
+        {
+            MapPoint center;
+            double resolution = 0.0;
+        };
+
         /// Clears a pending fit when changed is true and returns changed.
-        bool ViewChanged(bool changed) noexcept;
+        bool ViewChanged(
+            bool changed,
+            const std::optional<NavigationState>& previousState) noexcept;
 
         class Impl;
         std::unique_ptr<Impl> _impl;

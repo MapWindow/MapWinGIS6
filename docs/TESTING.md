@@ -237,3 +237,22 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
 - Wrap expected GDAL noise in `GdalEnvironment::QuietScope`.
 - Tests use local generated data and do not require network access by default.
   Set `MWG_RUN_NETWORK_GDAL_TESTS=1` to enable the public `/vsicurl/` COG test.
+
+### Phase 7 final map-model and navigation verification
+
+The Debug x64 solution build succeeded. The native test executable ran 323
+tests: 320 passed and 3 were skipped (the opt-in network test, separately
+exercised ActiveX hosting, and the opt-in rendering baseline). Coverage
+includes vector reprojection and point/line/polygon scenes, raster preview and
+reprojection, navigation history and animated transitions, the new ActiveX
+navigation interface, its owner-thread animation timer, keyboard panning, and
+one-entry-per-gesture navigation history.
+The automated C# ActiveX host passed all 16 checks, including programmatic
+navigation, mouse-wheel zoom, drag-to-pan, resize, repaint, and control
+recreation. Touch gesture hardware input remains a manual validation item.
+
+The viewport-raster and XYZ-tile follow-up passed the Debug x64 build and all
+337 native tests (334 passed, 3 skipped). This includes an XYZ integration
+test that serves a generated PNG tile from a loopback HTTP listener and checks
+the requested tile path and rendered pixel; it does not require public network
+access. The automated C# ActiveX host also passed all 16 checks.
