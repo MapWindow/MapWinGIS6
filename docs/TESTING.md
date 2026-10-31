@@ -237,3 +237,11 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
 - Wrap expected GDAL noise in `GdalEnvironment::QuietScope`.
 - Tests use local generated data and do not require network access by default.
   Set `MWG_RUN_NETWORK_GDAL_TESTS=1` to enable the public `/vsicurl/` COG test.
+
+### Phase 7 final map-model and navigation verification
+
+The Debug x64 solution build succeeded. The native test executable ran 306
+tests: 303 passed and 3 were skipped (the opt-in network test, separately
+exercised ActiveX hosting, and the opt-in rendering baseline). The automated
+C# ActiveX host passed all 16 checks, including programmatic navigation,
+mouse-wheel zoom, drag-to-pan, resize, repaint, and control recreation.
