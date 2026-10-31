@@ -24,6 +24,10 @@ and GeoPackage. The ActiveX layer supports COM activation, vector loading,
 polygon rendering, and asynchronous generic GDAL algorithms with progress and
 cancellation events.
 
+The core also supports a shared map viewport with pan, center zoom, anchored
+zoom, and fitting to the visible map or a named layer. These navigation calls
+do not depend on a window. ActiveX mouse navigation remains future work.
+
 Vector loads add layers rather than replace them. Call `ClearLayers` to
 release the loaded datasets before switching or refreshing them.
 

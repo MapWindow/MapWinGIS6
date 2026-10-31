@@ -2,11 +2,12 @@
 
 /**
  * @file ViewportTests.cpp
- * @brief Tests viewport coordinate transformations and extent fitting.
+ * @brief Tests viewport coordinate transformations, extent fitting, and
+ *        pan and zoom calculations.
  *
  * Verifies map-to-screen and screen-to-map conversions, aspect-preserving
- * extent fitting with padding, limits, and the handling of zero-sized
- * viewports, degenerate extents, and non-finite inputs.
+ * extent fitting with padding, pan, center and anchored zoom, limits, and the
+ * handling of zero-sized viewports, degenerate extents, and non-finite inputs.
  */
 #include <gtest/gtest.h>
 
@@ -528,6 +529,205 @@ TEST(ToPixel, RoundsDownToTheContainingPixel)
     ASSERT_TRUE(negative.has_value());
     EXPECT_EQ(negative->x, -1);
     EXPECT_EQ(negative->y, -1);
+}
+
+TEST(Viewport, PanShiftsTheVisibleExtentByTheMapDelta)
+{
+    Viewport viewport = MakeFittedViewport();
+    const Extent before = viewport.VisibleExtent();
+
+    ASSERT_TRUE(viewport.Pan(10.0, -5.0));
+
+    ExpectMap(viewport.Center(), 60, 20);
+    EXPECT_DOUBLE_EQ(*viewport.Resolution(), 1.0);
+    ExpectExtent(viewport.VisibleExtent(),
+                 {before.xMin + 10.0, before.yMin - 5.0, before.xMax + 10.0, before.yMax - 5.0});
+    // Content moves the opposite way on screen: a pan east moves geometry
+    // left, a pan south moves geometry up.
+    ExpectScreen(viewport.MapToScreen({50, 25}), 40.5, 20.5);
+}
+
+TEST(Viewport, PanWithoutViewOrWithZeroDeltaChangesNothing)
+{
+    Viewport noView(100, 100);
+    EXPECT_FALSE(noView.Pan(1.0, 1.0));
+    EXPECT_FALSE(noView.HasView());
+
+    Viewport viewport = MakeFittedViewport();
+    EXPECT_FALSE(viewport.Pan(0.0, 0.0));
+    ExpectMap(viewport.Center(), 50, 25);
+}
+
+TEST(Viewport, PanWorksOnAZeroSizedViewport)
+{
+    Viewport viewport = MakeFittedViewport();
+    viewport.SetSize(0, 0);
+
+    ASSERT_TRUE(viewport.Pan(-50.0, 0.0));
+
+    ExpectMap(viewport.Center(), 0, 25);
+}
+
+TEST(Viewport, PanRejectsNonFiniteDeltasAndClampsTheCenter)
+{
+    Viewport viewport = MakeFittedViewport();
+    EXPECT_THROW((void)viewport.Pan(kNaN, 0.0), InvalidArgument);
+    EXPECT_THROW((void)viewport.Pan(0.0, kInfinity), InvalidArgument);
+    ExpectMap(viewport.Center(), 50, 25);
+
+    ASSERT_TRUE(viewport.Pan(std::numeric_limits<double>::max(), -std::numeric_limits<double>::max()));
+    EXPECT_DOUBLE_EQ(viewport.Center()->x, Viewport::kMaxCoordinate);
+    EXPECT_DOUBLE_EQ(viewport.Center()->y, -Viewport::kMaxCoordinate);
+    EXPECT_FALSE(viewport.Pan(1.0e6, -1.0e6));
+}
+
+TEST(Viewport, ZoomDividesTheResolutionAndKeepsTheCenter)
+{
+    Viewport viewport = MakeFittedViewport();
+
+    ASSERT_TRUE(viewport.Zoom(2.0));
+    ExpectMap(viewport.Center(), 50, 25);
+    EXPECT_DOUBLE_EQ(*viewport.Resolution(), 0.5);
+    EXPECT_NEAR(viewport.VisibleExtent().Width(), 50.5, kTolerance);
+
+    ASSERT_TRUE(viewport.Zoom(0.25));
+    ExpectMap(viewport.Center(), 50, 25);
+    EXPECT_DOUBLE_EQ(*viewport.Resolution(), 2.0);
+}
+
+TEST(Viewport, ZoomInThenOutRestoresTheView)
+{
+    Viewport viewport = MakeFittedViewport();
+    const Extent before = viewport.VisibleExtent();
+
+    ASSERT_TRUE(viewport.Zoom(4.0));
+    ASSERT_TRUE(viewport.Zoom(0.25));
+
+    ExpectExtent(viewport.VisibleExtent(), before);
+}
+
+TEST(Viewport, ZoomRejectsInvalidFactors)
+{
+    Viewport viewport = MakeFittedViewport();
+    for (const double factor : {0.0, -2.0, kNaN, kInfinity})
+    {
+        EXPECT_THROW((void)viewport.Zoom(factor), InvalidArgument) << factor;
+        EXPECT_THROW((void)viewport.ZoomOut(factor), InvalidArgument) << factor;
+        EXPECT_THROW((void)viewport.ZoomAt({0, 0}, factor), InvalidArgument) << factor;
+    }
+    EXPECT_DOUBLE_EQ(*viewport.Resolution(), 1.0);
+}
+
+TEST(Viewport, ZoomStopsAtTheResolutionLimits)
+{
+    Viewport viewport = MakeFittedViewport();
+    const MapPoint center = *viewport.Center();
+
+    ASSERT_TRUE(viewport.Zoom(1.0e300));
+    EXPECT_DOUBLE_EQ(*viewport.Resolution(), Viewport::MinResolution(center));
+    EXPECT_FALSE(viewport.Zoom(2.0));
+
+    ASSERT_TRUE(viewport.Zoom(1.0e-300));
+    EXPECT_DOUBLE_EQ(*viewport.Resolution(), Viewport::kMaxResolution);
+    EXPECT_FALSE(viewport.Zoom(0.5));
+    ExpectMap(viewport.Center(), center.x, center.y);
+}
+
+TEST(Viewport, ZoomWithoutViewChangesNothing)
+{
+    Viewport viewport(100, 100);
+    EXPECT_FALSE(viewport.Zoom(2.0));
+    EXPECT_FALSE(viewport.ZoomOut(2.0));
+    EXPECT_FALSE(viewport.ZoomAt({10, 10}, 2.0));
+    EXPECT_FALSE(viewport.HasView());
+}
+
+TEST(Viewport, ZoomOutMultipliesTheResolutionAndClampsOverflow)
+{
+    Viewport viewport(100, 100);
+    viewport.SetView({5.0, 10.0}, 0.3);
+
+    ASSERT_TRUE(viewport.ZoomOut(3.0));
+    EXPECT_EQ(*viewport.Resolution(), 0.3 * 3.0);
+    ExpectMap(viewport.Center(), 5.0, 10.0);
+
+    ASSERT_TRUE(viewport.ZoomOut(0.5));
+    EXPECT_EQ(*viewport.Resolution(), 0.3 * 3.0 * 0.5);
+    ASSERT_TRUE(viewport.ZoomOut(std::numeric_limits<double>::max()));
+    EXPECT_EQ(*viewport.Resolution(), Viewport::kMaxResolution);
+    EXPECT_FALSE(viewport.ZoomOut(2.0));
+
+    ASSERT_TRUE(viewport.ZoomOut(1.0e-300));
+    EXPECT_EQ(*viewport.Resolution(), Viewport::MinResolution(*viewport.Center()));
+    EXPECT_FALSE(viewport.ZoomOut(0.5));
+}
+
+TEST(Viewport, ZoomAtKeepsTheMapCoordinateUnderTheAnchor)
+{
+    const ScreenPoint anchors[] = {{0.0, 0.0}, {100.25, 3.75}, {50.5, 25.5}, {-30.0, 200.0}};
+    for (const ScreenPoint& anchor : anchors)
+    {
+        for (const double factor : {2.0, 0.5, 3.3})
+        {
+            Viewport viewport = MakeFittedViewport();
+            const std::optional<MapPoint> before = viewport.ScreenToMap(anchor);
+            ASSERT_TRUE(before.has_value());
+
+            ASSERT_TRUE(viewport.ZoomAt(anchor, factor));
+
+            EXPECT_NEAR(*viewport.Resolution(), 1.0 / factor, kTolerance);
+            ExpectMap(viewport.ScreenToMap(anchor), before->x, before->y);
+            ExpectScreen(viewport.MapToScreen(*before), anchor.x, anchor.y);
+        }
+    }
+}
+
+TEST(Viewport, ZoomAtTheCenterMatchesCenterZoom)
+{
+    Viewport anchored = MakeFittedViewport();
+    Viewport centered = MakeFittedViewport();
+
+    ASSERT_TRUE(anchored.ZoomAt({50.5, 25.5}, 2.0));
+    ASSERT_TRUE(centered.Zoom(2.0));
+
+    ExpectExtent(anchored.VisibleExtent(), centered.VisibleExtent());
+}
+
+TEST(Viewport, ZoomAtNeedsAValidViewportAndAFiniteAnchor)
+{
+    Viewport viewport = MakeFittedViewport();
+    EXPECT_THROW((void)viewport.ZoomAt({kNaN, 0}, 2.0), InvalidArgument);
+    EXPECT_THROW((void)viewport.ZoomAt({0, -kInfinity}, 2.0), InvalidArgument);
+
+    viewport.SetSize(0, 10);
+    EXPECT_FALSE(viewport.ZoomAt({0, 0}, 2.0));
+    EXPECT_DOUBLE_EQ(*viewport.Resolution(), 1.0);
+}
+
+TEST(Viewport, ZoomAtStopsAtTheResolutionLimit)
+{
+    Viewport viewport = MakeFittedViewport();
+    ASSERT_TRUE(viewport.ZoomAt({0, 0}, 1.0e300));
+    EXPECT_DOUBLE_EQ(*viewport.Resolution(), Viewport::MinResolution(*viewport.Center()));
+    EXPECT_FALSE(viewport.ZoomAt({0, 0}, 2.0));
+}
+
+TEST(Viewport, ZoomAtCanMoveTheAnchorWhenTheNewCenterRaisesTheMinimumResolution)
+{
+    Viewport viewport(Viewport::kMaxDimension, 100);
+    viewport.SetView({Viewport::kMaxCoordinate - 1.0e8, 0.0}, 200.0);
+    const ScreenPoint anchor{static_cast<double>(Viewport::kMaxDimension), 50.0};
+    const MapPoint before = *viewport.ScreenToMap(anchor);
+    const double oldMinimum = Viewport::MinResolution(*viewport.Center());
+
+    ASSERT_TRUE(viewport.ZoomAt(anchor, 3.0));
+
+    EXPECT_LT(viewport.Center()->x, Viewport::kMaxCoordinate);
+    EXPECT_GT(*viewport.Resolution(), oldMinimum);
+    EXPECT_EQ(*viewport.Resolution(), Viewport::MinResolution(*viewport.Center()));
+    const MapPoint after = *viewport.ScreenToMap(anchor);
+    EXPECT_GT(after.x - before.x, 1.0);
+    EXPECT_EQ(after.y, before.y);
 }
 
 TEST(ToPixel, RejectsNonFiniteAndOutOfRangeCoordinates)

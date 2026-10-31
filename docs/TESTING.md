@@ -207,6 +207,16 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
   Map view tests fit point and zero-span extents, and tiny targets with default
   padding. Map scene tests isolate standard geometry-read exceptions, reuse
   the resulting scene, and let allocation failures propagate.
+- Navigation is tested without input events: `ViewportTests.cpp` covers the
+  pan, center-zoom, and anchored-zoom calculations and their limits, and
+  `MapViewTests.cpp` covers zoom to map and layer, zoom in and out, empty and
+  missing-layer cases, and pending-fit handling on `MapView`. Pending-fit
+  tests cover replacement in both directions between map and layer fits,
+  cancellation by pan and center zoom, and cancellation by missing or empty
+  layers. They also cover unchanged navigation at a resolution limit and
+  `ZoomAt` on a zero-sized viewport, which keep the pending fit.
+  Viewport tests cover anchor movement when the new center raises the
+  minimum resolution, and direct zoom-out multiplication without a reciprocal.
 - Cover for each feature: happy path, empty/missing input, out-of-range
   indexes, null values, non-ASCII paths, write-then-reopen round-trips, and
   error cases.

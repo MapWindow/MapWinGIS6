@@ -40,6 +40,14 @@ namespace mwg
             return std::clamp(resolution, Viewport::MinResolution(center), Viewport::kMaxResolution);
         }
 
+        void ValidateZoomFactor(const double factor)
+        {
+            if (!std::isfinite(factor) || factor <= 0.0)
+            {
+                throw InvalidArgument("Viewport zoom factor must be a finite positive number");
+            }
+        }
+
         // Pixels available for the extent on one axis. The extent edges map
         // to the centers of the outermost pixels inside the padding, which
         // removes one pixel from the span. At least half a pixel remains, so
@@ -167,6 +175,88 @@ namespace mwg
         _center = center;
         _resolution = ClampResolution(resolution, center);
         _hasView = true;
+        return true;
+    }
+
+    bool Viewport::Pan(const double deltaX, const double deltaY)
+    {
+        if (!IsFinite(deltaX, deltaY))
+        {
+            throw InvalidArgument("Viewport pan delta must be finite");
+        }
+        if (!_hasView)
+        {
+            return false;
+        }
+        // The center is at most kMaxCoordinate, so a finite delta can only
+        // overflow to infinity, which the clamp maps back to the limit.
+        return ApplyView({_center.x + deltaX, _center.y + deltaY}, _resolution);
+    }
+
+    bool Viewport::Zoom(const double factor)
+    {
+        ValidateZoomFactor(factor);
+        if (!_hasView)
+        {
+            return false;
+        }
+        return ApplyView(_center, _resolution / factor);
+    }
+
+    bool Viewport::ZoomOut(const double factor)
+    {
+        ValidateZoomFactor(factor);
+        if (!_hasView)
+        {
+            return false;
+        }
+        return ApplyView(_center, _resolution * factor);
+    }
+
+    bool Viewport::ZoomAt(const ScreenPoint& anchor, const double factor)
+    {
+        ValidateZoomFactor(factor);
+        if (!IsFinite(anchor.x, anchor.y))
+        {
+            throw InvalidArgument("Viewport zoom anchor must be finite");
+        }
+        const std::optional<MapPoint> anchored = ScreenToMap(anchor);
+        if (!anchored.has_value())
+        {
+            return false;
+        }
+
+        // Resolve the resolution first, then place the center so that the
+        // anchored map point lands on the anchor at the new resolution.
+        const double resolution = ClampResolution(_resolution / factor, _center);
+        if (resolution == _resolution)
+        {
+            // At the limit: recomputing the center would only add rounding.
+            return false;
+        }
+        const double offsetX = anchor.x - static_cast<double>(_width) / 2.0;
+        const double offsetY = anchor.y - static_cast<double>(_height) / 2.0;
+        const MapPoint center{
+            anchored->x - offsetX * resolution,
+            anchored->y + offsetY * resolution};
+        if (!IsFinite(center.x, center.y))
+        {
+            return false;
+        }
+        return ApplyView(center, resolution);
+    }
+
+    bool Viewport::ApplyView(const MapPoint& center, const double resolution) noexcept
+    {
+        const MapPoint clampedCenter = ClampCenter(center);
+        const double clampedResolution = ClampResolution(resolution, clampedCenter);
+        if (clampedCenter.x == _center.x && clampedCenter.y == _center.y &&
+            clampedResolution == _resolution)
+        {
+            return false;
+        }
+        _center = clampedCenter;
+        _resolution = clampedResolution;
         return true;
     }
 
