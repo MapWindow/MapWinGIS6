@@ -169,6 +169,15 @@ take snapshots.
   boundary geometry outside the viewport. A zero-span axis does not constrain
   the resolution; a single point keeps the current resolution. Invalid
   extents and zero-sized viewports return `false` without changing the view.
+- **Pan and zoom.** `Pan(dx, dy)` shifts the visible extent by a map-unit
+  delta, so content moves the opposite way on screen. `Zoom(factor)` divides
+  the resolution by `factor` around the center (above 1 zooms in).
+  `ZoomAt(anchor, factor)` does the same around a screen position and keeps
+  the map coordinate under it in place, which is what cursor zoom needs. All
+  three take plain numbers, not input events, return whether the view
+  changed, and clamp to the limits below; at a limit they return `false`.
+  Non-finite deltas, anchors, and non-positive factors throw
+  `InvalidArgument`.
 - **Limits.** Sizes are limited to `kMaxDimension` pixels. Centers are clamped
   to `±kMaxCoordinate` and resolutions to `[MinResolution(center),
   kMaxResolution]`, where the minimum is relative to the center's magnitude so
@@ -202,6 +211,15 @@ has no extent or transform of its own.
   requested while the viewport has no size, for example before the host
   window exists or while it is minimized, is done by the first `Resize` that
   gives it a size.
+- **Navigation.** `FitToMap` (zoom to map: visible layers only, with
+  padding), `ZoomToLayer` (by `LayerId`, also for hidden layers), `ZoomIn`
+  and `ZoomOut` (center zoom by a factor above 1, default
+  `kDefaultZoomFactor`), `ZoomAt`, and `Pan` change the shared viewport and
+  return whether a redraw is needed. Empty maps, missing layers, and layers
+  without a valid extent return `false` and keep the view. The latest request
+  wins: a new fit replaces a pending one, and a navigation step that changes
+  the view cancels it. None of this depends on COM, mouse messages, or a
+  renderer; Phase 5 maps input onto these calls.
 
 ## ActiveX and rendering architecture
 
@@ -335,7 +353,10 @@ Windows CPU fallback; Core has no independent platform-neutral renderer.
 
 The C# host's pixel assertions, activation, and native tests pass for Debug
 and Release on Win32 and x64 in an interactive desktop session.
-The next milestone is navigation on the shared `MapView`: zoom to map and
-layer, zoom in and out, and pan. Measure scene preparation with representative
-datasets before adding caching, paging, or broader OpenGL geometry support.
+Core navigation on the shared `MapView` (zoom to map and layer, zoom in and
+out, anchored zoom, and pan) is implemented but not yet exposed through COM or
+mouse input; that is the next milestone. Deep zoom can push a layer past the
+GDI coordinate range until clipping exists. Measure scene preparation with
+representative datasets before adding caching, paging, or broader OpenGL
+geometry support.
 OpenCL and full MapWinGIS 5 API parity remain deferred.

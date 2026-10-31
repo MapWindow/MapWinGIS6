@@ -6,22 +6,65 @@
  */
 #include "mapwingis/map/MapView.h"
 
+#include <cmath>
 #include <optional>
 #include <utility>
 
+#include "mapwingis/core/Error.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 namespace mwg
 {
+    namespace
+    {
+        void ValidateStepFactor(const double factor)
+        {
+            if (!std::isfinite(factor) || factor <= 1.0)
+            {
+                throw InvalidArgument("Zoom factor must be a finite number above 1");
+            }
+        }
+    }
+
     class MapView::Impl
     {
     public:
+        /// A fit that waits for the viewport to get a size.
+        struct PendingFit
+        {
+            /// The layer to fit, or std::nullopt to fit the whole map.
+            std::optional<LayerId> layer;
+            double padding = 0.0;
+        };
+
+        /// Fits extent and returns true, or keeps the fit pending when only
+        /// the viewport size prevents it.
+        bool Fit(const Extent& extent, const PendingFit& request)
+        {
+            if (_viewport.FitExtent(extent, request.padding))
+            {
+                _pendingFit.reset();
+                return true;
+            }
+
+            // FitExtent fails for an invalid extent or a zero-sized viewport;
+            // only the second can succeed later without another request.
+            if (extent.IsValid())
+            {
+                _pendingFit = request;
+            }
+            else
+            {
+                _pendingFit.reset();
+            }
+            return false;
+        }
+
         Map _map;
         Viewport _viewport;
         rendering::MapRenderScene _scene;
         bool _sceneStale = false;
-        /// Padding of a fit that waits for the viewport to get a size.
-        std::optional<double> _pendingFitPadding;
+        std::optional<PendingFit> _pendingFit;
     };
 
     MapView::MapView()
@@ -101,33 +144,67 @@ namespace mwg
         viewport.SetSize(width, height);
 
         bool fitted = false;
-        if (_impl->_pendingFitPadding.has_value() && width > 0 && height > 0)
+        if (_impl->_pendingFit.has_value() && width > 0 && height > 0)
         {
-            fitted = FitToMap(*_impl->_pendingFitPadding);
+            // Cleared first, so a layer removed in the meantime does not
+            // leave the fit pending forever.
+            const Impl::PendingFit pending = *_impl->_pendingFit;
+            _impl->_pendingFit.reset();
+            fitted = pending.layer.has_value()
+                ? ZoomToLayer(*pending.layer, pending.padding)
+                : FitToMap(pending.padding);
         }
         return sizeChanged || fitted;
     }
 
     bool MapView::FitToMap(const double paddingPixels)
     {
-        const Extent extent = _impl->_map.GetExtent();
-        if (_impl->_viewport.FitExtent(extent, paddingPixels))
-        {
-            _impl->_pendingFitPadding.reset();
-            return true;
-        }
+        return _impl->Fit(_impl->_map.GetExtent(), {std::nullopt, paddingPixels});
+    }
 
-        // FitExtent fails for an invalid extent or a zero-sized viewport;
-        // only the second can succeed later without another request.
-        if (extent.IsValid())
+    bool MapView::ZoomToLayer(const LayerId id, const double paddingPixels)
+    {
+        if (!std::isfinite(paddingPixels) || paddingPixels < 0.0)
         {
-            _impl->_pendingFitPadding = paddingPixels;
+            throw InvalidArgument("Viewport padding must be a finite non-negative number");
         }
-        else
+        const MapLayer* layer = _impl->_map.FindLayer(id);
+        if (layer == nullptr)
         {
-            _impl->_pendingFitPadding.reset();
+            return false;
         }
-        return false;
+        return _impl->Fit(layer->GetExtent(), {id, paddingPixels});
+    }
+
+    bool MapView::ZoomIn(const double factor)
+    {
+        ValidateStepFactor(factor);
+        return ViewChanged(_impl->_viewport.Zoom(factor));
+    }
+
+    bool MapView::ZoomOut(const double factor)
+    {
+        ValidateStepFactor(factor);
+        return ViewChanged(_impl->_viewport.Zoom(1.0 / factor));
+    }
+
+    bool MapView::ZoomAt(const ScreenPoint& anchor, const double factor)
+    {
+        return ViewChanged(_impl->_viewport.ZoomAt(anchor, factor));
+    }
+
+    bool MapView::Pan(const double deltaX, const double deltaY)
+    {
+        return ViewChanged(_impl->_viewport.Pan(deltaX, deltaY));
+    }
+
+    bool MapView::ViewChanged(const bool changed) noexcept
+    {
+        if (changed)
+        {
+            _impl->_pendingFit.reset();
+        }
+        return changed;
     }
 
     const rendering::MapRenderScene& MapView::Scene()
