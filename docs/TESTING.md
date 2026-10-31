@@ -197,6 +197,10 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
   resizing, and scene invalidation; and `VectorLayerRendererTests.cpp` draws
   layers with different extents into memory bitmaps and samples the pixels at
   `Viewport::MapToScreen` positions, for GDI and, when available, OpenGL.
+- Navigation is tested without input events: `ViewportTests.cpp` covers the
+  pan, center-zoom, and anchored-zoom calculations and their limits, and
+  `MapViewTests.cpp` covers zoom to map and layer, zoom in and out, empty and
+  missing-layer cases, and pending-fit handling on `MapView`.
 - Cover for each feature: happy path, empty/missing input, out-of-range
   indexes, null values, non-ASCII paths, write-then-reopen round-trips, and
   error cases.
