@@ -41,6 +41,8 @@ function(mwg_apply_common_options target)
         "$<${c_cxx}:/utf-8;/Zc:__cplusplus;/Zc:preprocessor;/Zc:throwingNew;/bigobj>"
         # ConformanceMode, SDLCheck, ExceptionHandling and MSBuild defaults
         "$<${c_cxx}:/permissive-;/sdl;/EHsc;/GS;/Gd;/Gm-;/fp:precise;/Zc:wchar_t;/Zc:forScope;/Zc:inline>"
+        # CMake passes /TP for C++ but not /TC for C (the MIDL _i.c).
+        "$<$<COMPILE_LANGUAGE:C>:/TC>"
         "$<${debug}:/Od;/JMC>"
         "$<${release}:/O2;/Oi;/Gy;/guard:cf>"
     )
