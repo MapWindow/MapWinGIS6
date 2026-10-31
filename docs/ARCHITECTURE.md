@@ -175,6 +175,12 @@ take snapshots.
   to `±kMaxCoordinate` and resolutions to `[MinResolution(center),
   kMaxResolution]`, where the minimum is relative to the center's magnitude so
   that pixels stay many representable doubles wide.
+- **Navigation.** `Pan` moves the center in map units. `Zoom` divides the
+  resolution by its factor, and `ZoomOut` multiplies it directly. `ZoomAt`
+  keeps the map coordinate under a screen anchor unless the limits intervene.
+  Moving the center can raise `MinResolution` and change the resolution
+  again, so the anchored coordinate can move even without center clamping.
+  `ZoomAt` needs a valid viewport. Center zoom and pan only need a view.
 
 ## Map view and multi-layer rendering
 
@@ -206,6 +212,9 @@ has no extent or transform of its own.
   requested while the viewport has no size, for example before the host
   window exists or while it is minimized, is done by the first `Resize` that
   gives it a size.
+  If reading the pending extent throws, `Resize` propagates the error after
+  applying the size and discarding the pending fit. The center and resolution
+  stay unchanged. The host must request a redraw after this error.
 - **Navigation.** `FitToMap` (zoom to map: visible layers only, with
   padding), `ZoomToLayer` (by `LayerId`, also for hidden layers), `ZoomIn`
   and `ZoomOut` (center zoom by a factor above 1, default
@@ -213,7 +222,10 @@ has no extent or transform of its own.
   return whether a redraw is needed. Empty maps, missing layers, and layers
   without a valid extent return `false` and keep the view. The latest request
   wins: a new fit replaces a pending one, and a navigation step that changes
-  the view cancels it. None of this depends on COM, mouse messages, or a
+  the view cancels it. A missing layer or an invalid extent also cancels a
+  pending fit. Navigation that returns `false` keeps it, including `ZoomAt`
+  on a zero-sized viewport and center zoom at a resolution limit.
+  None of this depends on COM, mouse messages, or a
   renderer; Phase 5 maps input onto these calls.
 
 ## ActiveX and rendering architecture

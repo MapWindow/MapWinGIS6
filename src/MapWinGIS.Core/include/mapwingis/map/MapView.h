@@ -82,7 +82,11 @@ namespace mwg
         /// the map neither moves nor changes scale; see Viewport::SetSize.
         /// Completes a pending fit once both dimensions are positive.
         /// Returns true when the size or view changed.
+        /// If reading the pending fit extent throws, the new size stays
+        /// applied, the center and resolution stay unchanged, and the
+        /// pending fit is discarded. The host must redraw after this error.
         /// \throws InvalidArgument as Viewport::SetSize does.
+        /// \throws CoreError when the pending fit extent cannot be read.
         bool Resize(int width, int height);
 
         /// Fits the viewport to the visible map extent with paddingPixels
@@ -90,7 +94,9 @@ namespace mwg
         /// view was fitted. When the viewport has no size yet, the fit is
         /// kept pending for Resize and false is returned. A map without a
         /// valid visible extent returns false and leaves the view unchanged.
+        /// A map without a valid visible extent also cancels a pending fit.
         /// \throws InvalidArgument when paddingPixels is negative or not finite.
+        /// \throws CoreError when a visible layer extent cannot be read.
         bool FitToMap(double paddingPixels = kDefaultPadding);
 
         /// Fits the viewport to the extent of one layer with paddingPixels
@@ -100,6 +106,7 @@ namespace mwg
         /// size yet, the fit is kept pending for Resize and false is
         /// returned. Returns false and leaves the view unchanged when the map
         /// has no such layer or the layer has no valid extent.
+        /// These cases also cancel a pending fit.
         /// \throws InvalidArgument when paddingPixels is negative or not finite.
         /// \throws CoreError when the layer extent cannot be read.
         bool ZoomToLayer(LayerId id, double paddingPixels = kDefaultPadding);
@@ -111,7 +118,7 @@ namespace mwg
         bool ZoomIn(double factor = kDefaultZoomFactor);
 
         /// Zooms out around the viewport center: the resolution is
-        /// multiplied by factor; see Viewport::Zoom. Returns true when the
+        /// multiplied by factor; see Viewport::ZoomOut. Returns true when the
         /// view changed; false without a view or at the resolution limit.
         /// \throws InvalidArgument when factor is not finite or not above 1.
         bool ZoomOut(double factor = kDefaultZoomFactor);

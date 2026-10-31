@@ -181,13 +181,23 @@ namespace mwg
         /// \throws InvalidArgument when factor is not a finite positive number.
         bool Zoom(double factor);
 
+        /// Zooms around the viewport center by multiplying the resolution
+        /// by factor. A factor above 1 zooms out and below 1 zooms in.
+        /// Keeps the center and clamps the resolution to the limits.
+        /// Returns true when the view changed; false without a view or at
+        /// the resolution limit in that direction.
+        /// \throws InvalidArgument when factor is not a finite positive number.
+        bool ZoomOut(double factor);
+
         /// Zooms around a screen position: the resolution is divided by
         /// factor as in Zoom, and the map coordinate under anchor stays
         /// under anchor. The anchor may lie outside the viewport. When the
         /// limits clamp the result, the resolution or center is clamped and
-        /// the anchored coordinate may move. Returns true when the view
-        /// changed; false when the viewport is not valid or the view is
-        /// already at the limit.
+        /// the anchored coordinate may move. Moving the center can increase
+        /// MinResolution, which clamps the resolution again and can also
+        /// move the anchored coordinate. Returns true when the view changed;
+        /// false when the viewport is not valid or the view is already at
+        /// the limit.
         /// \throws InvalidArgument when factor is not a finite positive number
         ///         or an anchor coordinate is not finite.
         bool ZoomAt(const ScreenPoint& anchor, double factor);

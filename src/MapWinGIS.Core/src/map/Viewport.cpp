@@ -203,6 +203,16 @@ namespace mwg
         return ApplyView(_center, _resolution / factor);
     }
 
+    bool Viewport::ZoomOut(const double factor)
+    {
+        ValidateZoomFactor(factor);
+        if (!_hasView)
+        {
+            return false;
+        }
+        return ApplyView(_center, _resolution * factor);
+    }
+
     bool Viewport::ZoomAt(const ScreenPoint& anchor, const double factor)
     {
         ValidateZoomFactor(factor);

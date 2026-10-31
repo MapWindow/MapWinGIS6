@@ -171,6 +171,7 @@ namespace mwg
         const MapLayer* layer = _impl->_map.FindLayer(id);
         if (layer == nullptr)
         {
+            _impl->_pendingFit.reset();
             return false;
         }
         return _impl->Fit(layer->GetExtent(), {id, paddingPixels});
@@ -185,7 +186,7 @@ namespace mwg
     bool MapView::ZoomOut(const double factor)
     {
         ValidateStepFactor(factor);
-        return ViewChanged(_impl->_viewport.Zoom(1.0 / factor));
+        return ViewChanged(_impl->_viewport.ZoomOut(factor));
     }
 
     bool MapView::ZoomAt(const ScreenPoint& anchor, const double factor)

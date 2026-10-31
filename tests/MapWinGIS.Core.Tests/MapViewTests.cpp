@@ -387,11 +387,52 @@ TEST_F(MapViewTest, ZoomToLayerBeforeTheViewportHasASizeHappensOnFirstResize)
     _view.AddLayer(OpenRectangles({{0.0, 0.0, 100.0, 100.0}}));
     const LayerId target = _view.AddLayer(OpenRectangles({{50.0, 50.0, 51.0, 51.0}}));
 
+    EXPECT_FALSE(_view.FitToMap(20.0));
     EXPECT_FALSE(_view.ZoomToLayer(target, 0.0));
     ASSERT_TRUE(_view.Resize(101, 101));
 
     EXPECT_NEAR(_view.GetViewport().Center()->x, 50.5, kTolerance);
     EXPECT_NEAR(*_view.GetViewport().Resolution(), 0.01, kTolerance);
+}
+
+TEST_F(MapViewTest, FitToMapReplacesAPendingZoomToLayer)
+{
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 100.0, 100.0}}));
+    const LayerId target = _view.AddLayer(OpenRectangles({{50.0, 50.0, 51.0, 51.0}}));
+    EXPECT_FALSE(_view.ZoomToLayer(target, 20.0));
+    EXPECT_FALSE(_view.FitToMap(0.0));
+
+    ASSERT_TRUE(_view.Resize(101, 101));
+
+    EXPECT_NEAR(_view.GetViewport().Center()->x, 50.0, kTolerance);
+    EXPECT_NEAR(_view.GetViewport().Center()->y, 50.0, kTolerance);
+    EXPECT_NEAR(*_view.GetViewport().Resolution(), 1.0, kTolerance);
+}
+
+TEST_F(MapViewTest, ZoomToMissingLayerCancelsAPendingMapFit)
+{
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 10.0}}));
+    const LayerId removed = _view.AddLayer(OpenRectangles({{50.0, 50.0, 51.0, 51.0}}));
+    ASSERT_TRUE(_view.RemoveLayer(removed));
+    EXPECT_FALSE(_view.FitToMap());
+    EXPECT_FALSE(_view.ZoomToLayer(removed));
+
+    ASSERT_TRUE(_view.Resize(200, 100));
+
+    EXPECT_FALSE(_view.GetViewport().HasView());
+    EXPECT_FALSE(_view.Resize(200, 100));
+}
+
+TEST_F(MapViewTest, ZoomToEmptyLayerCancelsAPendingMapFit)
+{
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 10.0}}));
+    const LayerId empty = _view.AddLayer(OpenRectangles({}));
+    EXPECT_FALSE(_view.FitToMap());
+    EXPECT_FALSE(_view.ZoomToLayer(empty));
+
+    ASSERT_TRUE(_view.Resize(200, 100));
+
+    EXPECT_FALSE(_view.GetViewport().HasView());
 }
 
 TEST_F(MapViewTest, PendingZoomToRemovedLayerIsDropped)
@@ -444,6 +485,18 @@ TEST_F(MapViewTest, ZoomInAndOutRejectFactorsThatDoNotZoom)
         EXPECT_THROW((void)_view.ZoomOut(factor), InvalidArgument) << factor;
     }
     EXPECT_DOUBLE_EQ(*_view.GetViewport().Resolution(), resolution);
+}
+
+TEST_F(MapViewTest, ZoomOutMultipliesWithoutTakingAReciprocal)
+{
+    ASSERT_TRUE(_view.Resize(101, 101));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 30.0, 30.0}}));
+    ASSERT_TRUE(_view.FitToMap(0.0));
+    const double resolution = *_view.GetViewport().Resolution();
+
+    ASSERT_TRUE(_view.ZoomOut(3.0));
+
+    EXPECT_EQ(*_view.GetViewport().Resolution(), resolution * 3.0);
 }
 
 TEST_F(MapViewTest, ZoomInStopsAtTheLimitAndReportsNoRedraw)
@@ -529,6 +582,77 @@ TEST_F(MapViewTest, NavigationCancelsAPendingFit)
 
     EXPECT_DOUBLE_EQ(_view.GetViewport().Center()->x, center.x);
     EXPECT_FALSE(IsVisible(_view.GetViewport(), {0.0, 0.0, 110.0, 5.0}));
+}
+
+TEST_F(MapViewTest, ZoomInCancelsAPendingFit)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    _view.AddLayer(OpenRectangles({{100.0, 0.0, 110.0, 5.0}}));
+    ASSERT_TRUE(_view.Resize(0, 0));
+    EXPECT_FALSE(_view.FitToMap());
+
+    ASSERT_TRUE(_view.ZoomIn());
+    const Viewport before = _view.GetViewport();
+    ASSERT_TRUE(_view.Resize(200, 100));
+
+    EXPECT_EQ(_view.GetViewport().Center()->x, before.Center()->x);
+    EXPECT_EQ(_view.GetViewport().Center()->y, before.Center()->y);
+    EXPECT_EQ(_view.GetViewport().Resolution(), before.Resolution());
+}
+
+TEST_F(MapViewTest, ZoomOutCancelsAPendingFit)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    _view.AddLayer(OpenRectangles({{100.0, 0.0, 110.0, 5.0}}));
+    ASSERT_TRUE(_view.Resize(0, 0));
+    EXPECT_FALSE(_view.FitToMap());
+
+    ASSERT_TRUE(_view.ZoomOut());
+    const Viewport before = _view.GetViewport();
+    ASSERT_TRUE(_view.Resize(200, 100));
+
+    EXPECT_EQ(_view.GetViewport().Center()->x, before.Center()->x);
+    EXPECT_EQ(_view.GetViewport().Center()->y, before.Center()->y);
+    EXPECT_EQ(_view.GetViewport().Resolution(), before.Resolution());
+}
+
+TEST_F(MapViewTest, ZoomAtOnAZeroSizedViewportKeepsAPendingFit)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    _view.AddLayer(OpenRectangles({{100.0, 0.0, 110.0, 5.0}}));
+    ASSERT_TRUE(_view.Resize(0, 0));
+    EXPECT_FALSE(_view.FitToMap(0.0));
+    const Viewport before = _view.GetViewport();
+
+    EXPECT_FALSE(_view.ZoomAt({37.5, 81.25}, 2.0));
+    EXPECT_EQ(_view.GetViewport().Center()->x, before.Center()->x);
+    EXPECT_EQ(_view.GetViewport().Center()->y, before.Center()->y);
+    EXPECT_EQ(_view.GetViewport().Resolution(), before.Resolution());
+    ASSERT_TRUE(_view.Resize(200, 100));
+
+    EXPECT_NEAR(_view.GetViewport().Center()->x, 55.0, kTolerance);
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), {0.0, 0.0, 110.0, 5.0}));
+}
+
+TEST_F(MapViewTest, CenterZoomAtAResolutionLimitKeepsAPendingFit)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    _view.AddLayer(OpenRectangles({{100.0, 0.0, 110.0, 5.0}}));
+    ASSERT_TRUE(_view.ZoomOut(1.0e300));
+    ASSERT_TRUE(_view.Resize(0, 0));
+    EXPECT_FALSE(_view.FitToMap(0.0));
+
+    EXPECT_FALSE(_view.ZoomOut());
+    EXPECT_EQ(*_view.GetViewport().Resolution(), Viewport::kMaxResolution);
+    ASSERT_TRUE(_view.Resize(200, 100));
+
+    EXPECT_NEAR(_view.GetViewport().Center()->x, 55.0, kTolerance);
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), {0.0, 0.0, 110.0, 5.0}));
+    EXPECT_LT(*_view.GetViewport().Resolution(), Viewport::kMaxResolution);
 }
 
 TEST_F(MapViewTest, InvalidLayerIndexLeavesTheMapUnchanged)

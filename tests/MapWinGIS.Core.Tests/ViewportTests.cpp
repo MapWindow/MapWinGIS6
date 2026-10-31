@@ -612,6 +612,7 @@ TEST(Viewport, ZoomRejectsInvalidFactors)
     for (const double factor : {0.0, -2.0, kNaN, kInfinity})
     {
         EXPECT_THROW((void)viewport.Zoom(factor), InvalidArgument) << factor;
+        EXPECT_THROW((void)viewport.ZoomOut(factor), InvalidArgument) << factor;
         EXPECT_THROW((void)viewport.ZoomAt({0, 0}, factor), InvalidArgument) << factor;
     }
     EXPECT_DOUBLE_EQ(*viewport.Resolution(), 1.0);
@@ -636,8 +637,29 @@ TEST(Viewport, ZoomWithoutViewChangesNothing)
 {
     Viewport viewport(100, 100);
     EXPECT_FALSE(viewport.Zoom(2.0));
+    EXPECT_FALSE(viewport.ZoomOut(2.0));
     EXPECT_FALSE(viewport.ZoomAt({10, 10}, 2.0));
     EXPECT_FALSE(viewport.HasView());
+}
+
+TEST(Viewport, ZoomOutMultipliesTheResolutionAndClampsOverflow)
+{
+    Viewport viewport(100, 100);
+    viewport.SetView({5.0, 10.0}, 0.3);
+
+    ASSERT_TRUE(viewport.ZoomOut(3.0));
+    EXPECT_EQ(*viewport.Resolution(), 0.3 * 3.0);
+    ExpectMap(viewport.Center(), 5.0, 10.0);
+
+    ASSERT_TRUE(viewport.ZoomOut(0.5));
+    EXPECT_EQ(*viewport.Resolution(), 0.3 * 3.0 * 0.5);
+    ASSERT_TRUE(viewport.ZoomOut(std::numeric_limits<double>::max()));
+    EXPECT_EQ(*viewport.Resolution(), Viewport::kMaxResolution);
+    EXPECT_FALSE(viewport.ZoomOut(2.0));
+
+    ASSERT_TRUE(viewport.ZoomOut(1.0e-300));
+    EXPECT_EQ(*viewport.Resolution(), Viewport::MinResolution(*viewport.Center()));
+    EXPECT_FALSE(viewport.ZoomOut(0.5));
 }
 
 TEST(Viewport, ZoomAtKeepsTheMapCoordinateUnderTheAnchor)
@@ -688,6 +710,24 @@ TEST(Viewport, ZoomAtStopsAtTheResolutionLimit)
     ASSERT_TRUE(viewport.ZoomAt({0, 0}, 1.0e300));
     EXPECT_DOUBLE_EQ(*viewport.Resolution(), Viewport::MinResolution(*viewport.Center()));
     EXPECT_FALSE(viewport.ZoomAt({0, 0}, 2.0));
+}
+
+TEST(Viewport, ZoomAtCanMoveTheAnchorWhenTheNewCenterRaisesTheMinimumResolution)
+{
+    Viewport viewport(Viewport::kMaxDimension, 100);
+    viewport.SetView({Viewport::kMaxCoordinate - 1.0e8, 0.0}, 200.0);
+    const ScreenPoint anchor{static_cast<double>(Viewport::kMaxDimension), 50.0};
+    const MapPoint before = *viewport.ScreenToMap(anchor);
+    const double oldMinimum = Viewport::MinResolution(*viewport.Center());
+
+    ASSERT_TRUE(viewport.ZoomAt(anchor, 3.0));
+
+    EXPECT_LT(viewport.Center()->x, Viewport::kMaxCoordinate);
+    EXPECT_GT(*viewport.Resolution(), oldMinimum);
+    EXPECT_EQ(*viewport.Resolution(), Viewport::MinResolution(*viewport.Center()));
+    const MapPoint after = *viewport.ScreenToMap(anchor);
+    EXPECT_GT(after.x - before.x, 1.0);
+    EXPECT_EQ(after.y, before.y);
 }
 
 TEST(ToPixel, RejectsNonFiniteAndOutOfRangeCoordinates)
