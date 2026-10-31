@@ -34,6 +34,7 @@ internal sealed class MainForm : Form
     private readonly string _testDatasetDirectory =
         Path.Combine(Path.GetTempPath(), $"MapWinGIS.ActiveXTestHost-{Guid.NewGuid():N}");
     private string TestDatasetPath => Path.Combine(_testDatasetDirectory, "sample.geojson");
+    private string TestSecondDatasetPath => Path.Combine(_testDatasetDirectory, "second.geojson");
     private string TestRasterPath => Path.Combine(_testDatasetDirectory, "sample.asc");
     private string TestRasterOutputPath => Path.Combine(_testDatasetDirectory, "sample.tif");
     private ActiveXHostControl? _host;
@@ -152,6 +153,8 @@ internal sealed class MainForm : Form
                 _statusLabel.Text = $"Active: {ProgId}; CoreInitialized={initialized}";
             });
             RecordCheck("Load vector layer", LoadTestLayer);
+            RecordCheck("Programmatic map navigation", VerifyProgrammaticNavigation);
+            await RecordCheckAsync("Mouse-wheel zoom and drag-to-pan", VerifyMouseNavigationAsync);
             await RecordCheckAsync("GDAL COM event sinks", VerifyGdalEventSinksAsync);
             RecordCheck("CPU backend preference and status", VerifyCpuBackendSelection);
 
@@ -223,6 +226,12 @@ internal sealed class MainForm : Form
                 "The generated vector test dataset is missing.",
                 TestDatasetPath);
         }
+        if (!File.Exists(TestSecondDatasetPath))
+        {
+            throw new FileNotFoundException(
+                "The generated second vector test dataset is missing.",
+                TestSecondDatasetPath);
+        }
     }
 
     private void CreateTestDataset()
@@ -250,6 +259,33 @@ internal sealed class MainForm : Form
                   "geometry": {
                     "type": "Polygon",
                     "coordinates": [[[2.5, 0], [4, 0], [4, 2], [2.5, 2], [2.5, 0]]]
+                  }
+                }
+              ]
+            }
+            """);
+        File.WriteAllText(
+            TestSecondDatasetPath,
+            """
+            {
+              "type": "FeatureCollection",
+              "name": "second",
+              "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+              "features": [
+                {
+                  "type": "Feature",
+                  "properties": { "id": 3, "name": "west" },
+                  "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[100, 0], [101.5, 0], [101.5, 2], [100, 2], [100, 0]]]
+                  }
+                },
+                {
+                  "type": "Feature",
+                  "properties": { "id": 4, "name": "east" },
+                  "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[102.5, 0], [104, 0], [104, 2], [102.5, 2], [102.5, 0]]]
                   }
                 }
               ]
@@ -334,6 +370,68 @@ internal sealed class MainForm : Form
         Application.DoEvents();
     }
 
+    private async Task WaitForRepaintAsync()
+    {
+        RepaintHost();
+        await Task.Delay(150);
+        Application.DoEvents();
+    }
+
+    private void SendMouseWheel(Point clientPosition, short delta)
+    {
+        if (_host is null)
+        {
+            throw new InvalidOperationException("The ActiveX control has not been created.");
+        }
+
+        Point screenPosition = _host.PointToScreen(clientPosition);
+        IntPtr wParam = new(unchecked((int)((ushort)delta << 16)));
+        SendMessage(
+            _host.Handle,
+            MouseWheelMessage,
+            wParam,
+            PackPosition(screenPosition.X, screenPosition.Y));
+    }
+
+    private void SendMouseMessage(uint message, nint buttonState, Point clientPosition)
+    {
+        if (_host is null)
+        {
+            throw new InvalidOperationException("The ActiveX control has not been created.");
+        }
+
+        SendMessage(
+            _host.Handle,
+            message,
+            buttonState,
+            PackPosition(clientPosition.X, clientPosition.Y));
+    }
+
+    private static void VerifyImagesDiffer(Bitmap before, Bitmap after, string operation)
+    {
+        if (before.Width != after.Width || before.Height != after.Height)
+        {
+            throw new InvalidOperationException($"The host image size changed during {operation}.");
+        }
+
+        int changedPixels = 0;
+        for (int y = 0; y < before.Height; y++)
+        {
+            for (int x = 0; x < before.Width; x++)
+            {
+                if (before.GetPixel(x, y).ToArgb() != after.GetPixel(x, y).ToArgb())
+                {
+                    changedPixels++;
+                }
+            }
+        }
+        if (changedPixels < 100)
+        {
+            throw new InvalidOperationException(
+                $"The {operation} did not change the rendered map enough to verify navigation.");
+        }
+    }
+
     private bool ReadCoreInitialized()
     {
         if (_host is null)
@@ -362,6 +460,136 @@ internal sealed class MainForm : Form
         }
 
         VerifyCoreInitialized("vector dataset load");
+    }
+
+    private void VerifyProgrammaticNavigation()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+        }
+
+        dynamic automation = automationObject;
+        automation.LoadVectorDataset(TestSecondDatasetPath);
+        if ((int)automation.LayerCount != 2 || (long)automation.FeatureCount != 4)
+        {
+            throw new InvalidOperationException(
+                "Loading another dataset did not add its layer while preserving the map.");
+        }
+
+        long firstLayerId = (long)automation.GetLayerId(0);
+        long secondLayerId = (long)automation.GetLayerId(1);
+        if (firstLayerId <= 0 || secondLayerId <= 0 || firstLayerId == secondLayerId)
+        {
+            throw new InvalidOperationException("The map did not expose distinct stable layer IDs.");
+        }
+
+        if (!(bool)automation.ZoomToMap() ||
+            !(bool)automation.ZoomToLayer(secondLayerId) ||
+            (bool)automation.ZoomToLayer(secondLayerId + 1000) ||
+            !(bool)automation.ZoomToLayer(firstLayerId) ||
+            !(bool)automation.ZoomIn() ||
+            !(bool)automation.ZoomOut())
+        {
+            throw new InvalidOperationException(
+                "The control's zoom-to-map, zoom-to-layer, zoom-in, or zoom-out operation failed.");
+        }
+
+        if (!(bool)automation.ZoomToMap() ||
+            !(bool)automation.SetLayerVisible(secondLayerId, false) ||
+            !(bool)automation.ZoomToMap() ||
+            !(bool)automation.SetLayerVisible(secondLayerId, true) ||
+            !(bool)automation.ZoomToMap() ||
+            !(bool)automation.ZoomToLayer(firstLayerId) ||
+            !(bool)automation.RemoveLayer(secondLayerId) ||
+            (int)automation.LayerCount != 1 ||
+            (long)automation.FeatureCount != 2 ||
+            (long)automation.GetLayerId(0) != firstLayerId)
+        {
+            throw new InvalidOperationException(
+                "The control's layer visibility or removal operation failed.");
+        }
+
+        automation.ClearLayers();
+        if ((int)automation.LayerCount != 0 ||
+            (long)automation.FeatureCount != 0 ||
+            (bool)automation.ZoomToMap())
+        {
+            throw new InvalidOperationException("The control did not clear its layer collection.");
+        }
+
+        automation.LoadVectorDataset(TestDatasetPath);
+        automation.LoadVectorDataset(TestSecondDatasetPath);
+        if ((int)automation.LayerCount != 2 || !(bool)automation.ZoomToMap())
+        {
+            throw new InvalidOperationException(
+                "The control did not restore its layers after clearing the map.");
+        }
+    }
+
+    private async Task VerifyMouseNavigationAsync()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+        }
+
+        dynamic automation = automationObject;
+        long firstLayerId = (long)automation.GetLayerId(0);
+
+        automation.ZoomToMap();
+        if (!(bool)automation.ZoomToLayer(firstLayerId))
+        {
+            throw new InvalidOperationException("Could not reset the view before testing mouse input.");
+        }
+        RepaintHost();
+        using (Bitmap beforeWheel = CaptureWindowContent())
+        {
+            SendMouseWheel(new Point(_host.Width / 5, _host.Height / 2), 240);
+            await WaitForRepaintAsync();
+            using Bitmap afterWheel = CaptureWindowContent();
+            VerifyImagesDiffer(beforeWheel, afterWheel, "centered mouse-wheel zoom");
+        }
+
+        automation.ZoomToMap();
+        if (!(bool)automation.ZoomToLayer(firstLayerId))
+        {
+            throw new InvalidOperationException("Could not reset the view before testing edge zoom.");
+        }
+        RepaintHost();
+        using (Bitmap beforeEdgeWheel = CaptureWindowContent())
+        {
+            SendMouseWheel(new Point(_host.Width * 4 / 5, _host.Height / 2), -120);
+            await WaitForRepaintAsync();
+            using Bitmap afterEdgeWheel = CaptureWindowContent();
+            VerifyImagesDiffer(beforeEdgeWheel, afterEdgeWheel, "near-edge mouse-wheel zoom");
+        }
+
+        automation.ZoomToMap();
+        if (!(bool)automation.ZoomToLayer(firstLayerId))
+        {
+            throw new InvalidOperationException("Could not reset the view before testing drag-to-pan.");
+        }
+        RepaintHost();
+        int dragDistance = Math.Max(40, _host.Width / 8);
+        Point start = new(_host.Width / 2, _host.Height / 2);
+        Point end = new(start.X + dragDistance, start.Y);
+        SendMouseMessage(LeftButtonDown, 1, start);
+        SendMouseMessage(MouseMoveMessage, 1, end);
+        SendMouseMessage(LeftButtonUp, 0, new Point(-8, -8));
+        await WaitForRepaintAsync();
+
+        using Bitmap afterPan = CaptureWindowContent();
+        VerifyPaintPixel(
+            afterPan,
+            _host.PointToScreen(new Point(_host.Width / 5 + dragDistance, _host.Height / 2)),
+            ColorToColorRef(MapFillColor),
+            "panned polygon");
+        if (!(bool)automation.ZoomToLayer(firstLayerId))
+        {
+            throw new InvalidOperationException("Could not restore the view after testing drag-to-pan.");
+        }
+        RepaintHost();
     }
 
     private void VerifyCoreInitialized(string activation)
@@ -745,6 +973,13 @@ internal sealed class MainForm : Form
     private static uint ColorToColorRef(Color color) =>
         (uint)(color.R | (color.G << 8) | (color.B << 16));
 
+    private static IntPtr PackPosition(int x, int y) =>
+        new(unchecked((int)((ushort)(short)x | ((uint)(ushort)(short)y << 16))));
+
+    private const uint MouseWheelMessage = 0x020A;
+    private const uint LeftButtonDown = 0x0201;
+    private const uint MouseMoveMessage = 0x0200;
+    private const uint LeftButtonUp = 0x0202;
     private const uint PrintWindowRenderFullContent = 0x00000002;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -766,6 +1001,9 @@ internal sealed class MainForm : Form
 
     [DllImport("user32.dll")]
     private static extern uint GetSysColor(int index);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr window, uint message, nint wParam, nint lParam);
 
     private sealed record CheckResult(string Check, bool Passed, string Details);
     private sealed record TestReport(bool Automated, int ExitCode, IReadOnlyList<CheckResult> Checks);
