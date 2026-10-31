@@ -300,5 +300,31 @@ pwsh -File build\scripts\Compare-CompileCommands.ps1 -MSBuildLog out\parity\msbu
 | Native tests | 173 run, 170 passed, 3 skipped | — |
 
 The three skipped tests need `MWG_TEST_ACTIVEX_HOST`, `MWG_RUN_NETWORK_GDAL_TESTS`
-or `MWG_RUN_RENDERING_BASELINE`. The Win32 baseline is collected in the phase
-that first builds Win32 with CMake.
+or `MWG_RUN_RENDERING_BASELINE`. The Win32 baseline was collected in Phase 1
+(Debug and Release, 42 TUs / 4 links, 0 warnings).
+
+## Parity status
+
+### MapWinGIS.Core (Phase 1)
+
+Measured for Debug and Release, x64 and Win32 (Ninja presets):
+
+- Compile options: none lost; 0 warnings in both builds.
+- Link options: none lost. The remaining differences are explained by the
+  parity script (`diff.links.<binary>.Explained`):
+  - `/MANIFEST /manifest:embed /MANIFESTUAC:...`: CMake's `vs_link_dll` wrapper
+    generates and embeds the manifest with `mt.exe`; the embedded manifest
+    resource is byte-identical to the MSBuild one.
+  - `/TLBID:1`: only relevant when a type library resource is embedded (OCX).
+  - vcpkg `/LIBPATH` and `*.lib` auto-link: replaced by `GDAL::GDAL` and
+    `GEOS::geos_c` with full library paths.
+  - `odbc32.lib odbccp32.lib`: MSBuild defaults, unused, not in CMake's default
+    `CMAKE_CXX_STANDARD_LIBRARIES`.
+  - `/version:0.0`: added by CMake; the image version is 0.0 in both builds.
+- Added compile options, from the imported targets: `/I<vcpkg>/include/geos`
+  (GEOS's interface include directory) and, in Debug, `/DGDAL_DEBUG`
+  (`GDAL::GDAL` interface definition for the debug library).
+- Win32 needs `/Oy- /analyze-` and, in Release, `/SAFESEH`; MSBuild adds them
+  by default for that platform.
+- `dumpbin`: identical dependents, exports (260), subsystem and DLL
+  characteristics.
