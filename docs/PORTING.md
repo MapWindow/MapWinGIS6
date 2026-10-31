@@ -49,32 +49,35 @@ choose deliberately whether it belongs in v6 and document important departures.
 ## Current ActiveX compatibility boundary
 
 The initial `MapWinGIS.ocx` exposes a deliberately small v6 automation
-contract. `IMapWinGISControl` reports Core initialization, loads a vector
-dataset, and reports whether a layer is loaded and its feature count.
+contract. `IMapWinGISControl` reports Core initialization, loads a vector dataset, and
+reports whether a layer is loaded and its feature count.
 `IMapWinGISControl2` adds renderer preference, active backend, and status.
-`IMapWinGISControl3` adds `ClearLayers` and is the default automation interface.
+`IMapWinGISControl3` adds `ClearLayers`. `IMapWinGISControl4` adds layer
+management and basic zoom methods, `IMapWinGISControl5` adds raster loading,
+and `IMapWinGISControl6` is the current default automation interface.
 Loads add layers, including duplicate loads of one dataset. Call `ClearLayers`
 before switching or refreshing datasets. It releases all layers and resets
 the cached feature total while keeping the viewport.
 The windowless control accepts Explorer file drops through its OLE drop-target
-hook. Dropped supported vector datasets append as layers, then the control
-fits the combined visible extent once. Unsupported, missing, or invalid paths
-are skipped without discarding other files that loaded successfully. A partial
-drop returns `S_FALSE` with a copy effect; a drop with no successful files
-returns a failing HRESULT and no effect. Failed paths and HRESULTs are written
-to the debugger output.
+hook. Dropped supported vector and raster datasets append as layers, then the
+control fits the combined visible extent once. Unsupported, missing, or
+invalid paths are skipped without discarding other files that loaded
+successfully. A partial drop returns `S_FALSE` with a copy effect; a drop with
+no successful files returns a failing HRESULT and no effect. Failed paths and
+HRESULTs are written to the debugger output.
 New members belong on a new derived interface; do not change a published
 interface IID or silently add vtable members to it.
 
 These are new interfaces, not the MapWinGIS 5 type-library interfaces, and the
 control does not claim binary or API compatibility with existing v5 clients.
-Each control load selects the first dataset layer. Core prepares an ordered
-scene for all visible map layers, including Polygon, MultiPolygon,
-CurvePolygon, and MultiSurface geometry. It
-does not expose the broad v5 map, layer, shape, event, or editing API. It draws
-in source coordinates without reprojection. OpenGL only handles convex
-single-ring polygons; GDI handles the supported polygon scene as the CPU
-fallback.
+Each vector load selects the first dataset layer. Core prepares an ordered
+scene for all visible map layers, including point, line, and polygon
+geometries; raster layers use bounded display previews. The map uses the first
+layer's declared CRS, transforms other declared CRSs into it, and rejects
+mixing referenced and unreferenced layers. The control does not expose the
+broad v5 map, layer, shape, event, or editing API. OpenGL only handles convex
+single-ring polygons; GDI handles the supported vector and raster scene as the
+CPU fallback.
 
 ## Map and viewport behavior
 
@@ -83,9 +86,16 @@ independent of its display name and current list index. `MapView` owns the
 viewport and the visible extent shared by every rendered layer. Map X increases
 right and map Y increases up; screen X increases right and screen Y increases
 down. Resizing keeps the view center and scale where possible. Loading through
-`LoadVectorDataset` appends layers and preserves an existing view; a file-drop
-batch appends layers and then fits the combined visible extent. Source
-coordinates are not reprojected, so layers must use compatible coordinates.
+`LoadVectorDataset` or `LoadRasterDataset` appends layers and preserves an
+existing view; a file-drop batch appends layers and then fits the combined
+visible extent. Layers with declared CRSs are transformed into the first
+layer's CRS.
+
+`IMapWinGISControl6` adds pan, anchored zoom, configurable zoom factors,
+back/forward view history, animated fits, and host input for mouse, keyboard,
+and touch pan/pinch gestures. It is a new derived interface; earlier IIDs
+remain unchanged. Animated map/layer fits run on the control's owner-thread
+timer and can be canceled explicitly.
 
 Keep these gaps visible when extending the COM surface. Reuse Core behavior,
 add only the automation members required by a concrete use case, and retain a

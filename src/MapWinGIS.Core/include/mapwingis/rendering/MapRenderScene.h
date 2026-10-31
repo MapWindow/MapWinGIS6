@@ -12,10 +12,12 @@
 #pragma once
 
 #include <string>
+#include <optional>
 #include <vector>
 
 #include "mapwingis/core/Api.h"
 #include "mapwingis/map/Map.h"
+#include "mapwingis/raster/RasterDataset.h"
 #include "mapwingis/rendering/VectorRenderScene.h"
 
 namespace mwg::rendering
@@ -25,8 +27,10 @@ namespace mwg::rendering
     {
         /// Identity of the map layer the geometry was copied from.
         LayerId layerId;
-        /// Polygon geometry in map coordinates; never empty in a MapRenderScene.
+        /// Point, line, and polygon geometry in map coordinates.
         VectorRenderScene scene;
+        /// Bounded raster preview when the layer is raster-backed.
+        std::optional<RasterImage> raster;
     };
 
     /// Why CreateMapRenderScene left a map layer out of the scene.
@@ -34,7 +38,7 @@ namespace mwg::rendering
     {
         /// The layer is hidden.
         Hidden,
-        /// The layer has no polygon geometry to draw, for example an empty layer.
+        /// The layer has no drawable vector geometry, for example an empty layer.
         NoGeometry,
         /// The layer cannot be rendered, for example because it is not a
         /// polygon layer or its geometry cannot be read. See the message.
@@ -59,14 +63,14 @@ namespace mwg::rendering
         std::vector<SkippedLayer> skippedLayers;
     };
 
-    /// Copies the drawable geometry of every visible map layer into owned
-    /// scene data, in map order (see Map).
+    /// Copies drawable vector geometry of every visible map layer into
+    /// owned scene data in map order and the map coordinate system.
     ///
     /// Each layer is converted on its own, so a layer that cannot be
     /// rendered is listed in skippedLayers and does not prevent the other
-    /// layers from being drawn. Hidden layers and layers without polygon
-    /// geometry are listed in skippedLayers too. Coordinates stay in the
-    /// layers' source coordinate system; the scene does not reproject.
+    /// layers from being drawn. Hidden layers and layers without drawable
+    /// geometry are listed in skippedLayers too. Layers with differing,
+    /// declared coordinate systems are reprojected to that of the first layer.
     ///
     /// The scene is a snapshot: later changes to the map or its sources are
     /// not reflected, so create a new scene after the map changes. Reads

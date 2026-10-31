@@ -29,7 +29,19 @@ namespace mwg::rendering
             VectorRenderScene scene;
             try
             {
-                scene = detail::BuildVectorRenderScene(layer.Source());
+                if (layer.IsRaster())
+                {
+                    RasterImage raster =
+                        layer.RasterSource()->ReadImage(map.CoordinateSystemWkt());
+                    raster.extent = layer.GetExtent();
+                    result.layers.push_back({layer.Id(), {}, std::move(raster)});
+                    continue;
+                }
+
+                scene = detail::BuildVectorRenderScene(
+                    layer.Source(),
+                    map.CoordinateSystemWkt());
+                scene.extent = layer.GetExtent();
             }
             catch (const std::bad_alloc&)
             {
@@ -41,12 +53,12 @@ namespace mwg::rendering
                 continue;
             }
 
-            if (scene.polygons.empty())
+            if (scene.points.empty() && scene.lines.empty() && scene.polygons.empty())
             {
                 result.skippedLayers.push_back({layer.Id(), LayerSkipReason::NoGeometry, {}});
                 continue;
             }
-            result.layers.push_back({layer.Id(), std::move(scene)});
+            result.layers.push_back({layer.Id(), std::move(scene), std::nullopt});
         }
         return result;
     }

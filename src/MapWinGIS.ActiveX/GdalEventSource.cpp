@@ -90,6 +90,13 @@ namespace mwg::activex
         return S_OK;
     }
 
+    HRESULT GdalEventSource::SetAnimationTimer(const bool enabled) noexcept
+    {
+        return _dispatchWindow == nullptr
+            ? E_UNEXPECTED
+            : _dispatchWindow->SetAnimationTimer(enabled);
+    }
+
     std::uint64_t GdalEventSource::Begin(
         std::string algorithmPath,
         std::vector<std::string> arguments)

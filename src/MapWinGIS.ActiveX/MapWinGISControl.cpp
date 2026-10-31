@@ -2,7 +2,7 @@
 
 /**
  * @file MapWinGISControl.cpp
- * @brief Implements vector loading, file drop, ActiveX state, and host drawing.
+ * @brief Implements dataset loading, navigation, file drop, and host drawing.
  *
  * Redraws: every map or view change made through the control goes through
  * its MapView; the control calls FireViewChange when the MapView reports
@@ -29,6 +29,7 @@
 #include "ComConversion.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
+#include "mapwingis/raster/RasterDataset.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 namespace
@@ -592,8 +593,10 @@ STDMETHODIMP CMapWinGISControl::RemoveLayer(
             return S_OK;
         }
 
-        const LONGLONG featureCount = static_cast<LONGLONG>(
-            layer->Dataset().Layer(layer->SourceLayerIndex()).FeatureCount());
+        const LONGLONG featureCount = layer->IsRaster()
+            ? 0
+            : static_cast<LONGLONG>(
+                layer->Dataset().Layer(layer->SourceLayerIndex()).FeatureCount());
         if (featureCount < 0 || featureCount > _featureCount)
         {
             return SetNavigationErrorInfo("Layer feature count is out of range", E_FAIL);
@@ -708,6 +711,325 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
             IID_IMapWinGISControl,
             E_FAIL);
     }
+}
+
+STDMETHODIMP CMapWinGISControl::LoadRasterDataset(BSTR path)
+{
+    if (path == nullptr)
+    {
+        return E_INVALIDARG;
+    }
+
+    const UINT pathLength = ::SysStringLen(path);
+    if (pathLength == 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    try
+    {
+        const std::wstring pathText(path, static_cast<std::size_t>(pathLength));
+        if (pathText.find(L'\0') != std::wstring::npos)
+        {
+            return E_INVALIDARG;
+        }
+
+        auto dataset = mwg::RasterDataset::Open(std::filesystem::path(pathText));
+        mwg::Map candidate;
+        candidate.AddRasterLayer(dataset);
+        const mwg::rendering::MapRenderScene scene =
+            mwg::rendering::CreateMapRenderScene(candidate);
+        if (scene.layers.empty() || !scene.layers.front().raster.has_value())
+        {
+            throw mwg::CoreError("Raster dataset has no renderable pixels");
+        }
+
+        (void)_view.AddRasterLayer(std::move(dataset));
+        FireViewChange();
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        const CA2W message(exception.what(), CP_UTF8);
+        return AtlReportError(
+            CLSID_MapWinGISControl,
+            message,
+            IID_IMapWinGISControl5,
+            E_FAIL);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::Pan(
+    const double deltaX,
+    const double deltaY,
+    VARIANT_BOOL* changed)
+{
+    if (changed == nullptr)
+    {
+        return E_POINTER;
+    }
+    *changed = VARIANT_FALSE;
+    try
+    {
+        if (_view.Pan(deltaX, deltaY))
+        {
+            *changed = VARIANT_TRUE;
+            FireViewChange();
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_INVALIDARG);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::ZoomAt(
+    const double screenX,
+    const double screenY,
+    const double factor,
+    VARIANT_BOOL* changed)
+{
+    if (changed == nullptr)
+    {
+        return E_POINTER;
+    }
+    *changed = VARIANT_FALSE;
+    try
+    {
+        if (_view.ZoomAt({screenX, screenY}, factor))
+        {
+            *changed = VARIANT_TRUE;
+            FireViewChange();
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_INVALIDARG);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::ZoomInBy(
+    const double factor,
+    VARIANT_BOOL* changed)
+{
+    if (changed == nullptr)
+    {
+        return E_POINTER;
+    }
+    *changed = VARIANT_FALSE;
+    try
+    {
+        if (_view.ZoomIn(factor))
+        {
+            *changed = VARIANT_TRUE;
+            FireViewChange();
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_INVALIDARG);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::ZoomOutBy(
+    const double factor,
+    VARIANT_BOOL* changed)
+{
+    if (changed == nullptr)
+    {
+        return E_POINTER;
+    }
+    *changed = VARIANT_FALSE;
+    try
+    {
+        if (_view.ZoomOut(factor))
+        {
+            *changed = VARIANT_TRUE;
+            FireViewChange();
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_INVALIDARG);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::get_CanGoBack(VARIANT_BOOL* canGoBack)
+{
+    if (canGoBack == nullptr)
+    {
+        return E_POINTER;
+    }
+    *canGoBack = _view.CanGoBack() ? VARIANT_TRUE : VARIANT_FALSE;
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::get_CanGoForward(VARIANT_BOOL* canGoForward)
+{
+    if (canGoForward == nullptr)
+    {
+        return E_POINTER;
+    }
+    *canGoForward = _view.CanGoForward() ? VARIANT_TRUE : VARIANT_FALSE;
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::GoBack(VARIANT_BOOL* changed)
+{
+    if (changed == nullptr)
+    {
+        return E_POINTER;
+    }
+    *changed = VARIANT_FALSE;
+    if (_view.GoBack())
+    {
+        (void)_gdalEvents.SetAnimationTimer(false);
+        *changed = VARIANT_TRUE;
+        FireViewChange();
+    }
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::GoForward(VARIANT_BOOL* changed)
+{
+    if (changed == nullptr)
+    {
+        return E_POINTER;
+    }
+    *changed = VARIANT_FALSE;
+    if (_view.GoForward())
+    {
+        (void)_gdalEvents.SetAnimationTimer(false);
+        *changed = VARIANT_TRUE;
+        FireViewChange();
+    }
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::AnimateZoomToMap(
+    const LONG durationMilliseconds)
+{
+    if (durationMilliseconds <= 0)
+    {
+        return E_INVALIDARG;
+    }
+    try
+    {
+        if (!_view.BeginTransitionToMap(
+                std::chrono::milliseconds(durationMilliseconds)))
+        {
+            return S_FALSE;
+        }
+        const HRESULT dispatchResult = _gdalEvents.EnsureDispatchWindow();
+        if (FAILED(dispatchResult))
+        {
+            (void)_view.CancelTransition();
+            return dispatchResult;
+        }
+        _lastAnimationTick = std::chrono::steady_clock::now();
+        const HRESULT timerResult = _gdalEvents.SetAnimationTimer(true);
+        if (FAILED(timerResult))
+        {
+            (void)_view.CancelTransition();
+            return timerResult;
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_INVALIDARG);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::AnimateZoomToLayer(
+    const LONGLONG layerId,
+    const LONG durationMilliseconds)
+{
+    if (layerId <= 0 || durationMilliseconds <= 0)
+    {
+        return E_INVALIDARG;
+    }
+    try
+    {
+        if (!_view.BeginTransitionToLayer(
+                mwg::LayerId{static_cast<std::uint64_t>(layerId)},
+                std::chrono::milliseconds(durationMilliseconds)))
+        {
+            return S_FALSE;
+        }
+        const HRESULT dispatchResult = _gdalEvents.EnsureDispatchWindow();
+        if (FAILED(dispatchResult))
+        {
+            (void)_view.CancelTransition();
+            return dispatchResult;
+        }
+        _lastAnimationTick = std::chrono::steady_clock::now();
+        const HRESULT timerResult = _gdalEvents.SetAnimationTimer(true);
+        if (FAILED(timerResult))
+        {
+            (void)_view.CancelTransition();
+            return timerResult;
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_INVALIDARG);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::get_IsAnimating(VARIANT_BOOL* isAnimating)
+{
+    if (isAnimating == nullptr)
+    {
+        return E_POINTER;
+    }
+    *isAnimating = _view.IsTransitioning() ? VARIANT_TRUE : VARIANT_FALSE;
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::StopAnimation()
+{
+    const bool stopped = _view.CancelTransition();
+    (void)_gdalEvents.SetAnimationTimer(false);
+    if (stopped)
+    {
+        FireViewChange();
+        return S_OK;
+    }
+    return S_FALSE;
 }
 
 STDMETHODIMP CMapWinGISControl::ClearLayers()
@@ -932,6 +1254,10 @@ STDMETHODIMP CMapWinGISControl::Drop(
                 else
                 {
                     loadResult = LoadVectorDataset(pathBstr);
+                    if (FAILED(loadResult))
+                    {
+                        loadResult = LoadRasterDataset(pathBstr);
+                    }
                     ::SysFreeString(pathBstr);
                 }
             }
@@ -1079,9 +1405,110 @@ void CMapWinGISControl::EndPan(const bool releaseCapture) noexcept
         return;
     }
     _isPanning = false;
+    (void)_view.EndNavigationGesture();
     if (releaseCapture && FAILED(SetPointerCapture(false)))
     {
         ::OutputDebugStringA("MapWinGIS could not release pointer capture after pan.\n");
+    }
+}
+
+void CMapWinGISControl::EndTouchNavigation() noexcept
+{
+    if (!_isTouchNavigating)
+    {
+        return;
+    }
+    for (TouchPointer& pointer : _touchPointers)
+    {
+        pointer.active = false;
+    }
+    _lastTouchDistance = 0.0;
+    _isTouchNavigating = false;
+    (void)_view.EndNavigationGesture();
+}
+
+bool CMapWinGISControl::UpdateTouchPointer(
+    const UINT32 pointerId,
+    const LPARAM position) noexcept
+{
+    for (TouchPointer& pointer : _touchPointers)
+    {
+        if (pointer.active && pointer.id == pointerId)
+        {
+            return GetPointerPosition(position, true, pointer.position);
+        }
+    }
+    return false;
+}
+
+void CMapWinGISControl::ApplyTouchGesture() noexcept
+{
+    const TouchPointer* first = nullptr;
+    const TouchPointer* second = nullptr;
+    for (const TouchPointer& pointer : _touchPointers)
+    {
+        if (!pointer.active)
+        {
+            continue;
+        }
+        if (first == nullptr)
+        {
+            first = &pointer;
+        }
+        else
+        {
+            second = &pointer;
+        }
+    }
+
+    try
+    {
+        const std::optional<double> resolution = _view.GetViewport().Resolution();
+        if (resolution.has_value() && first != nullptr && second == nullptr)
+        {
+            const double deltaX = (_lastPanPosition.x - first->position.x) * *resolution;
+            const double deltaY = (first->position.y - _lastPanPosition.y) * *resolution;
+            if (_view.Pan(deltaX, deltaY))
+            {
+                FireViewChange();
+            }
+            _lastPanPosition = first->position;
+        }
+        else if (resolution.has_value() && first != nullptr && second != nullptr)
+        {
+            const mwg::ScreenPoint center{
+                (first->position.x + second->position.x) / 2.0,
+                (first->position.y + second->position.y) / 2.0};
+            const double distance = std::hypot(
+                first->position.x - second->position.x,
+                first->position.y - second->position.y);
+            if (_lastTouchDistance > 0.0 && distance > 0.0)
+            {
+                const double factor = distance / _lastTouchDistance;
+                bool changed = false;
+                if (std::isfinite(factor) && factor > 0.0 && factor != 1.0)
+                {
+                    changed = _view.ZoomAt(center, factor);
+                }
+                else if (center.x != _lastTouchCenter.x ||
+                         center.y != _lastTouchCenter.y)
+                {
+                    changed = _view.Pan(
+                        (_lastTouchCenter.x - center.x) * *resolution,
+                        (center.y - _lastTouchCenter.y) * *resolution);
+                }
+                if (changed)
+                {
+                    FireViewChange();
+                }
+            }
+            _lastTouchCenter = center;
+            _lastTouchDistance = distance;
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        ::OutputDebugStringA(exception.what());
     }
 }
 
@@ -1100,12 +1527,93 @@ LRESULT CMapWinGISControl::OnSize(
     return 0;
 }
 
+LRESULT CMapWinGISControl::OnKeyDown(
+    UINT,
+    const WPARAM key,
+    LPARAM,
+    BOOL& handled)
+{
+    const bool alt = (::GetKeyState(VK_MENU) & 0x8000) != 0;
+    const bool control = (::GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool changed = false;
+    try
+    {
+        if (alt && key == VK_LEFT)
+        {
+            changed = _view.GoBack();
+        }
+        else if (alt && key == VK_RIGHT)
+        {
+            changed = _view.GoForward();
+        }
+        else if (control && (key == 'Z' || key == 'Y'))
+        {
+            changed = key == 'Z' ? _view.GoBack() : _view.GoForward();
+        }
+        else if (_view.GetViewport().IsValid())
+        {
+            const double step = *_view.GetViewport().Resolution() * 32.0;
+            switch (key)
+            {
+            case VK_LEFT:
+                changed = _view.Pan(-step, 0.0);
+                break;
+            case VK_RIGHT:
+                changed = _view.Pan(step, 0.0);
+                break;
+            case VK_UP:
+                changed = _view.Pan(0.0, step);
+                break;
+            case VK_DOWN:
+                changed = _view.Pan(0.0, -step);
+                break;
+            case VK_ADD:
+            case VK_OEM_PLUS:
+                changed = _view.ZoomIn();
+                break;
+            case VK_SUBTRACT:
+            case VK_OEM_MINUS:
+                changed = _view.ZoomOut();
+                break;
+            default:
+                handled = FALSE;
+                return 0;
+            }
+        }
+        else
+        {
+            handled = FALSE;
+            return 0;
+        }
+        if (changed)
+        {
+            if (alt || control)
+            {
+                (void)_gdalEvents.SetAnimationTimer(false);
+            }
+            FireViewChange();
+        }
+        handled = TRUE;
+    }
+    catch (const std::exception& exception)
+    {
+        ::OutputDebugStringA(exception.what());
+        handled = TRUE;
+    }
+    return 0;
+}
+
 LRESULT CMapWinGISControl::OnMouseWheel(
     UINT,
     const WPARAM wParam,
     const LPARAM lParam,
     BOOL& handled)
 {
+    if (_isTouchNavigating)
+    {
+        handled = TRUE;
+        return 0;
+    }
     if (_view.GetMap().LayerCount() == 0 || !_view.GetViewport().IsValid())
     {
         handled = FALSE;
@@ -1144,6 +1652,11 @@ LRESULT CMapWinGISControl::OnLButtonDown(
     const LPARAM lParam,
     BOOL& handled)
 {
+    if (_isTouchNavigating)
+    {
+        handled = TRUE;
+        return 0;
+    }
     mwg::ScreenPoint position;
     if (_view.GetMap().LayerCount() == 0 ||
         !_view.GetViewport().IsValid() ||
@@ -1163,6 +1676,7 @@ LRESULT CMapWinGISControl::OnLButtonDown(
 
     _isPanning = true;
     _lastPanPosition = position;
+    (void)_view.BeginNavigationGesture();
     handled = TRUE;
     return 0;
 }
@@ -1173,6 +1687,11 @@ LRESULT CMapWinGISControl::OnMouseMove(
     const LPARAM lParam,
     BOOL& handled)
 {
+    if (_isTouchNavigating)
+    {
+        handled = TRUE;
+        return 0;
+    }
     if (!_isPanning)
     {
         handled = FALSE;
@@ -1215,6 +1734,11 @@ LRESULT CMapWinGISControl::OnLButtonUp(
     LPARAM,
     BOOL& handled)
 {
+    if (_isTouchNavigating)
+    {
+        handled = TRUE;
+        return 0;
+    }
     if (_isPanning)
     {
         EndPan(true);
@@ -1245,6 +1769,142 @@ LRESULT CMapWinGISControl::OnCancelMode(
     BOOL& handled)
 {
     EndPan(true);
+    EndTouchNavigation();
+    handled = FALSE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnPointerDown(
+    UINT,
+    const WPARAM wParam,
+    const LPARAM lParam,
+    BOOL& handled)
+{
+    const UINT32 pointerId = GET_POINTERID_WPARAM(wParam);
+    POINTER_INPUT_TYPE pointerType{};
+    mwg::ScreenPoint position;
+    if (!::GetPointerType(pointerId, &pointerType) ||
+        pointerType != PT_TOUCH ||
+        _view.GetMap().LayerCount() == 0 ||
+        !_view.GetViewport().IsValid() ||
+        !GetPointerPosition(lParam, true, position))
+    {
+        handled = FALSE;
+        return 0;
+    }
+
+    TouchPointer* available = nullptr;
+    for (TouchPointer& pointer : _touchPointers)
+    {
+        if (pointer.active && pointer.id == pointerId)
+        {
+            handled = TRUE;
+            return 0;
+        }
+        if (!pointer.active && available == nullptr)
+        {
+            available = &pointer;
+        }
+    }
+    if (available == nullptr)
+    {
+        handled = FALSE;
+        return 0;
+    }
+
+    *available = {pointerId, position, true};
+    if (!_isTouchNavigating)
+    {
+        (void)_view.BeginNavigationGesture();
+    }
+    _isTouchNavigating = true;
+    const std::size_t activeCount = static_cast<std::size_t>(
+        _touchPointers[0].active) + static_cast<std::size_t>(_touchPointers[1].active);
+    if (activeCount == 1)
+    {
+        _lastPanPosition = position;
+    }
+    else
+    {
+        _lastTouchCenter = {
+            (_touchPointers[0].position.x + _touchPointers[1].position.x) / 2.0,
+            (_touchPointers[0].position.y + _touchPointers[1].position.y) / 2.0};
+        _lastTouchDistance = std::hypot(
+            _touchPointers[0].position.x - _touchPointers[1].position.x,
+            _touchPointers[0].position.y - _touchPointers[1].position.y);
+    }
+    handled = TRUE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnPointerUpdate(
+    UINT,
+    const WPARAM wParam,
+    const LPARAM lParam,
+    BOOL& handled)
+{
+    if (!UpdateTouchPointer(GET_POINTERID_WPARAM(wParam), lParam))
+    {
+        handled = FALSE;
+        return 0;
+    }
+    ApplyTouchGesture();
+    handled = TRUE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnPointerUp(
+    UINT,
+    const WPARAM wParam,
+    const LPARAM lParam,
+    BOOL& handled)
+{
+    const UINT32 pointerId = GET_POINTERID_WPARAM(wParam);
+    if (!UpdateTouchPointer(pointerId, lParam))
+    {
+        handled = FALSE;
+        return 0;
+    }
+    ApplyTouchGesture();
+    for (TouchPointer& pointer : _touchPointers)
+    {
+        if (pointer.active && pointer.id == pointerId)
+        {
+            pointer.active = false;
+            break;
+        }
+    }
+    if (!_touchPointers[0].active && !_touchPointers[1].active)
+    {
+        EndTouchNavigation();
+    }
+    else
+    {
+        const TouchPointer& remaining =
+            _touchPointers[0].active ? _touchPointers[0] : _touchPointers[1];
+        _lastPanPosition = remaining.position;
+        _lastTouchDistance = 0.0;
+    }
+    handled = TRUE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnPointerCaptureChanged(
+    UINT,
+    const WPARAM wParam,
+    LPARAM,
+    BOOL& handled)
+{
+    const UINT32 pointerId = GET_POINTERID_WPARAM(wParam);
+    for (TouchPointer& pointer : _touchPointers)
+    {
+        if (pointer.active && pointer.id == pointerId)
+        {
+            EndTouchNavigation();
+            handled = TRUE;
+            return 0;
+        }
+    }
     handled = FALSE;
     return 0;
 }
@@ -1265,6 +1925,9 @@ LRESULT CMapWinGISControl::OnDestroy(
     BOOL& handled)
 {
     EndPan(true);
+    EndTouchNavigation();
+    (void)_view.CancelTransition();
+    (void)_gdalEvents.SetAnimationTimer(false);
     _gdalEvents.OnDestroy();
     handled = FALSE;
     return 0;
@@ -1277,6 +1940,25 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
     BOOL handled = FALSE;
     try
     {
+        if (instance->_view.IsTransitioning())
+        {
+            const auto now = std::chrono::steady_clock::now();
+            const auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - instance->_lastAnimationTick);
+            if (elapsed.count() > 0)
+            {
+                instance->_lastAnimationTick = now;
+                if (instance->_view.AdvanceTransition(elapsed))
+                {
+                    instance->FireViewChange();
+                }
+            }
+            if (!instance->_view.IsTransitioning())
+            {
+                (void)instance->_gdalEvents.SetAnimationTimer(false);
+            }
+        }
         instance->OnGdalDispatch(
             mwg::activex::kGdalDispatchMessage,
             0,
@@ -1291,6 +1973,8 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
 
 STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
 {
+    (void)_view.CancelTransition();
+    (void)_gdalEvents.SetAnimationTimer(false);
     _gdalEvents.Close();
     return ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
 }

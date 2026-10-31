@@ -2,10 +2,10 @@
 
 /**
  * @file GdalDispatchWindow.h
- * @brief Declares the message-only window used to dispatch GDAL notifications.
+ * @brief Declares the owner-thread window for GDAL notifications and navigation timers.
  *
- * The window is created on the control's owning COM thread and accepts only
- * posted wake-up messages from native workers.
+ * The window is created on the control's owning COM thread. It accepts
+ * worker wake-up messages and timer messages for navigation animation.
  */
 #pragma once
 
@@ -17,7 +17,9 @@ namespace mwg::activex
 {
     inline constexpr UINT kGdalDispatchMessage = WM_APP + 0x316;
     inline constexpr UINT_PTR kGdalDispatchRetryTimerId = 1;
+    inline constexpr UINT_PTR kNavigationAnimationTimerId = 2;
     inline constexpr UINT kGdalDispatchRetryIntervalMilliseconds = 100;
+    inline constexpr UINT kNavigationAnimationIntervalMilliseconds = 16;
 
     class GdalDispatchWindow final :
         public ATL::CWindowImpl<GdalDispatchWindow>,
@@ -68,7 +70,33 @@ namespace mwg::activex
                 _deferredLifetime = shared_from_this();
             }
             ::KillTimer(m_hWnd, kGdalDispatchRetryTimerId);
+            ::KillTimer(m_hWnd, kNavigationAnimationTimerId);
             DestroyWindow();
+        }
+
+        [[nodiscard]] HRESULT SetAnimationTimer(const bool enabled) noexcept
+        {
+            if (m_hWnd == nullptr)
+            {
+                return E_UNEXPECTED;
+            }
+            if (!enabled)
+            {
+                ::KillTimer(m_hWnd, kNavigationAnimationTimerId);
+                return S_OK;
+            }
+            if (::SetTimer(
+                    m_hWnd,
+                    kNavigationAnimationTimerId,
+                    kNavigationAnimationIntervalMilliseconds,
+                    nullptr) == 0)
+            {
+                const DWORD error = ::GetLastError();
+                return error == ERROR_SUCCESS
+                    ? E_FAIL
+                    : HRESULT_FROM_WIN32(error);
+            }
+            return S_OK;
         }
 
         BEGIN_MSG_MAP(GdalDispatchWindow)
@@ -117,7 +145,9 @@ namespace mwg::activex
             const std::shared_ptr<GdalDispatchWindow> lifetime = shared_from_this();
             handled = TRUE;
             MessageGuard messageGuard(*this);
-            if (timerId == kGdalDispatchRetryTimerId && _callback != nullptr)
+            if ((timerId == kGdalDispatchRetryTimerId ||
+                 timerId == kNavigationAnimationTimerId) &&
+                _callback != nullptr)
             {
                 _callback(_context);
             }

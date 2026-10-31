@@ -120,9 +120,8 @@ state; hosts and renderers read from it.
   are appended on top. Positions shift on removal; identities do not.
 - **Ownership.** The map owns its `MapLayer` objects. A `MapLayer` reference
   stays valid until that layer is removed, the map is cleared, or the map is
-  destroyed; changes to other layers do not invalidate it. Each `MapLayer`
-  shares ownership of its `VectorDataset` (`std::shared_ptr`), so the dataset
-  lives as long as any map layer or other owner uses it.
+  destroyed; changes to other layers do not invalidate it. A vector layer
+  shares its `VectorDataset`; a raster layer shares its `RasterDataset`.
 - **Duplicates.** The same source layer may be added more than once; each
   addition is an independent map layer with its own identity and visibility.
 - **Visibility.** Layers are visible when added. `Map::SetLayerVisible`
@@ -134,9 +133,10 @@ state; hosts and renderers read from it.
   rather than cached, so visibility changes, added or removed layers, and
   source edits are reflected without invalidation. A map with no valid layer
   extent reports an empty `Extent`.
-- **Coordinates.** Layers are assumed to share compatible source coordinates.
-  The map does not reproject; layers in different coordinate reference
-  systems do not align until coordinate transformations are implemented.
+- **Coordinates.** The first layer's declared coordinate reference system
+  (CRS) is the map CRS. Other declared CRSs are transformed into it for
+  extents and rendering. Layers with and without a CRS cannot be mixed;
+  transformations use traditional GIS axis ordering.
 
 ## Viewport
 
@@ -225,8 +225,10 @@ has no extent or transform of its own.
   the view cancels it. A missing layer or an invalid extent also cancels a
   pending fit. Navigation that returns `false` keeps it, including `ZoomAt`
   on a zero-sized viewport and center zoom at a resolution limit.
-  None of this depends on COM, mouse messages, or a
-  renderer; Phase 5 maps input onto these calls.
+  None of this depends on COM, mouse messages, or a renderer. Navigation
+  history retains up to 100 views. Eased map/layer fit transitions are
+  advanced by a host timer and create one history entry when completed or
+  canceled.
 
 ## ActiveX and rendering architecture
 
@@ -239,14 +241,15 @@ responsibilities, not a requirement to split them into more DLLs.
 | `MapWinGIS.Core` | Own GIS data, reusable map/layer state, and backend-neutral render data. Keep its public API independent of windowing, COM, and graphics APIs. | COM, ATL, MFC, windowing APIs, OpenGL, OpenCL |
 | `MapWinGIS.ocx` | Own COM activation, host-facing control lifecycle, and translation between the external API and core operations. Integrate core rendering with the host surface and selected backend. | GIS rules, core data ownership, rendering-specific types in its public COM contract |
 | Rendering coordinator (in the OCX) | Try OpenGL for supported scenes and use GDI when OpenGL is unavailable or the scene is unsupported. Keep backend selection independent of COM activation. | GIS rules, COM interface layout, backend-specific resource types outside the backend |
-| GDI backend (in the OCX) | Paint supported polygon scenes, including interior rings, into a device context; provide the Windows CPU fallback. | Core dataset ownership, COM interface layout, GPU availability |
+| GDI backend (in the OCX) | Paint polygon, line, point, and raster scenes into a device context; provide the Windows CPU fallback. | Core dataset ownership, COM interface layout, GPU availability |
 | OpenGL backend (in the OCX) | Render convex single-ring polygons through a reusable WGL context, then copy pixels to the host device context. | Core GIS data ownership and public COM interfaces |
 | Future compute work | Host optional compute acceleration only for workloads justified by profiling. | OpenGL being installed or selected |
 
 The OCX is the composition root for control, render-coordinator, and
 host-specific graphics-context lifetimes. The control owns a `MapView`, which
 owns the map, its layers' datasets (shared), the viewport, and the prepared
-`MapRenderScene`; each `VectorDataset` owns its `VectorLayer` objects. Core
+`MapRenderScene`; each `VectorDataset` owns its `VectorLayer` objects.
+`RasterDataset` owns the GDAL raster and prepares bounded display previews. Core
 creates backend-neutral render input; the coordinator binds it to the control
 target and backend. Backends must not retain references to dataset-owned
 objects after a draw, and they keep no view state. Core dataset and layer
@@ -262,29 +265,28 @@ ownership of map data.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. For each
-visible map layer, Core sequentially reads Polygon, MultiPolygon,
-CurvePolygon, and MultiSurface features into an owned vector scene,
-linearizing curved geometries. `ViewTransform` captures the `Viewport` once
-per frame so both backends transform every vertex of every layer with the
-same arithmetic as `Viewport::MapToScreen`; GDI draws a screen position in
-the pixel that contains it (`ToPixel`). One backend draws the whole frame.
-The coordinator tries the OpenGL backend when every layer has only simple
-convex polygons with one ring. GDI checks each layer before drawing it; a
-layer with non-finite or out-of-range device coordinates is skipped and
-reported (`GetFailedLayers`, `RenderingStatus`) while the other layers are
-still drawn.
+visible map layer, Core sequentially reads supported point, line, and polygon
+features into an owned vector scene, linearizing curved geometries. Raster
+layers carry a bounded RGBA display preview and a georeferenced extent.
+Vector geometry and raster previews from other declared CRSs are transformed
+into the map CRS. `ViewTransform` captures the `Viewport` once per frame so
+every backend uses the same map-to-screen arithmetic; GDI draws a screen
+position in the pixel that contains it (`ToPixel`). The coordinator tries
+OpenGL only when every layer is a simple convex polygon with one ring. GDI
+handles polygons, lines, points, and raster previews. A layer with non-finite
+or out-of-range device coordinates is skipped and reported
+(`GetFailedLayers`, `RenderingStatus`) while the other layers continue.
 OpenGL uses a context created on a hidden, never-presented window, draws with
 fixed-function calls into a framebuffer object (OpenGL 3.0 or
 `GL_EXT_framebuffer_object`), and reads pixels back into a reusable CPU buffer
 before copying them to the host device context; this is a working backend
 boundary, not an end-to-end accelerated presentation path. Rendering into a
 framebuffer object avoids undefined pixels from window pixel-ownership rules.
-Interior rings, concave or self-intersecting rings, missing framebuffer-object
-support, initialization failures, and drawing failures use the GDI backend.
-The GDI backend draws the currently supported polygon scene, including its
-interior rings. Both backends draw source coordinates without reprojection,
-and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
-and MultiSurface features.
+Interior rings, concave or self-intersecting rings, non-polygon geometry,
+raster layers, missing framebuffer-object support, initialization failures,
+and drawing failures use the GDI backend. Raster previews use nearest-neighbor
+sampling, with grayscale or RGB bands, palette colors, nodata transparency,
+alpha bands, and reprojection through GDAL's warped VRT support.
 
 The `RenderingBackendPreference` automation property is configurable as
 `Automatic`, `OpenGL`, or `GDI`. `Automatic` and `OpenGL` try the OpenGL
@@ -292,9 +294,9 @@ backend first and fall back to GDI when the scene, hardware, allocation, or
 drawing operation is unsupported. The control reports the active backend and
 the reason for a fallback through `RenderingBackend` and `RenderingStatus`.
 These rendering properties are on `IMapWinGISControl2`, which derives from
-`IMapWinGISControl`. The coclass default interface is now `IMapWinGISControl3`,
-which derives from `IMapWinGISControl2` and adds `ClearLayers` at DISPID 8.
-The earlier interfaces and their IIDs remain unchanged.
+`IMapWinGISControl`. `IMapWinGISControl3` adds `ClearLayers` at DISPID 8;
+`IMapWinGISControl6` is the current coclass default and adds navigation and
+animation operations. Earlier interfaces and their IIDs remain unchanged.
 OpenGL capability detection checks framebuffer-object entry points, the
 maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
@@ -324,13 +326,14 @@ intentional compatibility gaps and the rationale when interfaces are introduced.
 
 ## Current limits and next work
 
-The control exposes a small v6 COM surface: Core initialization, vector
-dataset loading, layer-loaded state, feature count, layer count and stable IDs,
-layer removal, clear and visibility, map/layer zoom, and center zoom in/out.
-Mouse-wheel zoom and drag-to-pan use the same `MapView`. The control also
-supports renderer preferences and asynchronous generic GDAL operations with
-progress, cancellation, and result reporting. The GDAL API has a new interface
-and does not claim MapWinGIS 5 `IGdalUtils` binary compatibility.
+The control exposes a small v6 COM surface: Core initialization, vector and
+raster dataset loading, layer state, layer removal and visibility, map/layer
+zoom, direct pan, anchored zoom, configurable zoom factors, back/forward
+history, and animated fits. Mouse, keyboard, and touch navigation use the same
+`MapView`. The control also supports renderer preferences and asynchronous
+generic GDAL operations with progress, cancellation, and result reporting.
+The GDAL API has a new interface and does not claim MapWinGIS 5 `IGdalUtils`
+binary compatibility.
 At most sixteen operations may be active or awaiting result cleanup. Call
 `EndGdalOperation` after completion to release an operation slot. The control
 delivers events on its owning apartment thread. Destroying the in-place window
@@ -344,11 +347,8 @@ map. Earlier layers stay loaded, so calling it again shows several layers.
 This includes repeated loads of the same dataset. Call `ClearLayers` before
 switching or refreshing datasets to avoid duplicate layers. It releases all
 loaded datasets and clears the feature total, but keeps the view.
-The layer must be polygon-compatible: a dataset whose first layer has another
-geometry type fails to load and is not added, even if a later layer is
-polygonal. An empty polygon layer loads but draws nothing. The control reads
-and validates the candidate layer before adding it, so a rejected load cannot
-change the live viewport or schedule a fit.
+Supported point, line, and polygon layers are validated before adding them,
+so a rejected load cannot change the live viewport or schedule a fit.
 `LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
 the cached total over all loaded layers. The control updates the total after a
 successful load or removal and resets it on `ClearLayers`; property reads do
@@ -357,14 +357,16 @@ later loads preserve the current view, and callers can use `ZoomToMap` to
 include new layers in the visible extent. `IMapWinGISControl4` exposes layer
 count and stable layer IDs, removal, visibility, `ZoomToMap`, `ZoomToLayer`,
 `ZoomIn`, and `ZoomOut`; it inherits `ClearLayers` from `IMapWinGISControl3`.
-Layer reordering is not exposed because Core has no reorder operation.
-Mouse-wheel zoom is anchored at the cursor. Left-button dragging pans the
-view, with windowless mouse capture released on button-up, capture loss,
-cancellation, or control destruction. Raster layers and other geometry types
-are not rendered. There is no reprojection, so coordinates remain in the
-source coordinate system and layers are assumed to share one.
+`IMapWinGISControl5` adds raster loading. `IMapWinGISControl6` adds direct
+pan, anchored zoom, configurable zoom factors, back/forward history, and
+animated map/layer fits. Layer reordering is not exposed because Core has no
+reorder operation. Mouse-wheel zoom is anchored at the cursor; left-button
+dragging pans, keyboard arrows pan, and touch pointers support one-finger pan
+and two-finger pinch zoom. Animated fits use a 16 ms owner-thread timer and
+are canceled when the control closes or its host window is destroyed.
 
-Core prepares and retains the complete supported polygon scene in memory,
+Core prepares and retains the supported vector scene and bounded raster
+previews in memory,
 reading feature geometries sequentially without WKT serialization and
 reparsing. Any map change rebuilds the scene for all visible layers, not only
 the changed one. There is no tiling, paging, clipping to the visible extent,
@@ -379,9 +381,11 @@ Windows CPU fallback; Core has no independent platform-neutral renderer.
 
 The C# host's pixel assertions, activation, and native tests pass for Debug
 and Release on Win32 and x64 in an interactive desktop session.
-Core and ActiveX navigation use the shared `MapView`; the COM API exposes
-programmatic zoom operations and the control handles mouse-wheel zoom and
-drag-to-pan. Deep zoom can push a layer past the GDI coordinate range until
-clipping exists. Measure scene preparation with representative datasets
-before adding caching, paging, or broader OpenGL geometry support.
+Core and ActiveX navigation use the shared `MapView`; its history is bounded
+to 100 views, and each drag or touch gesture creates one history entry.
+Core exposes eased transitions that hosts can advance, while ActiveX schedules
+them on its message-only dispatch window. Deep zoom can push a layer past the
+GDI coordinate range until clipping exists. Measure
+scene preparation with representative datasets before adding caching, paging,
+or broader OpenGL geometry support.
 OpenCL and full MapWinGIS 5 API parity remain deferred.

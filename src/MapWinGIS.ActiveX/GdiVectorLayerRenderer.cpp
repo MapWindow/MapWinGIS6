@@ -2,21 +2,24 @@
 
 /**
  * @file GdiVectorLayerRenderer.cpp
- * @brief Draws polygon render scenes into a Windows GDI device context.
+ * @brief Draws vector geometry into a Windows GDI device context.
  *
- * Transforms every layer through the same Core viewport and paints polygon
- * fills and outlines without retaining scene or host resources.
+ * Transforms every layer through the same Core viewport and paints points,
+ * lines, and polygons without retaining scene or host resources.
  */
 #include "GdiVectorLayerRenderer.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <new>
 #include <stdexcept>
 #include <vector>
 
 #include "ViewTransform.h"
+
+#pragma comment(lib, "Msimg32.lib")
 
 namespace mwg::activex
 {
@@ -68,6 +71,28 @@ namespace mwg::activex
 
         private:
             HGDIOBJ _object;
+        };
+
+        class ScopedMemoryDc
+        {
+        public:
+            explicit ScopedMemoryDc(HDC deviceContext) noexcept
+                : _deviceContext(CreateCompatibleDC(deviceContext))
+            {
+            }
+
+            ~ScopedMemoryDc()
+            {
+                if (_deviceContext != nullptr)
+                {
+                    DeleteDC(_deviceContext);
+                }
+            }
+
+            [[nodiscard]] HDC Get() const noexcept { return _deviceContext; }
+
+        private:
+            HDC _deviceContext;
         };
 
         class ScopedSelection
@@ -130,6 +155,25 @@ namespace mwg::activex
             const double originX,
             const double originY) noexcept
         {
+            for (const rendering::Point& point : scene.points)
+            {
+                if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
+                    !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
+                {
+                    return false;
+                }
+            }
+            for (const rendering::Ring& line : scene.lines)
+            {
+                for (const rendering::Point& point : line)
+                {
+                    if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
+                        !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
+                    {
+                        return false;
+                    }
+                }
+            }
             for (const rendering::Polygon& polygon : scene.polygons)
             {
                 for (const rendering::Ring& ring : polygon)
@@ -169,6 +213,28 @@ namespace mwg::activex
             const double originX,
             const double originY)
         {
+            for (const rendering::Ring& line : scene.lines)
+            {
+                if (line.size() < 2)
+                {
+                    continue;
+                }
+                if (line.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+                {
+                    return E_INVALIDARG;
+                }
+                std::vector<POINT> points;
+                points.reserve(line.size());
+                for (const rendering::Point& point : line)
+                {
+                    points.push_back(ToPoint(point, transform, originX, originY));
+                }
+                if (Polyline(deviceContext, points.data(), static_cast<int>(points.size())) == FALSE)
+                {
+                    return E_FAIL;
+                }
+            }
+
             for (const rendering::Polygon& polygon : scene.polygons)
             {
                 std::vector<POINT> points;
@@ -205,7 +271,109 @@ namespace mwg::activex
                     return E_FAIL;
                 }
             }
+
+            for (const rendering::Point& point : scene.points)
+            {
+                const POINT pixel = ToPoint(point, transform, originX, originY);
+                if (Ellipse(
+                        deviceContext,
+                        pixel.x - 3,
+                        pixel.y - 3,
+                        pixel.x + 4,
+                        pixel.y + 4) == FALSE)
+                {
+                    return E_FAIL;
+                }
+            }
             return S_OK;
+        }
+
+        [[nodiscard]] HRESULT DrawRasterLayer(
+            const HDC deviceContext,
+            const RasterImage& image,
+            const ViewTransform& transform,
+            const double originX,
+            const double originY)
+        {
+            if (image.width <= 0 || image.height <= 0 || !image.extent.IsValid() ||
+                image.pixels.size() !=
+                    static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height))
+            {
+                return E_INVALIDARG;
+            }
+
+            const rendering::Point topLeft{image.extent.xMin, image.extent.yMax};
+            const rendering::Point bottomRight{image.extent.xMax, image.extent.yMin};
+            const double leftValue = ToDeviceX(topLeft, transform, originX);
+            const double topValue = ToDeviceY(topLeft, transform, originY);
+            const double rightValue = ToDeviceX(bottomRight, transform, originX);
+            const double bottomValue = ToDeviceY(bottomRight, transform, originY);
+            if (!IsDrawableCoordinate(leftValue) || !IsDrawableCoordinate(topValue) ||
+                !IsDrawableCoordinate(rightValue) || !IsDrawableCoordinate(bottomValue))
+            {
+                return E_INVALIDARG;
+            }
+
+            const LONG left = static_cast<LONG>(std::floor(leftValue));
+            const LONG top = static_cast<LONG>(std::floor(topValue));
+            const LONG right = static_cast<LONG>(std::ceil(rightValue));
+            const LONG bottom = static_cast<LONG>(std::ceil(bottomValue));
+            if (right <= left || bottom <= top)
+            {
+                return S_OK;
+            }
+
+            ScopedMemoryDc memoryDc(deviceContext);
+            if (memoryDc.Get() == nullptr)
+            {
+                return E_FAIL;
+            }
+
+            BITMAPINFO bitmapInfo{};
+            bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bitmapInfo.bmiHeader.biWidth = image.width;
+            bitmapInfo.bmiHeader.biHeight = -image.height;
+            bitmapInfo.bmiHeader.biPlanes = 1;
+            bitmapInfo.bmiHeader.biBitCount = 32;
+            bitmapInfo.bmiHeader.biCompression = BI_RGB;
+            void* pixels = nullptr;
+            const HBITMAP bitmap = CreateDIBSection(
+                memoryDc.Get(),
+                &bitmapInfo,
+                DIB_RGB_COLORS,
+                &pixels,
+                nullptr,
+                0);
+            const ScopedGdiObject ownedBitmap(bitmap);
+            if (bitmap == nullptr || pixels == nullptr)
+            {
+                return E_OUTOFMEMORY;
+            }
+            std::memcpy(
+                pixels,
+                image.pixels.data(),
+                image.pixels.size() * sizeof(std::uint32_t));
+
+            const ScopedSelection selectedBitmap(memoryDc.Get(), bitmap);
+            if (!selectedBitmap.IsValid())
+            {
+                return E_FAIL;
+            }
+            const BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+            return AlphaBlend(
+                deviceContext,
+                left,
+                top,
+                right - left,
+                bottom - top,
+                memoryDc.Get(),
+                0,
+                0,
+                image.width,
+                image.height,
+                blend) != FALSE
+                ? S_OK
+                : E_FAIL;
         }
     }
 
@@ -255,6 +423,27 @@ namespace mwg::activex
         {
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
+                if (layer.raster.has_value())
+                {
+                    const HRESULT result = DrawRasterLayer(
+                        deviceContext,
+                        *layer.raster,
+                        *transform,
+                        originX,
+                        originY);
+                    if (result == E_INVALIDARG)
+                    {
+                        _failedLayers.push_back(layer.layerId);
+                        continue;
+                    }
+                    if (FAILED(result))
+                    {
+                        return result;
+                    }
+                    ++drawnLayers;
+                    continue;
+                }
+
                 if (!HasDrawableCoordinates(layer.scene, *transform, originX, originY))
                 {
                     _failedLayers.push_back(layer.layerId);

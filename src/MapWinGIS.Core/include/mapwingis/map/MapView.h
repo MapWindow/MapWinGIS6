@@ -13,7 +13,9 @@
  */
 #pragma once
 
+#include <chrono>
 #include <memory>
+#include <optional>
 
 #include "mapwingis/core/Api.h"
 #include "mapwingis/map/Map.h"
@@ -22,6 +24,7 @@
 
 namespace mwg
 {
+    class RasterDataset;
     class VectorDataset;
 
     /// A map, the viewport it is shown in, and its render scene.
@@ -40,6 +43,7 @@ namespace mwg
     ///
     /// Navigation: FitToMap, ZoomToLayer, ZoomIn, ZoomOut, ZoomAt, and Pan
     /// change the viewport; they depend on no window, input, or renderer.
+    /// Changed views are retained in a bounded back/forward history.
     /// A later fit replaces a pending fit, and a navigation operation that
     /// changes the view cancels it, so the latest request wins.
     ///
@@ -66,6 +70,11 @@ namespace mwg
         /// to the map when the viewport has no view yet.
         /// \throws InvalidArgument as Map::AddLayer does.
         LayerId AddLayer(std::shared_ptr<VectorDataset> dataset, int layerIndex = 0);
+
+        /// Adds a raster layer on top of the map; fits the view to the map
+        /// when the viewport has no view yet.
+        /// \throws InvalidArgument as Map::AddRasterLayer does.
+        LayerId AddRasterLayer(std::shared_ptr<RasterDataset> dataset);
 
         /// Removes a layer; see Map::RemoveLayer. The view is kept.
         bool RemoveLayer(LayerId id) noexcept;
@@ -134,6 +143,52 @@ namespace mwg
         /// \throws InvalidArgument as Viewport::Pan does.
         bool Pan(double deltaX, double deltaY);
 
+        /// Groups subsequent view changes into one navigation-history entry.
+        /// Returns false when a group is active or no view exists.
+        bool BeginNavigationGesture() noexcept;
+
+        /// Ends an active navigation group and records its aggregate change.
+        /// Returns true when the group changed the view.
+        bool EndNavigationGesture() noexcept;
+
+        /// True when a prior view can be restored.
+        [[nodiscard]] bool CanGoBack() const noexcept;
+
+        /// True when a forward view can be restored.
+        [[nodiscard]] bool CanGoForward() const noexcept;
+
+        /// Restores the previous view, preserving the current viewport size.
+        /// Returns false when no prior view exists.
+        bool GoBack() noexcept;
+
+        /// Restores the next view, preserving the current viewport size.
+        /// Returns false when no forward view exists.
+        bool GoForward() noexcept;
+
+        /// Starts an eased transition to the full visible map extent.
+        /// The host advances it by calling AdvanceTransition from its timer.
+        /// Returns false when no transition is needed or the viewport/map
+        /// cannot provide a target view.
+        /// \throws InvalidArgument when duration is not positive.
+        bool BeginTransitionToMap(std::chrono::milliseconds duration);
+
+        /// Starts an eased transition to one layer's extent.
+        /// \throws InvalidArgument when duration is not positive.
+        bool BeginTransitionToLayer(
+            LayerId id,
+            std::chrono::milliseconds duration);
+
+        /// Advances an active transition by elapsed time and returns true
+        /// when the viewport changed.
+        /// \throws InvalidArgument when elapsed time is negative.
+        bool AdvanceTransition(std::chrono::milliseconds elapsed);
+
+        /// Cancels an active transition, retaining its current view.
+        /// The partial transition is recorded as one history entry.
+        bool CancelTransition() noexcept;
+
+        [[nodiscard]] bool IsTransitioning() const noexcept;
+
         /// The render scene of the current map, rebuilt first when the map
         /// changed since the last call; see rendering::CreateMapRenderScene.
         /// The reference stays valid for the lifetime of the MapView; a later
@@ -146,8 +201,16 @@ namespace mwg
         bool InvalidateScene() noexcept;
 
     private:
+        struct NavigationState
+        {
+            MapPoint center;
+            double resolution = 0.0;
+        };
+
         /// Clears a pending fit when changed is true and returns changed.
-        bool ViewChanged(bool changed) noexcept;
+        bool ViewChanged(
+            bool changed,
+            const std::optional<NavigationState>& previousState) noexcept;
 
         class Impl;
         std::unique_ptr<Impl> _impl;

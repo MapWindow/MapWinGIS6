@@ -969,11 +969,11 @@ namespace
             return _control->LoadVectorDataset(ATL::CComBSTR(path.c_str()));
         }
 
-        HRESULT LoadLine()
+        HRESULT LoadUnsupportedGeometry()
         {
-            const auto path = _directory.Path() / "line.geojson";
+            const auto path = _directory.Path() / "unsupported.geojson";
             std::ofstream output(path);
-            output << R"({"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1000,1000],[1010,1010]]}}]})";
+            output << R"({"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"GeometryCollection","geometries":[{"type":"LineString","coordinates":[[1000,1000],[1010,1010]]}]}}]})";
             output.close();
             if (!output)
             {
@@ -1064,6 +1064,123 @@ TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
     EXPECT_EQ(count, 1);
 }
 
+TEST_F(ActiveXMapTest, Control6ExposesNavigationHistoryAndAnimatedFit)
+{
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    ASSERT_EQ(Resize(200, 100), S_OK);
+    ComPtr<IMapWinGISControl6> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+
+    VARIANT_BOOL changed = VARIANT_FALSE;
+    ASSERT_EQ(automation->Pan(5.0, 2.0, &changed), S_OK);
+    EXPECT_EQ(changed, VARIANT_TRUE);
+    VARIANT_BOOL canGoBack = VARIANT_FALSE;
+    ASSERT_EQ(automation->get_CanGoBack(&canGoBack), S_OK);
+    EXPECT_EQ(canGoBack, VARIANT_TRUE);
+    ASSERT_EQ(automation->GoBack(&changed), S_OK);
+    EXPECT_EQ(changed, VARIANT_TRUE);
+    ASSERT_EQ(automation->ZoomAt(50.0, 50.0, 2.0, &changed), S_OK);
+    EXPECT_EQ(changed, VARIANT_TRUE);
+    ASSERT_EQ(automation->ZoomInBy(3.0, &changed), S_OK);
+    EXPECT_EQ(changed, VARIANT_TRUE);
+    ASSERT_EQ(automation->ZoomOutBy(3.0, &changed), S_OK);
+    EXPECT_EQ(changed, VARIANT_TRUE);
+    EXPECT_EQ(automation->ZoomInBy(0.5, &changed), E_INVALIDARG);
+    EXPECT_EQ(changed, VARIANT_FALSE);
+
+    ASSERT_EQ(automation->Pan(100.0, 50.0, &changed), S_OK);
+    ASSERT_EQ(automation->AnimateZoomToMap(100), S_OK);
+    VARIANT_BOOL isAnimating = VARIANT_FALSE;
+    ASSERT_EQ(automation->get_IsAnimating(&isAnimating), S_OK);
+    EXPECT_EQ(isAnimating, VARIANT_TRUE);
+
+    const ULONGLONG deadline = ::GetTickCount64() + 2000;
+    while (::GetTickCount64() < deadline)
+    {
+        MSG message{};
+        while (::PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+        {
+            ::TranslateMessage(&message);
+            ::DispatchMessageW(&message);
+        }
+        ASSERT_EQ(automation->get_IsAnimating(&isAnimating), S_OK);
+        if (isAnimating == VARIANT_FALSE)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_EQ(isAnimating, VARIANT_FALSE);
+    ASSERT_EQ(automation->get_CanGoBack(&canGoBack), S_OK);
+    EXPECT_EQ(canGoBack, VARIANT_TRUE);
+
+    LONGLONG layerId = 0;
+    ASSERT_EQ(automation->GetLayerId(0, &layerId), S_OK);
+    ASSERT_EQ(automation->Pan(100.0, 50.0, &changed), S_OK);
+    ASSERT_EQ(automation->AnimateZoomToLayer(layerId, 100), S_OK);
+    ASSERT_EQ(automation->get_IsAnimating(&isAnimating), S_OK);
+    EXPECT_EQ(isAnimating, VARIANT_TRUE);
+    ASSERT_EQ(automation->StopAnimation(), S_OK);
+    ASSERT_EQ(automation->get_IsAnimating(&isAnimating), S_OK);
+    EXPECT_EQ(isAnimating, VARIANT_FALSE);
+}
+
+TEST_F(ActiveXMapTest, KeyboardArrowKeysPanTheMap)
+{
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    ASSERT_EQ(Resize(200, 100), S_OK);
+    ComPtr<IMapWinGISControl6> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+
+    LRESULT messageResult = 0;
+    ASSERT_EQ(
+        _window->OnWindowMessage(WM_KEYDOWN, VK_RIGHT, 0, &messageResult),
+        S_OK);
+    VARIANT_BOOL canGoBack = VARIANT_FALSE;
+    ASSERT_EQ(automation->get_CanGoBack(&canGoBack), S_OK);
+    EXPECT_EQ(canGoBack, VARIANT_TRUE);
+    VARIANT_BOOL changed = VARIANT_FALSE;
+    ASSERT_EQ(automation->GoBack(&changed), S_OK);
+    EXPECT_EQ(changed, VARIANT_TRUE);
+}
+
+TEST_F(ActiveXMapTest, LoadsAndRendersRasterThroughTheAutomationInterface)
+{
+    const auto path = mwg::test::MakeRaster(_directory.Path());
+    ComPtr<IMapWinGISControl5> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+    ASSERT_EQ(
+        automation->LoadRasterDataset(ATL::CComBSTR(path.c_str())),
+        S_OK);
+
+    LONG layerCount = 0;
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+    LONGLONG featureCount = -1;
+    ASSERT_EQ(automation->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(featureCount, 0);
+
+    ASSERT_EQ(Resize(120, 80), S_OK);
+    BitmapSurface surface(120, 80);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 80), S_OK);
+    EXPECT_NE(GetPixel(surface.Get(), 60, 40), GetSysColor(COLOR_WINDOW));
+}
+
+TEST_F(ActiveXMapTest, FileDropLoadsRasterDatasets)
+{
+    const auto path = mwg::test::MakeRaster(_directory.Path());
+    DWORD effect = DROPEFFECT_NONE;
+    EXPECT_EQ(DropFiles({path}, effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_COPY));
+
+    ComPtr<IMapWinGISControl5> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+    LONG layerCount = 0;
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+}
+
 TEST_F(ActiveXMapTest, FileDropAddsMultipleLayersAndFitsTheirCombinedExtent)
 {
     ASSERT_EQ(Resize(200, 120), S_OK);
@@ -1141,7 +1258,7 @@ TEST_F(ActiveXMapTest, FileDropKeepsSuccessfulFilesWhenOthersAreUnsupported)
 
 TEST_F(ActiveXMapTest, RejectedLoadsLeaveTheMapAndRenderingUnchanged)
 {
-    EXPECT_EQ(LoadLine(), E_FAIL);
+    EXPECT_EQ(LoadUnsupportedGeometry(), E_FAIL);
     VARIANT_BOOL loaded = VARIANT_TRUE;
     ASSERT_EQ(_control->get_LayerLoaded(&loaded), S_OK);
     EXPECT_EQ(loaded, VARIANT_FALSE);
@@ -1152,7 +1269,7 @@ TEST_F(ActiveXMapTest, RejectedLoadsLeaveTheMapAndRenderingUnchanged)
     ASSERT_TRUE(before.IsValid());
     ASSERT_TRUE(after.IsValid());
     ASSERT_EQ(Draw(before.Get(), 120, 100), S_OK);
-    EXPECT_EQ(LoadLine(), E_FAIL);
+    EXPECT_EQ(LoadUnsupportedGeometry(), E_FAIL);
     LONGLONG count = -1;
     ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
     EXPECT_EQ(count, 1);

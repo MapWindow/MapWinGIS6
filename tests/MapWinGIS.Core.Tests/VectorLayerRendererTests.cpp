@@ -362,6 +362,70 @@ TEST(VectorLayerRenderer, UsesGdiForPolygonWithInteriorRing)
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), GetSysColor(COLOR_WINDOW));
 }
 
+TEST(VectorLayerRenderer, DrawsPointAndLineGeometryWithGdi)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(
+        FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)),
+        0);
+
+    mwg::rendering::MapRenderScene scene;
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {0.0, 0.0, 10.0, 10.0};
+    layer.lines.push_back({{1.0, 5.0}, {9.0, 5.0}});
+    layer.points.push_back({5.0, 2.0});
+    scene.layers.push_back({mwg::LayerId{1}, std::move(layer)});
+
+    mwg::activex::VectorLayerRenderer renderer;
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Gdi);
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            bounds,
+            scene,
+            FitViewport(bounds, {0.0, 0.0, 10.0, 10.0})),
+        S_OK);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_TRUE(renderer.GetFailedLayers().empty());
+    EXPECT_EQ(MapPixel(surface.Get(), FitViewport(bounds, {0.0, 0.0, 10.0, 10.0}), 5.0, 5.0),
+              RGB(24, 58, 82));
+    EXPECT_EQ(MapPixel(surface.Get(), FitViewport(bounds, {0.0, 0.0, 10.0, 10.0}), 5.0, 2.0),
+              kFill);
+}
+
+TEST(VectorLayerRenderer, DrawsRasterLayersWithAlphaBlending)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(
+        FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)),
+        0);
+
+    mwg::rendering::MapRenderScene scene;
+    mwg::RasterImage image;
+    image.width = 1;
+    image.height = 1;
+    image.extent = {0.0, 0.0, 10.0, 10.0};
+    image.pixels = {0xFF2A2A2AU};
+    scene.layers.push_back({mwg::LayerId{1}, {}, std::move(image)});
+
+    mwg::activex::VectorLayerRenderer renderer;
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Gdi);
+    ASSERT_EQ(renderer.Draw(
+                  surface.Get(),
+                  bounds,
+                  scene,
+                  FitViewport(bounds, {0.0, 0.0, 10.0, 10.0})),
+              S_OK);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_EQ(
+        MapPixel(surface.Get(), FitViewport(bounds, {0.0, 0.0, 10.0, 10.0}), 5.0, 5.0),
+        RGB(42, 42, 42));
+}
+
 TEST(VectorLayerRenderer, HonorsCpuPreferenceAndReportsTheSelectedBackend)
 {
     BitmapSurface surface(120, 100);

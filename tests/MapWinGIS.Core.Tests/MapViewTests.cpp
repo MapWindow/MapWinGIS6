@@ -12,6 +12,7 @@
  */
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <string>
@@ -566,6 +567,119 @@ TEST_F(MapViewTest, PanMovesTheViewByTheMapDelta)
     EXPECT_NEAR(moved.y - origin.y, 2.0 / resolution, 1e-6);
     EXPECT_FALSE(_view.Pan(0.0, 0.0));
     EXPECT_THROW((void)_view.Pan(std::numeric_limits<double>::quiet_NaN(), 0.0), InvalidArgument);
+}
+
+TEST_F(MapViewTest, NavigationHistoryRestoresViewsAndDiscardsForwardHistoryOnNewNavigation)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    const MapPoint initialCenter = *_view.GetViewport().Center();
+    const double initialResolution = *_view.GetViewport().Resolution();
+    EXPECT_FALSE(_view.CanGoBack());
+    EXPECT_FALSE(_view.CanGoForward());
+
+    ASSERT_TRUE(_view.ZoomIn(2.0));
+    const MapPoint zoomedCenter = *_view.GetViewport().Center();
+    const double zoomedResolution = *_view.GetViewport().Resolution();
+    ASSERT_TRUE(_view.Pan(3.0, -2.0));
+
+    ASSERT_TRUE(_view.CanGoBack());
+    EXPECT_FALSE(_view.CanGoForward());
+    ASSERT_TRUE(_view.GoBack());
+    EXPECT_EQ(_view.GetViewport().Center()->x, zoomedCenter.x);
+    EXPECT_EQ(_view.GetViewport().Center()->y, zoomedCenter.y);
+    EXPECT_EQ(*_view.GetViewport().Resolution(), zoomedResolution);
+    ASSERT_TRUE(_view.GoBack());
+    EXPECT_EQ(_view.GetViewport().Center()->x, initialCenter.x);
+    EXPECT_EQ(_view.GetViewport().Center()->y, initialCenter.y);
+    EXPECT_EQ(*_view.GetViewport().Resolution(), initialResolution);
+    EXPECT_FALSE(_view.GoBack());
+
+    ASSERT_TRUE(_view.CanGoForward());
+    ASSERT_TRUE(_view.GoForward());
+    EXPECT_EQ(_view.GetViewport().Center()->x, zoomedCenter.x);
+    EXPECT_EQ(*_view.GetViewport().Resolution(), zoomedResolution);
+    ASSERT_TRUE(_view.Pan(1.0, 0.0));
+    EXPECT_FALSE(_view.CanGoForward());
+}
+
+TEST_F(MapViewTest, NavigationGestureAddsOnlyOneHistoryEntry)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    const MapPoint startCenter = *_view.GetViewport().Center();
+
+    ASSERT_TRUE(_view.BeginNavigationGesture());
+    EXPECT_FALSE(_view.BeginNavigationGesture());
+    ASSERT_TRUE(_view.Pan(2.0, 1.0));
+    ASSERT_TRUE(_view.Pan(3.0, 2.0));
+    EXPECT_FALSE(_view.CanGoBack());
+    ASSERT_TRUE(_view.EndNavigationGesture());
+    EXPECT_TRUE(_view.CanGoBack());
+    EXPECT_FALSE(_view.EndNavigationGesture());
+    ASSERT_TRUE(_view.GoBack());
+    EXPECT_EQ(_view.GetViewport().Center()->x, startCenter.x);
+    EXPECT_EQ(_view.GetViewport().Center()->y, startCenter.y);
+    EXPECT_FALSE(_view.CanGoBack());
+}
+
+TEST_F(MapViewTest, AnimatedFitAdvancesSmoothlyAndAddsOneHistoryEntry)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    ASSERT_TRUE(_view.Pan(100.0, 50.0));
+    ASSERT_TRUE(_view.ZoomIn(2.0));
+    const MapPoint startCenter = *_view.GetViewport().Center();
+    const double startResolution = *_view.GetViewport().Resolution();
+
+    ASSERT_TRUE(_view.BeginTransitionToMap(std::chrono::milliseconds(100)));
+    EXPECT_TRUE(_view.IsTransitioning());
+    EXPECT_TRUE(_view.CanGoBack());
+    EXPECT_FALSE(_view.AdvanceTransition(std::chrono::milliseconds(0)));
+    ASSERT_TRUE(_view.AdvanceTransition(std::chrono::milliseconds(50)));
+    EXPECT_TRUE(_view.IsTransitioning());
+    EXPECT_NE(_view.GetViewport().Center()->x, startCenter.x);
+    EXPECT_NE(*_view.GetViewport().Resolution(), startResolution);
+    ASSERT_TRUE(_view.AdvanceTransition(std::chrono::milliseconds(50)));
+    EXPECT_FALSE(_view.IsTransitioning());
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), {0.0, 0.0, 10.0, 5.0}));
+
+    ASSERT_TRUE(_view.CanGoBack());
+    ASSERT_TRUE(_view.GoBack());
+    EXPECT_EQ(_view.GetViewport().Center()->x, startCenter.x);
+    EXPECT_EQ(_view.GetViewport().Center()->y, startCenter.y);
+    EXPECT_EQ(*_view.GetViewport().Resolution(), startResolution);
+}
+
+TEST_F(MapViewTest, CancellingAnAnimatedFitKeepsItsPartialViewInHistory)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    ASSERT_TRUE(_view.Pan(100.0, 50.0));
+    const MapPoint startCenter = *_view.GetViewport().Center();
+
+    ASSERT_TRUE(_view.BeginTransitionToMap(std::chrono::milliseconds(100)));
+    ASSERT_TRUE(_view.AdvanceTransition(std::chrono::milliseconds(40)));
+    const MapPoint partialCenter = *_view.GetViewport().Center();
+    ASSERT_TRUE(_view.CancelTransition());
+    EXPECT_FALSE(_view.IsTransitioning());
+    ASSERT_TRUE(_view.GoBack());
+    EXPECT_EQ(_view.GetViewport().Center()->x, startCenter.x);
+    EXPECT_EQ(_view.GetViewport().Center()->y, startCenter.y);
+    EXPECT_NE(partialCenter.x, startCenter.x);
+}
+
+TEST_F(MapViewTest, AnimatedFitRejectsNonPositiveDurations)
+{
+    EXPECT_THROW(
+        (void)_view.BeginTransitionToMap(std::chrono::milliseconds(0)),
+        InvalidArgument);
+    EXPECT_THROW(
+        (void)_view.BeginTransitionToLayer(LayerId{}, std::chrono::milliseconds(-1)),
+        InvalidArgument);
+    EXPECT_THROW(
+        (void)_view.AdvanceTransition(std::chrono::milliseconds(-1)),
+        InvalidArgument);
 }
 
 TEST_F(MapViewTest, NavigationCancelsAPendingFit)
