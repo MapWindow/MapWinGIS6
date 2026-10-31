@@ -71,7 +71,7 @@ namespace
     }
 }
 
-CMapWinGISControl::CMapWinGISControl() noexcept
+CMapWinGISControl::CMapWinGISControl()
     : _gdalEvents(
           m_vec,
           &CMapWinGISControl::DispatchGdalNotifications,
@@ -311,7 +311,7 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
         mwg::rendering::VectorRenderScene scene =
             mwg::rendering::CreateVectorRenderScene(*dataset);
         const LONGLONG featureCount =
-            static_cast<LONGLONG>(dataset->Layer(0).FeatureCount());
+            static_cast<LONGLONG>(scene.sourceFeatureCount);
 
         _dataset = std::move(dataset);
         _scene = std::move(scene);

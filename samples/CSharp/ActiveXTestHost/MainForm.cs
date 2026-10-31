@@ -2,6 +2,7 @@
 
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
 
@@ -33,6 +34,8 @@ internal sealed class MainForm : Form
     private readonly string _testDatasetDirectory =
         Path.Combine(Path.GetTempPath(), $"MapWinGIS.ActiveXTestHost-{Guid.NewGuid():N}");
     private string TestDatasetPath => Path.Combine(_testDatasetDirectory, "sample.geojson");
+    private string TestRasterPath => Path.Combine(_testDatasetDirectory, "sample.asc");
+    private string TestRasterOutputPath => Path.Combine(_testDatasetDirectory, "sample.tif");
     private ActiveXHostControl? _host;
     private Exception? _reportWriteError;
 
@@ -149,6 +152,7 @@ internal sealed class MainForm : Form
                 _statusLabel.Text = $"Active: {ProgId}; CoreInitialized={initialized}";
             });
             RecordCheck("Load vector layer", LoadTestLayer);
+            await RecordCheckAsync("GDAL COM event sinks", VerifyGdalEventSinksAsync);
             RecordCheck("CPU backend preference and status", VerifyCpuBackendSelection);
 
             RecordCheck("Resize", VerifyResize);
@@ -251,6 +255,23 @@ internal sealed class MainForm : Form
               ]
             }
             """);
+
+        var raster = new StringBuilder();
+        raster.AppendLine("ncols 512");
+        raster.AppendLine("nrows 512");
+        raster.AppendLine("xllcorner 0");
+        raster.AppendLine("yllcorner 0");
+        raster.AppendLine("cellsize 1");
+        raster.AppendLine("NODATA_value -9999");
+        for (int row = 0; row < 512; row++)
+        {
+            for (int column = 0; column < 512; column++)
+            {
+                raster.Append("1 ");
+            }
+            raster.AppendLine();
+        }
+        File.WriteAllText(TestRasterPath, raster.ToString());
     }
 
     private static void VerifyFileArchitecture(string path)
@@ -382,6 +403,42 @@ internal sealed class MainForm : Form
             // Later resize/repaint checks must exercise the default backend path.
             automation.RenderingBackendPreference = previousPreference;
             RepaintHost();
+        }
+    }
+
+    private async Task VerifyGdalEventSinksAsync()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+        }
+
+        GdalOperationResult result = await GdalOperationClient.ConvertRasterAsync(
+            automationObject,
+            TestRasterPath,
+            TestRasterOutputPath,
+            progress: null,
+            CancellationToken.None);
+
+        if (!result.Succeeded || result.Cancelled || !File.Exists(TestRasterOutputPath))
+        {
+            throw new InvalidOperationException(
+                $"The GDAL raster conversion did not complete successfully. {result.Diagnostics}");
+        }
+        if (result.OperationId <= 0 ||
+            result.CompletedOperationId != result.OperationId)
+        {
+            throw new InvalidOperationException(
+                "The GDAL completion event did not report the operation ID returned by BeginGdalOperation.");
+        }
+        if (!result.ProgressEvents.Any(notification =>
+                notification.OperationId == result.OperationId &&
+                double.IsFinite(notification.Progress) &&
+                notification.Progress is >= 0.0 and <= 1.0 &&
+                notification.Message is not null))
+        {
+            throw new InvalidOperationException(
+                "The GDAL progress event did not report valid operation arguments.");
         }
     }
 

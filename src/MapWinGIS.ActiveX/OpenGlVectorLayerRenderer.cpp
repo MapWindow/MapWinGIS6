@@ -565,6 +565,8 @@ namespace mwg::activex
         {
             if (_rgbaPixels.capacity() < stagingBytes)
             {
+                // Drop retained capacity before reserve to avoid overlapping
+                // allocations that exceed the 64 MiB staging budget.
                 std::vector<unsigned char>().swap(_rgbaPixels);
                 _rgbaPixels.reserve(stagingBytes);
             }

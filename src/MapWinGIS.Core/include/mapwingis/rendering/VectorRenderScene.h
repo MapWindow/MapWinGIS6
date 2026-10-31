@@ -9,6 +9,7 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "mapwingis/core/Api.h"
@@ -38,6 +39,8 @@ namespace mwg
         struct MWG_CORE_API VectorRenderScene
         {
             Extent extent;
+            /// Feature count of the layer used to create this scene.
+            std::int64_t sourceFeatureCount = 0;
             std::vector<Polygon> polygons;
         };
 
@@ -55,7 +58,7 @@ namespace mwg
         /// Copies polygon geometry from the first layer into owned scene data.
         ///
         /// A dataset with no layers is rejected. Only the first layer is
-        /// considered; this keeps layer selection at the Core boundary.
+        /// considered. The scene's sourceFeatureCount matches that layer.
         /// \throws CoreError when the dataset has no layers or its first layer
         ///         is not polygonal or contains no polygon geometry to render.
         [[nodiscard]] MWG_CORE_API VectorRenderScene CreateVectorRenderScene(

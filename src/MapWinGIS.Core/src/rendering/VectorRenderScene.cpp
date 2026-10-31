@@ -105,6 +105,7 @@ namespace mwg::rendering
 
         VectorRenderScene scene;
         scene.extent = layer.GetExtent();
+        scene.sourceFeatureCount = layer.FeatureCount();
         detail::VectorLayerAccess::ForEachGeometry(
             layer,
             [&scene](const OGRGeometry& geometry)

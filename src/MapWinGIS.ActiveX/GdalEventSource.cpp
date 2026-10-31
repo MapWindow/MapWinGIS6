@@ -9,8 +9,12 @@
  */
 #include "GdalEventSource.h"
 
+#include <array>
+#include <cstdint>
 #include <exception>
+#include <iomanip>
 #include <new>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -24,17 +28,25 @@ namespace mwg::activex
 {
     namespace
     {
+        constexpr DISPID kGdalProgressDispId = 1;
+        constexpr DISPID kGdalOperationCompletedDispId = 2;
+        constexpr std::size_t kMaxEventArguments = 3;
+
         [[nodiscard]] std::string FormatHresult(const HRESULT errorCode)
         {
-            return "COM event callback failed with HRESULT " +
-                std::to_string(static_cast<unsigned long>(errorCode)) + ".";
+            std::ostringstream message;
+            message << "COM event callback failed with HRESULT 0x"
+                    << std::uppercase << std::hex << std::setw(8)
+                    << std::setfill('0')
+                    << static_cast<std::uint32_t>(errorCode) << ".";
+            return message.str();
         }
     }
 
     GdalEventSource::GdalEventSource(
         ATL::CComDynamicUnkArray& sinks,
         const GdalDispatchWindow::Callback callback,
-        void* const context) noexcept
+        void* const context)
         : _sinks(sinks),
           _dispatchCallback(callback),
           _dispatchContext(context)
@@ -70,7 +82,10 @@ namespace mwg::activex
                 _dispatchCallback,
                 _dispatchContext) == nullptr)
         {
-            return HRESULT_FROM_WIN32(::GetLastError());
+            const DWORD error = ::GetLastError();
+            return error != ERROR_SUCCESS
+                ? HRESULT_FROM_WIN32(error)
+                : E_FAIL;
         }
         return S_OK;
     }
@@ -290,9 +305,10 @@ namespace mwg::activex
         arguments[2].vt = VT_I8;
         arguments[2].llVal = static_cast<LONGLONG>(notification.operationId);
         DISPPARAMS parameters{arguments, nullptr, 3, 0};
-        result = FireEvent(1, parameters, notification.operationId);
-        arguments[0].vt = VT_EMPTY;
-        arguments[0].bstrVal = nullptr;
+        result = FireEvent(
+            kGdalProgressDispId,
+            parameters,
+            notification.operationId);
         ::SysFreeString(message);
         return result;
     }
@@ -303,7 +319,10 @@ namespace mwg::activex
         argument.vt = VT_I8;
         argument.llVal = static_cast<LONGLONG>(operationId);
         DISPPARAMS parameters{&argument, nullptr, 1, 0};
-        return FireEvent(2, parameters, operationId);
+        return FireEvent(
+            kGdalOperationCompletedDispId,
+            parameters,
+            operationId);
     }
 
     HRESULT GdalEventSource::FireEvent(
@@ -311,6 +330,11 @@ namespace mwg::activex
         DISPPARAMS& parameters,
         const std::uint64_t operationId)
     {
+        if (parameters.cArgs > kMaxEventArguments)
+        {
+            return E_INVALIDARG;
+        }
+
         std::vector<ATL::CComPtr<IUnknown>> sinks;
         try
         {
@@ -347,22 +371,58 @@ namespace mwg::activex
                 continue;
             }
 
-            const HRESULT result = sink->Invoke(
-                eventId,
-                IID_NULL,
-                LOCALE_USER_DEFAULT,
-                DISPATCH_METHOD,
-                &parameters,
-                nullptr,
-                nullptr,
-                nullptr);
+            std::array<VARIANTARG, kMaxEventArguments> arguments{};
+            UINT copiedArguments = 0;
+            HRESULT result = S_OK;
+            for (; copiedArguments < parameters.cArgs; ++copiedArguments)
+            {
+                result = ::VariantCopy(
+                    &arguments[copiedArguments],
+                    &parameters.rgvarg[copiedArguments]);
+                if (FAILED(result))
+                {
+                    break;
+                }
+            }
             if (FAILED(result))
             {
+                for (UINT index = 0; index < copiedArguments; ++index)
+                {
+                    ::VariantClear(&arguments[index]);
+                }
                 if (SUCCEEDED(firstError))
                 {
                     firstError = result;
                 }
                 RecordCallbackError(operationId, result);
+                continue;
+            }
+
+            DISPPARAMS sinkParameters{
+                arguments.data(),
+                parameters.rgdispidNamedArgs,
+                parameters.cArgs,
+                parameters.cNamedArgs};
+            const HRESULT invokeResult = sink->Invoke(
+                eventId,
+                IID_NULL,
+                LOCALE_USER_DEFAULT,
+                DISPATCH_METHOD,
+                &sinkParameters,
+                nullptr,
+                nullptr,
+                nullptr);
+            for (UINT index = 0; index < copiedArguments; ++index)
+            {
+                ::VariantClear(&arguments[index]);
+            }
+            if (FAILED(invokeResult))
+            {
+                if (SUCCEEDED(firstError))
+                {
+                    firstError = invokeResult;
+                }
+                RecordCallbackError(operationId, invokeResult);
             }
         }
         return firstError;

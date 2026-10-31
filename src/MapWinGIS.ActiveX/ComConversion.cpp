@@ -86,6 +86,10 @@ namespace mwg::activex::ComConversion
         {
             return E_INVALIDARG;
         }
+        if (value.find('\0') != std::string_view::npos)
+        {
+            return E_INVALIDARG;
+        }
         if (value.empty())
         {
             *result = ::SysAllocStringLen(nullptr, 0);

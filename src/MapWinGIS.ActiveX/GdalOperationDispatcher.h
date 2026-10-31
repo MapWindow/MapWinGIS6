@@ -65,6 +65,7 @@ namespace mwg::activex
     struct GdalOperationLookup final
     {
         GdalEndResult status = GdalEndResult::NotFound;
+        // Present exactly when status is Ended.
         std::optional<GdalOperationSnapshot> result;
     };
 

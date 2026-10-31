@@ -28,7 +28,7 @@ namespace mwg::activex
         GdalEventSource(
             ATL::CComDynamicUnkArray& sinks,
             GdalDispatchWindow::Callback callback,
-            void* context) noexcept;
+            void* context);
         ~GdalEventSource();
 
         GdalEventSource(const GdalEventSource&) = delete;

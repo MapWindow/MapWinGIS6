@@ -52,7 +52,7 @@ class ATL_NO_VTABLE CMapWinGISControl :
         0>
 {
 public:
-    CMapWinGISControl() noexcept;
+    CMapWinGISControl();
 
     DECLARE_REGISTRY_RESOURCEID(IDR_MAPWINGISCONTROL)
     DECLARE_NOT_AGGREGATABLE(CMapWinGISControl)

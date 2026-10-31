@@ -83,6 +83,101 @@ namespace
         return path;
     }
 
+    std::filesystem::path MakeTwoLayerDataset(
+        const std::filesystem::path& directory,
+        const char* fileName,
+        const OGRwkbGeometryType firstType,
+        const char* firstWkt,
+        const OGRwkbGeometryType secondType,
+        const char* secondWkt)
+    {
+        GdalEnvironment::Initialize();
+        const std::filesystem::path path = directory / fileName;
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+        if (driver == nullptr)
+        {
+            throw std::runtime_error("GPKG driver is not available");
+        }
+
+        GDALDatasetUniquePtr output(
+            driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+        if (output == nullptr)
+        {
+            throw std::runtime_error("Cannot create multi-layer dataset");
+        }
+
+        const std::tuple<const char*, OGRwkbGeometryType, const char*> layers[] = {
+            {"first", firstType, firstWkt},
+            {"second", secondType, secondWkt}};
+        for (const auto& [name, type, geometryWkt] : layers)
+        {
+            OGRLayer* layer = output->CreateLayer(name, nullptr, type, nullptr);
+            if (layer == nullptr)
+            {
+                throw std::runtime_error("Cannot create multi-layer feature layer");
+            }
+
+            const char* text = geometryWkt;
+            OGRGeometry* geometry = nullptr;
+            if (OGRGeometryFactory::createFromWkt(
+                    &text,
+                    nullptr,
+                    &geometry) != OGRERR_NONE ||
+                geometry == nullptr)
+            {
+                throw std::runtime_error("Cannot parse multi-layer geometry");
+            }
+
+            OGRFeatureUniquePtr feature(
+                OGRFeature::CreateFeature(layer->GetLayerDefn()));
+            const OGRErr geometryResult = feature->SetGeometry(geometry);
+            OGRGeometryFactory::destroyGeometry(geometry);
+            if (geometryResult != OGRERR_NONE ||
+                layer->CreateFeature(feature.get()) != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot write multi-layer feature");
+            }
+        }
+
+        output.reset();
+        return path;
+    }
+
+    void ExpectSameScene(
+        const rendering::VectorRenderScene& actual,
+        const rendering::VectorRenderScene& expected)
+    {
+        EXPECT_DOUBLE_EQ(actual.extent.xMin, expected.extent.xMin);
+        EXPECT_DOUBLE_EQ(actual.extent.yMin, expected.extent.yMin);
+        EXPECT_DOUBLE_EQ(actual.extent.xMax, expected.extent.xMax);
+        EXPECT_DOUBLE_EQ(actual.extent.yMax, expected.extent.yMax);
+        EXPECT_EQ(actual.sourceFeatureCount, expected.sourceFeatureCount);
+        ASSERT_EQ(actual.polygons.size(), expected.polygons.size());
+        for (std::size_t polygon = 0; polygon < actual.polygons.size(); ++polygon)
+        {
+            ASSERT_EQ(
+                actual.polygons[polygon].size(),
+                expected.polygons[polygon].size());
+            for (std::size_t ring = 0; ring < actual.polygons[polygon].size(); ++ring)
+            {
+                ASSERT_EQ(
+                    actual.polygons[polygon][ring].size(),
+                    expected.polygons[polygon][ring].size());
+                for (std::size_t point = 0;
+                     point < actual.polygons[polygon][ring].size();
+                     ++point)
+                {
+                    EXPECT_DOUBLE_EQ(
+                        actual.polygons[polygon][ring][point].x,
+                        expected.polygons[polygon][ring][point].x);
+                    EXPECT_DOUBLE_EQ(
+                        actual.polygons[polygon][ring][point].y,
+                        expected.polygons[polygon][ring][point].y);
+                }
+            }
+        }
+    }
+
     class MidStreamFailureLayer final : public OGRLayer
     {
     public:
@@ -223,6 +318,7 @@ TEST_P(VectorRenderSceneTest, CopiesPolygonCoordinatesAndExtent)
     const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(*_layer);
 
     ASSERT_EQ(scene.polygons.size(), static_cast<std::size_t>(Provinces::kFeatureCount));
+    EXPECT_EQ(scene.sourceFeatureCount, _layer->FeatureCount());
     ASSERT_EQ(scene.polygons.front().size(), 1u);
     ASSERT_EQ(scene.polygons.front().front().size(), 5u);
     EXPECT_DOUBLE_EQ(scene.extent.xMin, Provinces::kMinX);
@@ -311,6 +407,45 @@ TEST(VectorRenderScene, RejectsDatasetWithoutLayers)
 
     const auto dataset = VectorDataset::Open("MWG_VECTOR_NO_LAYERS:empty");
     ASSERT_EQ(dataset->LayerCount(), 0);
+    EXPECT_THROW(
+        (void)rendering::CreateVectorRenderScene(*dataset),
+        CoreError);
+}
+
+TEST(VectorRenderScene, DatasetOverloadUsesFirstPolygonLayer)
+{
+    TempDirectory directory;
+    const auto path = MakeTwoLayerDataset(
+        directory.Path(),
+        "polygon-first.gpkg",
+        wkbPolygon,
+        "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))",
+        wkbPolygon,
+        "POLYGON ((10 10, 12 10, 12 12, 10 12, 10 10))");
+    const auto dataset = VectorDataset::Open(path);
+
+    ASSERT_EQ(dataset->LayerCount(), 2);
+    const rendering::VectorRenderScene scene =
+        rendering::CreateVectorRenderScene(*dataset);
+    const rendering::VectorRenderScene firstLayerScene =
+        rendering::CreateVectorRenderScene(dataset->Layer(0));
+    EXPECT_EQ(scene.sourceFeatureCount, dataset->Layer(0).FeatureCount());
+    ExpectSameScene(scene, firstLayerScene);
+}
+
+TEST(VectorRenderScene, DatasetOverloadDoesNotSearchPastNonPolygonFirstLayer)
+{
+    TempDirectory directory;
+    const auto path = MakeTwoLayerDataset(
+        directory.Path(),
+        "point-first.gpkg",
+        wkbPoint,
+        "POINT (0 0)",
+        wkbPolygon,
+        "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))");
+    const auto dataset = VectorDataset::Open(path);
+
+    ASSERT_EQ(dataset->LayerCount(), 2);
     EXPECT_THROW(
         (void)rendering::CreateVectorRenderScene(*dataset),
         CoreError);
