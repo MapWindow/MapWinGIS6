@@ -80,6 +80,10 @@ namespace mwg::test
                                                 const std::string& fileName,
                                                 std::span<const Extent> rectangles);
 
+    /// Writes a GeoPackage with two empty polygon layers named "first" and "second".
+    std::filesystem::path MakeTwoLayerDataset(const std::filesystem::path& directory,
+                                              const std::string& fileName);
+
     /// Creates a directory that is deleted when the object goes out of scope.
     class TempDirectory
     {

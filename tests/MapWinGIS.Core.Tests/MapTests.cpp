@@ -98,6 +98,19 @@ TEST_F(MapTest, RejectsMissingDatasetAndOutOfRangeLayerIndex)
     EXPECT_EQ(_map.LayerCount(), 0);
 }
 
+TEST_F(MapTest, AddsRequestedNonZeroSourceLayer)
+{
+    const std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(
+        MakeTwoLayerDataset(_directory.Path(), "two-layers.gpkg"));
+    ASSERT_EQ(dataset->LayerCount(), 2);
+
+    const LayerId id = _map.AddLayer(dataset, 1);
+    const MapLayer* layer = _map.FindLayer(id);
+    ASSERT_NE(layer, nullptr);
+    EXPECT_EQ(layer->SourceLayerIndex(), 1);
+    EXPECT_EQ(layer->Source().Name(), "second");
+}
+
 TEST_F(MapTest, RejectsOutOfRangePositions)
 {
     (void)_map.AddLayer(OpenRectangles({{0, 0, 1, 1}}));

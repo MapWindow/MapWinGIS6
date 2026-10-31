@@ -210,6 +210,29 @@ namespace mwg::test
         return path;
     }
 
+    std::filesystem::path MakeTwoLayerDataset(const std::filesystem::path& directory,
+                                              const std::string& fileName)
+    {
+        GdalEnvironment::Initialize();
+
+        const std::filesystem::path path = directory / fileName;
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+        if (driver == nullptr) throw std::runtime_error("GPKG driver is not available");
+
+        GDALDatasetUniquePtr dataset(
+            driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+        if (!dataset) throw std::runtime_error("Cannot create " + ToUtf8(path));
+
+        if (dataset->CreateLayer("first", nullptr, wkbPolygon, nullptr) == nullptr ||
+            dataset->CreateLayer("second", nullptr, wkbPolygon, nullptr) == nullptr)
+        {
+            throw std::runtime_error("Cannot create the two test layers");
+        }
+
+        dataset.reset();
+        return path;
+    }
+
     std::filesystem::path MakeSampleShapefile(const std::filesystem::path& directory,
                                               const std::string& baseName)
     {

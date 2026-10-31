@@ -7,6 +7,7 @@
 #include "mapwingis/map/Map.h"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -109,6 +110,10 @@ namespace mwg
         if (layerIndex < 0 || layerIndex >= dataset->LayerCount())
         {
             throw InvalidArgument("Dataset layer index out of range: " + std::to_string(layerIndex));
+        }
+        if (_impl->_lastId == std::numeric_limits<std::uint64_t>::max())
+        {
+            throw CoreError("Map layer identity space is exhausted");
         }
 
         const LayerId id{_impl->_lastId + 1};

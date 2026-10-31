@@ -131,6 +131,7 @@ namespace mwg
         /// remains.
         /// \throws InvalidArgument when dataset is null or layerIndex is out of
         ///         range.
+        /// \throws CoreError when the map has exhausted its layer identity space.
         LayerId AddLayer(std::shared_ptr<VectorDataset> dataset, int layerIndex = 0);
 
         /// Removes the layer with this identity. Returns false, and changes
