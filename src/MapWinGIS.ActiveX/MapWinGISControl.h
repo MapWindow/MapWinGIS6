@@ -4,8 +4,8 @@
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
- * Provides automation for vector loading and map navigation, GDAL operations,
- * rendering preferences, and painting the map's polygon layers. The control
+ * Provides automation for vector loading and map navigation, file drop, GDAL
+ * operations, rendering preferences, and painting polygon layers. The control
  * owns one Core MapView, the only map and view state; it forwards host events
  * to it and draws its render scene through its viewport.
  */
@@ -34,6 +34,7 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleControlImpl<CMapWinGISControl>,
     public ATL::IOleObjectImpl<CMapWinGISControl>,
     public ATL::IOleInPlaceActiveObjectImpl<CMapWinGISControl>,
+    public IDropTarget,
     public ATL::IViewObjectExImpl<CMapWinGISControl>,
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
@@ -63,6 +64,7 @@ public:
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
+        COM_INTERFACE_ENTRY(IDropTarget)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
         COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IViewObjectEx)
@@ -134,6 +136,19 @@ public:
         BSTR* summary,
         BSTR* diagnostics,
         SAFEARRAY** warnings) override;
+    STDMETHOD(GetDropTarget)(IDropTarget** dropTarget) override;
+    STDMETHOD(DragEnter)(
+        IDataObject* data,
+        DWORD keyState,
+        POINTL point,
+        DWORD* effect) override;
+    STDMETHOD(DragOver)(DWORD keyState, POINTL point, DWORD* effect) override;
+    STDMETHOD(DragLeave)() override;
+    STDMETHOD(Drop)(
+        IDataObject* data,
+        DWORD keyState,
+        POINTL point,
+        DWORD* effect) override;
     STDMETHOD(Close)(DWORD saveOption) override;
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
@@ -170,6 +185,7 @@ private:
     mwg::activex::GdalEventSource _gdalEvents;
     mwg::ScreenPoint _lastPanPosition{};
     bool _isPanning = false;
+    bool _dropAcceptsFiles = false;
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

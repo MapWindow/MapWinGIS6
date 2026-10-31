@@ -56,6 +56,13 @@ dataset, and reports whether a layer is loaded and its feature count.
 Loads add layers, including duplicate loads of one dataset. Call `ClearLayers`
 before switching or refreshing datasets. It releases all layers and resets
 the cached feature total while keeping the viewport.
+The windowless control accepts Explorer file drops through its OLE drop-target
+hook. Dropped supported vector datasets append as layers, then the control
+fits the combined visible extent once. Unsupported, missing, or invalid paths
+are skipped without discarding other files that loaded successfully. A partial
+drop returns `S_FALSE` with a copy effect; a drop with no successful files
+returns a failing HRESULT and no effect. Failed paths and HRESULTs are written
+to the debugger output.
 New members belong on a new derived interface; do not change a published
 interface IID or silently add vtable members to it.
 
@@ -68,6 +75,17 @@ does not expose the broad v5 map, layer, shape, event, or editing API. It draws
 in source coordinates without reprojection. OpenGL only handles convex
 single-ring polygons; GDI handles the supported polygon scene as the CPU
 fallback.
+
+## Map and viewport behavior
+
+Core `Map` owns layers in insertion order. Each layer has a stable ID that is
+independent of its display name and current list index. `MapView` owns the
+viewport and the visible extent shared by every rendered layer. Map X increases
+right and map Y increases up; screen X increases right and screen Y increases
+down. Resizing keeps the view center and scale where possible. Loading through
+`LoadVectorDataset` appends layers and preserves an existing view; a file-drop
+batch appends layers and then fits the combined visible extent. Source
+coordinates are not reprojected, so layers must use compatible coordinates.
 
 Keep these gaps visible when extending the COM surface. Reuse Core behavior,
 add only the automation members required by a concrete use case, and retain a

@@ -51,6 +51,13 @@ run exceeded 30 seconds); rerun it before treating a timeout as a hang. These
 integration checks require Windows and an interactive desktop session; they
 are not currently part of CI.
 
+The native ActiveX integration tests also exercise the control's windowless
+OLE drop target with `CF_HDROP` data. They verify that multiple supported
+datasets append as layers and fit to their combined extent, and that an
+unsupported file does not prevent other files in the same drop from loading.
+Dragging files from Explorer onto the visible C# host remains a manual desktop
+check.
+
 The host executable accepts `--automated`, `--results <path>`, and
 `--timeout-seconds <5-300>`. The PowerShell launcher supplies these options
 and starts the host without changing COM registration.

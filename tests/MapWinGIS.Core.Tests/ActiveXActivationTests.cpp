@@ -2,20 +2,25 @@
 
 /**
  * @file ActiveXActivationTests.cpp
- * @brief Tests COM activation, view rendering, and the hosted control lifecycle.
+ * @brief Tests COM activation, file drops, rendering, and the hosted control lifecycle.
  */
 #include <Windows.h>
 #include <atlbase.h>
 #include <atlhost.h>
 #include <objbase.h>
+#include <shellapi.h>
+#include <shlobj.h>
 #include <wrl/client.h>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -750,6 +755,188 @@ namespace
         HMODULE _handle;
     };
 
+    class FileDropDataObject final : public IDataObject
+    {
+    public:
+        explicit FileDropDataObject(
+            const std::vector<std::filesystem::path>& paths)
+        {
+            for (const std::filesystem::path& path : paths)
+            {
+                const std::wstring text = path.native();
+                _fileList.insert(_fileList.end(), text.begin(), text.end());
+                _fileList.push_back(L'\0');
+            }
+            _fileList.push_back(L'\0');
+        }
+
+        HRESULT STDMETHODCALLTYPE QueryInterface(
+            REFIID interfaceId,
+            void** result) override
+        {
+            if (result == nullptr)
+            {
+                return E_POINTER;
+            }
+            *result = nullptr;
+            if (IsEqualIID(interfaceId, IID_IUnknown) ||
+                IsEqualIID(interfaceId, IID_IDataObject))
+            {
+                *result = static_cast<IDataObject*>(this);
+                AddRef();
+                return S_OK;
+            }
+            return E_NOINTERFACE;
+        }
+
+        ULONG STDMETHODCALLTYPE AddRef() override
+        {
+            return ++_references;
+        }
+
+        ULONG STDMETHODCALLTYPE Release() override
+        {
+            const ULONG remaining = --_references;
+            if (remaining == 0)
+            {
+                delete this;
+            }
+            return remaining;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetData(
+            FORMATETC* format,
+            STGMEDIUM* medium) override
+        {
+            if (medium == nullptr)
+            {
+                return E_POINTER;
+            }
+            const HRESULT queryResult = QueryGetData(format);
+            if (FAILED(queryResult))
+            {
+                return queryResult;
+            }
+
+            const SIZE_T byteCount = sizeof(DROPFILES) +
+                _fileList.size() * sizeof(wchar_t);
+            HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, byteCount);
+            if (memory == nullptr)
+            {
+                return E_OUTOFMEMORY;
+            }
+
+            auto* dropFiles = static_cast<DROPFILES*>(::GlobalLock(memory));
+            if (dropFiles == nullptr)
+            {
+                ::GlobalFree(memory);
+                return E_OUTOFMEMORY;
+            }
+            *dropFiles = {};
+            dropFiles->pFiles = sizeof(DROPFILES);
+            dropFiles->fWide = TRUE;
+            std::memcpy(
+                reinterpret_cast<std::byte*>(dropFiles) + sizeof(DROPFILES),
+                _fileList.data(),
+                _fileList.size() * sizeof(wchar_t));
+            ::GlobalUnlock(memory);
+
+            medium->tymed = TYMED_HGLOBAL;
+            medium->hGlobal = memory;
+            medium->pUnkForRelease = nullptr;
+            return S_OK;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetDataHere(
+            FORMATETC*,
+            STGMEDIUM*) override
+        {
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* format) override
+        {
+            if (format == nullptr)
+            {
+                return E_POINTER;
+            }
+            if (format->cfFormat != CF_HDROP ||
+                format->dwAspect != DVASPECT_CONTENT ||
+                format->lindex != -1 ||
+                (format->tymed & TYMED_HGLOBAL) == 0)
+            {
+                return DV_E_FORMATETC;
+            }
+            return S_OK;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(
+            FORMATETC*,
+            FORMATETC* output) override
+        {
+            if (output == nullptr)
+            {
+                return E_POINTER;
+            }
+            output->ptd = nullptr;
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE SetData(
+            FORMATETC*,
+            STGMEDIUM*,
+            BOOL) override
+        {
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE EnumFormatEtc(
+            DWORD,
+            IEnumFORMATETC** output) override
+        {
+            if (output == nullptr)
+            {
+                return E_POINTER;
+            }
+            *output = nullptr;
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE DAdvise(
+            FORMATETC*,
+            DWORD,
+            IAdviseSink*,
+            DWORD* connection) override
+        {
+            if (connection == nullptr)
+            {
+                return E_POINTER;
+            }
+            *connection = 0;
+            return OLE_E_ADVISENOTSUPPORTED;
+        }
+
+        HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override
+        {
+            return OLE_E_ADVISENOTSUPPORTED;
+        }
+
+        HRESULT STDMETHODCALLTYPE EnumDAdvise(
+            IEnumSTATDATA** output) override
+        {
+            if (output == nullptr)
+            {
+                return E_POINTER;
+            }
+            *output = nullptr;
+            return OLE_E_ADVISENOTSUPPORTED;
+        }
+
+    private:
+        std::atomic<ULONG> _references{1};
+        std::vector<wchar_t> _fileList;
+    };
+
     class ActiveXMapTest : public testing::Test
     {
     protected:
@@ -793,6 +980,34 @@ namespace
                 return E_FAIL;
             }
             return _control->LoadVectorDataset(ATL::CComBSTR(path.c_str()));
+        }
+
+        HRESULT DropFiles(
+            const std::vector<std::filesystem::path>& paths,
+            DWORD& effect)
+        {
+            ComPtr<IDropTarget> target;
+            HRESULT result = _window->GetDropTarget(&target);
+            if (FAILED(result))
+            {
+                return result;
+            }
+
+            ComPtr<IDataObject> data;
+            data.Attach(new (std::nothrow) FileDropDataObject(paths));
+            if (data == nullptr)
+            {
+                return E_OUTOFMEMORY;
+            }
+
+            effect = DROPEFFECT_COPY;
+            const POINTL point{20, 20};
+            result = target->DragEnter(data.Get(), 0, point, &effect);
+            if (FAILED(result) || (effect & DROPEFFECT_COPY) == 0)
+            {
+                return result;
+            }
+            return target->Drop(data.Get(), 0, point, &effect);
         }
 
         HRESULT Resize(const int width, const int height)
@@ -847,6 +1062,81 @@ TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
     ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}}), S_OK);
     ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
     EXPECT_EQ(count, 1);
+}
+
+TEST_F(ActiveXMapTest, FileDropAddsMultipleLayersAndFitsTheirCombinedExtent)
+{
+    ASSERT_EQ(Resize(200, 120), S_OK);
+    const std::array firstExtent{mwg::Extent{0, 0, 2, 2}};
+    const std::array secondExtent{mwg::Extent{100, 0, 102, 2}};
+    const auto first = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "dropped-first.gpkg", firstExtent);
+    const auto second = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "dropped-second.gpkg", secondExtent);
+
+    DWORD effect = DROPEFFECT_NONE;
+    ASSERT_EQ(DropFiles({first, second}, effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_COPY));
+
+    ComPtr<IMapWinGISControl4> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+    LONG layerCount = 0;
+    LONGLONG featureCount = 0;
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(layerCount, 2);
+    EXPECT_EQ(featureCount, 2);
+
+    BitmapSurface surface(200, 120);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 200, 120), S_OK);
+    mwg::Viewport expected(200, 120);
+    ASSERT_TRUE(expected.FitExtent({0, 0, 102, 2}, 12.0));
+    for (const mwg::MapPoint point : {mwg::MapPoint{1, 1}, mwg::MapPoint{101, 1}})
+    {
+        const auto screen = expected.MapToScreen(point);
+        ASSERT_TRUE(screen.has_value());
+        const auto pixel = mwg::ToPixel(*screen);
+        ASSERT_TRUE(pixel.has_value());
+        EXPECT_EQ(GetPixel(surface.Get(), pixel->x, pixel->y), RGB(61, 122, 169));
+    }
+}
+
+TEST_F(ActiveXMapTest, FileDropKeepsSuccessfulFilesWhenOthersAreUnsupported)
+{
+    const auto unsupported = _directory.Path() / "unsupported.txt";
+    {
+        std::ofstream output(unsupported);
+        output << "not a vector dataset";
+        ASSERT_TRUE(output.good());
+    }
+    const auto valid = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "dropped-valid.gpkg",
+        std::array{mwg::Extent{0, 0, 2, 2}});
+
+    DWORD effect = DROPEFFECT_NONE;
+    const auto missing = _directory.Path() / "missing.geojson";
+    ASSERT_EQ(DropFiles({unsupported, missing, valid}, effect), S_FALSE);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_COPY));
+
+    ComPtr<IMapWinGISControl4> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+    LONG layerCount = 0;
+    LONGLONG featureCount = 0;
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+    EXPECT_EQ(featureCount, 1);
+
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    effect = DROPEFFECT_COPY;
+    ASSERT_EQ(DropFiles({unsupported, missing}, effect), E_FAIL);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+    EXPECT_EQ(featureCount, 0);
 }
 
 TEST_F(ActiveXMapTest, RejectedLoadsLeaveTheMapAndRenderingUnchanged)
