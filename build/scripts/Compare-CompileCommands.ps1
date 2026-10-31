@@ -83,6 +83,17 @@ $explainedLinkDifferences = [ordered]@{
     '^lib:<vcpkg_installed>/'          = 'Library from an imported target (find_package)'
     '^lib:odbc(cp)?32\.lib$'           = 'MSBuild default library; unused, not in CMake''s default list'
     '^/version:0\.0$'                  = 'CMake default image version; MSBuild leaves it at 0.0 too'
+    '^input:.*\.res$'                  = 'Compiled resource file name (<name>.rc.res in CMake)'
+    '^lib:(<builddir>/)?lib[\\/]mapwingis\.core\.lib$' = 'Core import library from target_link_libraries (MSBuild: project reference)'
+}
+
+# Compile differences that are deliberate (docs/CMAKE-MIGRATION.md).
+$explainedCompileDifferences = [ordered]@{
+    '^/I<intdir>$'                                = 'MIDL output moved from the intermediate directory to <build>/.../midl (D3)'
+    '^/I<builddir>/.*/midl$'                      = 'MIDL output directory (D3)'
+    '^/I<vcpkg_installed>/[^/]+/include$'         = 'vcpkg auto-include; targets without a vcpkg dependency do not get it, the others get it from imported targets'
+    '^/I<vcpkg_installed>/[^/]+/include/geos$'    = 'Interface include directory of GEOS::geos_c'
+    '^/DGDAL_DEBUG$'                              = 'Interface definition of the debug GDAL::GDAL'
 }
 
 # MSBuild project names that differ from the CMake target names.
@@ -290,7 +301,7 @@ function Read-MSBuildCommands([string] $logPath, [string] $binDir) {
             $set = ConvertTo-OptionSet $arguments $baseDir $placeholders @('.c', '.cpp', '.cxx', '.cc')
             foreach ($source in $set.Sources) {
                 # Keyed by target: the tests compile some ActiveX sources a second time.
-                $compiles["$target $source"] = [pscustomobject]@{
+                $compiles[(Get-SourceKey $target $source)] = [pscustomobject]@{
                     Target  = $target
                     Source  = $source
                     Options = Merge-VcpkgPlatform $set.Options
@@ -327,6 +338,8 @@ function Read-CMakeCommands([string] $buildDir, [string] $logPath, [string] $bin
     }
 
     foreach ($entry in (Get-Content -Raw -LiteralPath $database | ConvertFrom-Json)) {
+        # Resource compiles are in the database too; the MSBuild side has only cl.exe.
+        if ($entry.file -match '\.rc$') { continue }
         $arguments = if ($entry.arguments) { @($entry.arguments | Select-Object -Skip 1) }
                      else { @(Split-CommandLine $entry.command | Select-Object -Skip 1) }
         $fo = $arguments | Where-Object { $_ -match '^[/-]Fo' } | Select-Object -First 1
@@ -335,7 +348,7 @@ function Read-CMakeCommands([string] $buildDir, [string] $logPath, [string] $bin
         $set = ConvertTo-OptionSet $arguments $entry.directory $placeholders @('.c', '.cpp', '.cxx', '.cc')
         $source = Get-NormalizedPath $entry.file $entry.directory $placeholders
         $target = if ($intDir -match '\\CMakeFiles\\(?<t>[^\\]+)\.dir') { $Matches['t'] } else { '' }
-        $compiles["$target $source"] = [pscustomobject]@{
+        $compiles[(Get-SourceKey $target $source)] = [pscustomobject]@{
             Target  = $target
             Source  = $source
             Options = Merge-VcpkgPlatform $set.Options
@@ -407,6 +420,31 @@ function Compare-OptionSets($reference, $actual) {
     return [pscustomobject]@{ Lost = $lost; Added = $added }
 }
 
+# Moves the differences that match a pattern into 'Explained', with the reason.
+function Split-ExplainedDifferences($diff, $patterns) {
+    $explained = [ordered]@{}
+    $lost = @(); $added = @()
+    foreach ($pair in @(@{ Items = $diff.Lost; Kind = 'lost' }, @{ Items = $diff.Added; Kind = 'added' })) {
+        foreach ($option in $pair.Items) {
+            $reason = $null
+            foreach ($pattern in $patterns.Keys) {
+                if ($option -match $pattern) { $reason = $patterns[$pattern]; break }
+            }
+            if ($reason) { $explained["$($pair.Kind) $option"] = $reason }
+            elseif ($pair.Kind -eq 'lost') { $lost += $option }
+            else { $added += $option }
+        }
+    }
+    return [pscustomobject]@{ Lost = $lost; Added = $added; Explained = $explained }
+}
+
+# MIDL output lives in different directories in the two builds (D3); key the
+# generated sources by file name.
+function Get-SourceKey([string] $target, [string] $source) {
+    if ($source -match '^<(intdir|builddir)>/(?:.*/)?(?<file>[^/]+_i\.c)$') { $source = "<generated>/$($Matches['file'])" }
+    return "$target $source"
+}
+
 # --- MSBuild baseline ------------------------------------------------------
 
 if (-not $MSBuildBinDirectory) {
@@ -462,8 +500,9 @@ if ($CMakeBuildDir) {
         }
         $diff = Compare-OptionSets $reference.Options $actual.Options
         if ($diff.Lost.Count -or $diff.Added.Count) {
-            $compileDiff[$key] = $diff
-            $lostTotal += $diff.Lost.Count
+            $split = Split-ExplainedDifferences $diff $explainedCompileDifferences
+            $compileDiff[$key] = $split
+            $lostTotal += $split.Lost.Count
         }
     }
     foreach ($key in ($cmakeCommands.Compiles.Keys | Where-Object { -not $msbuildCommands.Compiles.ContainsKey($_) })) {
@@ -482,22 +521,10 @@ if ($CMakeBuildDir) {
             continue
         }
         $diff = Compare-OptionSets $msbuildCommands.Links[$binary] $cmakeCommands.Links[$binary]
-        $explained = [ordered]@{}
-        $lost = @(); $added = @()
-        foreach ($pair in @(@{ Items = $diff.Lost; Kind = 'lost' }, @{ Items = $diff.Added; Kind = 'added' })) {
-            foreach ($option in $pair.Items) {
-                $reason = $null
-                foreach ($pattern in $explainedLinkDifferences.Keys) {
-                    if ($option -match $pattern) { $reason = $explainedLinkDifferences[$pattern]; break }
-                }
-                if ($reason) { $explained["$($pair.Kind) $option"] = $reason }
-                elseif ($pair.Kind -eq 'lost') { $lost += $option }
-                else { $added += $option }
-            }
-        }
         if ($diff.Lost.Count -or $diff.Added.Count) {
-            $linkDiff[$binary] = [pscustomobject]@{ Lost = $lost; Added = $added; Explained = $explained }
-            $lostTotal += $lost.Count
+            $split = Split-ExplainedDifferences $diff $explainedLinkDifferences
+            $linkDiff[$binary] = $split
+            $lostTotal += $split.Lost.Count
         }
     }
 

@@ -328,3 +328,31 @@ Measured for Debug and Release, x64 and Win32 (Ninja presets):
   by default for that platform.
 - `dumpbin`: identical dependents, exports (260), subsystem and DLL
   characteristics.
+
+### MapWinGIS.ActiveX (Phase 2)
+
+Measured for Debug and Release, x64 and Win32 (Ninja presets):
+
+- Compile and link options: none lost; 0 warnings. Explained differences:
+  - The MIDL include directory is `<build>/src/MapWinGIS.ActiveX/midl`
+    instead of the intermediate directory (D3); the generated `_i.c` is
+    compared by file name.
+  - No vcpkg include directory: the OCX has no direct vcpkg dependency.
+  - The compiled resource is named `MapWinGIS.ActiveX.rc.res`, and the Core
+    import library comes from `target_link_libraries` instead of the project
+    reference.
+- CMake needs two explicit settings to match MSBuild: `DEFINE_SYMBOL ""` (no
+  `MapWinGIS_ActiveX_EXPORTS`; the `.def` file exports the entry points) and
+  `/TC` for C sources (CMake passes `/TP` for C++ only).
+- `dumpbin`: identical dependents, the five COM exports, subsystem and DLL
+  characteristics.
+- The generated type library is byte-identical to the MSBuild one, and
+  `MapWinGIS.ActiveX_i.h` is identical below its generated header comment.
+- MIDL runs through one custom command for all generators
+  (`cmake/MwgMidl.cmake`) with the MSBuild options. This IDL produces no
+  proxy or `dlldata.c`; MIDL is told to write them into the output directory
+  anyway, so nothing can land in the source tree.
+- Per-user registration (`regsvr32 /n /i:user`), `New-Object -ComObject
+  MapWinGIS6.Control` and unregistration work for the x64 and Win32 OCX.
+- Three clean `-j32` Ninja builds in a row succeeded (no MIDL/RC race), and the
+  Visual Studio generator builds x64 Debug/Release and x86 Debug.

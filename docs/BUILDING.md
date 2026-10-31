@@ -198,8 +198,11 @@ MSBuild settings and the decisions the CMake build follows are in
 
 ### Building with CMake
 
-The CMake build currently covers `MapWinGIS.Core.dll`; the ActiveX control,
-tests and samples follow. It needs CMake 3.28 or later and Ninja; both ship
+The CMake build currently covers `MapWinGIS.Core.dll` and `MapWinGIS.ocx`; the
+tests and samples follow. The OCX needs the **C++ ATL for latest v145 build
+tools** component for each architecture you build, and `midl.exe` needs `cl.exe`
+on `PATH`, so configure and build from a Visual Studio toolchain (CLion) or a
+Developer PowerShell. CMake 3.28 or later and Ninja are required; both ship
 with Visual Studio 2026 and CLion. Run the bootstrap script first, then
 configure from a VS 2026 Developer PowerShell (or any shell after
 `vcvarsall.bat x64`):
@@ -218,7 +221,11 @@ cmake --build --preset x64-debug
 
 - Output goes to `<build directory>\bin` (`bin\<Config>` for the Visual Studio
   presets) and import libraries to `lib`, never to the MSBuild `bin\` folder, so
-  both builds can be used side by side.
+  both builds can be used side by side. MIDL output (`MapWinGIS.ActiveX_i.h`,
+  `_i.c`, `.tlb`) goes to `<build directory>\src\MapWinGIS.ActiveX\midl`.
+- To register the CMake-built control for the current user:
+  `regsvr32 /n /i:user out\b\x64d\bin\MapWinGIS.ocx` (use
+  `%WINDIR%\SysWOW64\regsvr32.exe` for Win32; add `/u` to unregister).
 - The vcpkg root is found in the same order as above. CMake uses its own install
   tree, `vcpkg_installed\cmake-<Platform>`, shared by Debug and Release; the
   binary cache makes it cheap.
