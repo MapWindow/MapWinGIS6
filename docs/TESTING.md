@@ -35,10 +35,12 @@ pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration
 
 The launcher makes no COM registration changes. Automated mode creates a
 visible window and runs the UI message loop, checks the `CoreInitialized`
-automation property, loads a generated two-polygon GeoJSON dataset through the
-control, resizes the host, samples rendered polygon and background pixels for
-both the GDI preference and the default (OpenGL-first) path, recreates the
-control, reloads the layer, and writes individual outcomes to
+automation property, loads generated GeoJSON layers through the control,
+checks the COM zoom methods and stable layer IDs, sends cursor-anchored wheel
+zoom and captured drag-to-pan input, resizes the host, samples rendered
+polygon and background pixels for both the GDI preference and the default
+(OpenGL-first) path, recreates the control, reloads the layer, and writes
+individual outcomes to
 `bin\Debug\x64\ActiveXTestHost-results.json`. Pixels are sampled from the host
 window's own composed content (`PrintWindow` with `PW_RENDERFULLCONTENT`), not
 from the screen, so another window on top or a lost foreground race does not

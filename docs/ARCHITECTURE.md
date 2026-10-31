@@ -325,8 +325,10 @@ intentional compatibility gaps and the rationale when interfaces are introduced.
 ## Current limits and next work
 
 The control exposes a small v6 COM surface: Core initialization, vector
-dataset loading, layer-loaded state, feature count, renderer preference,
-active backend and status, plus asynchronous generic GDAL operations with
+dataset loading, layer-loaded state, feature count, layer count and stable IDs,
+layer removal, clear and visibility, map/layer zoom, and center zoom in/out.
+Mouse-wheel zoom and drag-to-pan use the same `MapView`. The control also
+supports renderer preferences and asynchronous generic GDAL operations with
 progress, cancellation, and result reporting. The GDAL API has a new interface
 and does not claim MapWinGIS 5 `IGdalUtils` binary compatibility.
 At most sixteen operations may be active or awaiting result cleanup. Call
@@ -348,12 +350,19 @@ polygonal. An empty polygon layer loads but draws nothing. The control reads
 and validates the candidate layer before adding it, so a rejected load cannot
 change the live viewport or schedule a fit.
 `LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
-the cached total over all loaded layers. The control updates the total after
-a successful load and resets it on `ClearLayers`. Property reads do not scan
-datasets or rebuild the scene. Until the control exposes navigation, every load
-fits the view to the whole map. Raster layers and other geometry types are
-not rendered. There is no reprojection, so coordinates remain in the source
-coordinate system and layers are assumed to share one.
+the cached total over all loaded layers. The control updates the total after a
+successful load or removal and resets it on `ClearLayers`; property reads do
+not scan datasets or rebuild the scene. The first layer fits the initial view;
+later loads preserve the current view, and callers can use `ZoomToMap` to
+include new layers in the visible extent. `IMapWinGISControl4` exposes layer
+count and stable layer IDs, removal, visibility, `ZoomToMap`, `ZoomToLayer`,
+`ZoomIn`, and `ZoomOut`; it inherits `ClearLayers` from `IMapWinGISControl3`.
+Layer reordering is not exposed because Core has no reorder operation.
+Mouse-wheel zoom is anchored at the cursor. Left-button dragging pans the
+view, with windowless mouse capture released on button-up, capture loss,
+cancellation, or control destruction. Raster layers and other geometry types
+are not rendered. There is no reprojection, so coordinates remain in the
+source coordinate system and layers are assumed to share one.
 
 Core prepares and retains the complete supported polygon scene in memory,
 reading feature geometries sequentially without WKT serialization and
@@ -370,10 +379,9 @@ Windows CPU fallback; Core has no independent platform-neutral renderer.
 
 The C# host's pixel assertions, activation, and native tests pass for Debug
 and Release on Win32 and x64 in an interactive desktop session.
-Core navigation on the shared `MapView` (zoom to map and layer, zoom in and
-out, anchored zoom, and pan) is implemented but not yet exposed through COM or
-mouse input; that is the next milestone. Deep zoom can push a layer past the
-GDI coordinate range until clipping exists. Measure scene preparation with
-representative datasets before adding caching, paging, or broader OpenGL
-geometry support.
+Core and ActiveX navigation use the shared `MapView`; the COM API exposes
+programmatic zoom operations and the control handles mouse-wheel zoom and
+drag-to-pan. Deep zoom can push a layer past the GDI coordinate range until
+clipping exists. Measure scene preparation with representative datasets
+before adding caching, paging, or broader OpenGL geometry support.
 OpenCL and full MapWinGIS 5 API parity remain deferred.

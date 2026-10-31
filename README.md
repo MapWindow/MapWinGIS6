@@ -21,15 +21,18 @@ Early. The core currently includes GDAL setup and OGR-backed vector dataset
 and layer access, including feature and field reading and updates. Available
 formats depend on the GDAL drivers enabled in the build; tests cover shapefiles
 and GeoPackage. The ActiveX layer supports COM activation, vector loading,
-polygon rendering, and asynchronous generic GDAL algorithms with progress and
-cancellation events.
+polygon rendering, basic map navigation, and asynchronous generic GDAL
+algorithms with progress and cancellation events.
 
 The core also supports a shared map viewport with pan, center zoom, anchored
 zoom, and fitting to the visible map or a named layer. These navigation calls
-do not depend on a window. ActiveX mouse navigation remains future work.
+do not depend on a window. ActiveX exposes map/layer zoom operations and
+supports cursor-anchored mouse-wheel zoom and left-button drag-to-pan.
 
-Vector loads add layers rather than replace them. Call `ClearLayers` to
-release the loaded datasets before switching or refreshing them.
+Vector loads add layers rather than replace them. The first layer fits the
+initial view; later loads preserve it. Call `ZoomToMap` to include new layers
+in the visible extent, or `ClearLayers` to release loaded datasets before
+switching or refreshing them.
 
 ## Build and test
 

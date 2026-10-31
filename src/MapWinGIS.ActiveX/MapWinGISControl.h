@@ -4,10 +4,10 @@
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
- * Provides automation for vector loading, GDAL operations, rendering
- * preferences, and painting the map's polygon layers. The control owns one
- * Core MapView, the only map and view state; it forwards host events to it
- * and draws its render scene through its viewport.
+ * Provides automation for vector loading and map navigation, GDAL operations,
+ * rendering preferences, and painting the map's polygon layers. The control
+ * owns one Core MapView, the only map and view state; it forwards host events
+ * to it and draws its render scene through its viewport.
  */
 #pragma once
 
@@ -38,8 +38,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
     public ATL::IDispatchImpl<
-        IMapWinGISControl3,
-        &IID_IMapWinGISControl3,
+        IMapWinGISControl4,
+        &IID_IMapWinGISControl4,
         &LIBID_MapWinGISActiveXLib,
         1,
         0>,
@@ -58,12 +58,13 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IMapWinGISControl3)
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
-        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl3)
+        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IViewObjectEx)
         COM_INTERFACE_ENTRY(IViewObject2)
         COM_INTERFACE_ENTRY(IViewObject)
@@ -86,12 +87,29 @@ public:
 
     BEGIN_MSG_MAP(CMapWinGISControl)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
+        MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
+        MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
+        MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
+        MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
+        MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChanged)
+        MESSAGE_HANDLER(WM_CANCELMODE, OnCancelMode)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
         CHAIN_MSG_MAP(ATL::CComControl<CMapWinGISControl>)
     END_MSG_MAP()
 
     DECLARE_VIEW_STATUS(VIEWSTATUS_SOLIDBKGND | VIEWSTATUS_OPAQUE)
 
+    STDMETHOD(get_LayerCount)(LONG* count) override;
+    STDMETHOD(GetLayerId)(LONG index, LONGLONG* layerId) override;
+    STDMETHOD(ZoomToMap)(VARIANT_BOOL* changed) override;
+    STDMETHOD(ZoomToLayer)(LONGLONG layerId, VARIANT_BOOL* changed) override;
+    STDMETHOD(ZoomIn)(VARIANT_BOOL* changed) override;
+    STDMETHOD(ZoomOut)(VARIANT_BOOL* changed) override;
+    STDMETHOD(RemoveLayer)(LONGLONG layerId, VARIANT_BOOL* changed) override;
+    STDMETHOD(SetLayerVisible)(
+        LONGLONG layerId,
+        VARIANT_BOOL visible,
+        VARIANT_BOOL* changed) override;
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
     STDMETHOD(LoadVectorDataset)(BSTR path) override;
     STDMETHOD(ClearLayers)() override;
@@ -120,6 +138,12 @@ public:
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnMouseWheel(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnLButtonDown(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnMouseMove(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnLButtonUp(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnCaptureChanged(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnCancelMode(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnGdalDispatch(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled);
     static void DispatchGdalNotifications(void* control) noexcept;
@@ -130,11 +154,22 @@ private:
     /// Resizes the view to a host size, clamped to the supported range, and
     /// returns true when the frame must be redrawn.
     bool ResizeView(LONG width, LONG height) noexcept;
+    /// Converts a host pointer position to viewport coordinates.
+    bool GetPointerPosition(
+        LPARAM position,
+        bool screenCoordinates,
+        mwg::ScreenPoint& point) const noexcept;
+    /// Acquires or releases capture through the active window or windowless site.
+    HRESULT SetPointerCapture(bool capture) noexcept;
+    /// Ends a drag and optionally releases capture still owned by this control.
+    void EndPan(bool releaseCapture) noexcept;
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
+    mwg::ScreenPoint _lastPanPosition{};
+    bool _isPanning = false;
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)
