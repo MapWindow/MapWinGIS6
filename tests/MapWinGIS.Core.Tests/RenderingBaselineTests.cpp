@@ -34,7 +34,9 @@
 #include "GdiVectorLayerRenderer.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
-#include "mapwingis/rendering/VectorRenderScene.h"
+#include "mapwingis/map/Map.h"
+#include "mapwingis/map/Viewport.h"
+#include "mapwingis/rendering/MapRenderScene.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 using namespace mwg;
@@ -229,27 +231,30 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     const std::optional<double> memoryBefore = PrivateMiB(memoryError);
     ASSERT_TRUE(memoryBefore.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     Clock::time_point start = Clock::now();
-    std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
-    VectorLayer& layer = dataset->Layer(0);
+    Map map;
+    map.AddLayer(VectorDataset::Open(path));
     const double openMs = ElapsedMilliseconds(start);
 
     start = Clock::now();
-    const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(layer);
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(map);
     const double sceneMs = ElapsedMilliseconds(start);
     const std::optional<double> memoryAfterScene = PrivateMiB(memoryError);
     ASSERT_TRUE(memoryAfterScene.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
-    ASSERT_EQ(scene.polygons.size(), static_cast<std::size_t>(featureCount));
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_EQ(scene.layers.front().scene.polygons.size(), static_cast<std::size_t>(featureCount));
 
     DibSurface surface(kTargetWidth, kTargetHeight);
     ASSERT_TRUE(surface.IsValid());
     const RECT bounds{0, 0, kTargetWidth, kTargetHeight};
+    Viewport viewport(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(viewport.FitExtent(map.GetExtent(), 12.0));
 
     activex::GdiVectorLayerRenderer gdi;
     std::vector<double> gdiFrames;
     for (int frame = 0; frame < kSteadyFrames; ++frame)
     {
         start = Clock::now();
-        ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene), S_OK);
+        ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, viewport), S_OK);
         gdiFrames.push_back(ElapsedMilliseconds(start));
     }
 
@@ -263,7 +268,7 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
 
     activex::OpenGlVectorLayerRenderer openGl;
     start = Clock::now();
-    const HRESULT firstFrame = openGl.Draw(surface.Get(), bounds, scene);
+    const HRESULT firstFrame = openGl.Draw(surface.Get(), bounds, scene, viewport);
     const double firstOpenGlMs = ElapsedMilliseconds(start);
     if (firstFrame == S_FALSE)
     {
@@ -276,7 +281,7 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     for (int frame = 0; frame < kSteadyFrames; ++frame)
     {
         start = Clock::now();
-        ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene), S_OK);
+        ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, viewport), S_OK);
         openGlFrames.push_back(ElapsedMilliseconds(start));
     }
 

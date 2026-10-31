@@ -5,19 +5,22 @@
  * @brief Declares the backend coordinator for vector scene rendering.
  *
  * Tries OpenGL rendering first and uses the GDI backend for unsupported
- * geometry or when OpenGL cannot be initialized.
+ * geometry or when OpenGL cannot be initialized. One backend draws the whole
+ * frame, so all layers share its viewport transform and pixel conventions.
  */
 #pragma once
 
 #include <Windows.h>
 
 #include <optional>
+#include <span>
 #include <string_view>
 
 #include "GdiVectorLayerRenderer.h"
 #include "OpenGlVectorLayerRenderer.h"
 #include "VectorRenderBackend.h"
-#include "mapwingis/rendering/VectorRenderScene.h"
+#include "mapwingis/map/Viewport.h"
+#include "mapwingis/rendering/MapRenderScene.h"
 
 namespace mwg::activex
 {
@@ -34,10 +37,25 @@ namespace mwg::activex
             return _preference;
         }
 
+        /// Draws the scene through viewport into bounds; see
+        /// IVectorRenderBackend::Draw. Layers that the selected backend
+        /// cannot draw are skipped and listed by GetFailedLayers.
         [[nodiscard]] HRESULT Draw(
             HDC deviceContext,
             const RECT& bounds,
-            const rendering::VectorRenderScene& scene) noexcept;
+            const rendering::MapRenderScene& scene,
+            const Viewport& viewport) noexcept;
+
+        /// Layers skipped by the last Draw call; empty when every layer was
+        /// drawn.
+        [[nodiscard]] std::span<const LayerId> GetFailedLayers() const noexcept
+        {
+            if (_activeBackend == VectorRenderBackendKind::OpenGL)
+            {
+                return {};
+            }
+            return _gdiRenderer.GetFailedLayers();
+        }
 
         [[nodiscard]] std::optional<VectorRenderBackendKind> GetActiveBackend() const noexcept
         {
