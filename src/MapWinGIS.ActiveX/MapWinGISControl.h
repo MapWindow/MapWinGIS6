@@ -5,21 +5,20 @@
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
  * Provides automation for vector loading, GDAL operations, rendering
- * preferences, and painting the initial polygon layer.
+ * preferences, and painting the map's polygon layers. The control owns one
+ * Core MapView, the only map and view state; it forwards host events to it
+ * and draws its render scene through its viewport.
  */
 #pragma once
 
 #include "ActiveXModule.h"
 #include "resource.h"
 
-#include <memory>
-#include <optional>
 #include <cstdint>
 
 #include <atlctl.h>
 
-#include "mapwingis/rendering/VectorRenderScene.h"
-#include "mapwingis/vector/VectorDataset.h"
+#include "mapwingis/map/MapView.h"
 #include "GdalEventSource.h"
 #include "VectorLayerRenderer.h"
 
@@ -39,8 +38,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
     public ATL::IDispatchImpl<
-        IMapWinGISControl2,
-        &IID_IMapWinGISControl2,
+        IMapWinGISControl3,
+        &IID_IMapWinGISControl3,
         &LIBID_MapWinGISActiveXLib,
         1,
         0>,
@@ -59,11 +58,12 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl3)
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
-        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl2)
+        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl3)
         COM_INTERFACE_ENTRY(IViewObjectEx)
         COM_INTERFACE_ENTRY(IViewObject2)
         COM_INTERFACE_ENTRY(IViewObject)
@@ -94,6 +94,7 @@ public:
 
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
     STDMETHOD(LoadVectorDataset)(BSTR path) override;
+    STDMETHOD(ClearLayers)() override;
     STDMETHOD(get_LayerLoaded)(VARIANT_BOOL* loaded) override;
     STDMETHOD(get_FeatureCount)(LONGLONG* count) override;
     STDMETHOD(get_RenderingBackend)(BSTR* backend) override;
@@ -116,6 +117,7 @@ public:
         BSTR* diagnostics,
         SAFEARRAY** warnings) override;
     STDMETHOD(Close)(DWORD saveOption) override;
+    STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnGdalDispatch(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -125,11 +127,14 @@ public:
     ~CMapWinGISControl();
 
 private:
-    std::unique_ptr<mwg::VectorDataset> _dataset;
-    std::optional<mwg::rendering::VectorRenderScene> _scene;
+    /// Resizes the view to a host size, clamped to the supported range, and
+    /// returns true when the frame must be redrawn.
+    bool ResizeView(LONG width, LONG height) noexcept;
+
+    mwg::MapView _view;
+    LONGLONG _featureCount = 0;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
-    LONGLONG _featureCount = 0;
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

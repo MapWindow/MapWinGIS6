@@ -48,14 +48,17 @@ namespace mwg::activex
         /**
          * @brief Draws a scene of simple convex single-ring polygons.
          *
-         * Returns S_FALSE without drawing when the scene contains unsupported
-         * geometry or when no OpenGL context with framebuffer-object support
-         * is available, so callers can fall back to another backend.
+         * Draws all layers into one frame, bottom first. Returns S_FALSE
+         * without drawing when any layer contains unsupported geometry or
+         * when no OpenGL context with framebuffer-object support is
+         * available, so callers can fall back to another backend for the
+         * whole frame.
          */
         [[nodiscard]] HRESULT Draw(
             HDC deviceContext,
             const RECT& bounds,
-            const rendering::VectorRenderScene& scene) noexcept override;
+            const rendering::MapRenderScene& scene,
+            const Viewport& viewport) noexcept override;
 
         [[nodiscard]] std::wstring_view GetLastFailureReason() const noexcept
         {
@@ -97,10 +100,12 @@ namespace mwg::activex
         [[nodiscard]] TargetValidation ValidateTarget(
             HDC deviceContext,
             const RECT& bounds,
-            const rendering::VectorRenderScene& scene) noexcept;
+            const rendering::MapRenderScene& scene,
+            const Viewport& viewport) noexcept;
         [[nodiscard]] bool EnsureStaging(std::size_t stagingBytes) noexcept;
         [[nodiscard]] HRESULT RenderScene(
-            const rendering::VectorRenderScene& scene,
+            const rendering::MapRenderScene& scene,
+            const Viewport& viewport,
             const Target& target) noexcept;
         [[nodiscard]] HRESULT CopyToDeviceContext(
             HDC deviceContext,

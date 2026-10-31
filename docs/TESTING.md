@@ -189,8 +189,24 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
 - Append `<< value` to expectations on strings when the failure output
   matters.
 - Test files carry the same SPDX and Doxygen header as production files.
-- `ViewTransform` tests cover the shared scale and offset used by both GDI and
-  OpenGL renderers, including degenerate extents and zero-area targets.
+- `ViewTransform` tests check that the renderers' transform gives the same
+  screen positions as `Viewport::MapToScreen` and requires a valid viewport.
+- Multi-layer rendering is tested in three places, none of which needs a
+  window or ActiveX: `MapRenderSceneTests.cpp` covers scene order, hidden and
+  empty layers, and per-layer failures; `MapViewTests.cpp` covers fitting,
+  resizing, and scene invalidation; and `VectorLayerRendererTests.cpp` draws
+  layers with different extents into memory bitmaps and samples the pixels at
+  `Viewport::MapToScreen` positions, for GDI and, when available, OpenGL.
+- Native `ActiveXMapTest` cases activate the real OCX through its class factory
+  without registration. They cover stacked loads, rejected loads, cached
+  feature totals, dataset release through `ClearLayers`, `WM_SIZE`, and draws
+  into alternate-sized targets that must not change the live fitting size.
+- Renderer regressions compare edge-adjacent pixels at quarter- and
+  three-quarter-pixel rectangle coordinates for GDI and OpenGL. Overlapping
+  layers make drawing order visible: the top fill covers the bottom outline.
+  Map view tests fit point and zero-span extents, and tiny targets with default
+  padding. Map scene tests isolate standard geometry-read exceptions, reuse
+  the resulting scene, and let allocation failures propagate.
 - Cover for each feature: happy path, empty/missing input, out-of-range
   indexes, null values, non-ASCII paths, write-then-reopen round-trips, and
   error cases.

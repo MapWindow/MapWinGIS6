@@ -61,6 +61,19 @@ library MapWinGISActiveXLib
         object,
         dual,
         oleautomation,
+        uuid(994F4526-284B-463F-8ED5-1551B601981B),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl3 : IMapWinGISControl2
+    {
+        [id(8)]
+        HRESULT ClearLayers();
+    };
+
+    [
+        object,
+        dual,
+        oleautomation,
         uuid(65E33073-669C-43E3-9A96-EF8D38F5EDAC),
         pointer_default(unique)
     ]
@@ -111,7 +124,7 @@ library MapWinGISActiveXLib
     ]
     coclass MapWinGISControl
     {
-        [default] interface IMapWinGISControl2;
+        [default] interface IMapWinGISControl3;
         interface IMapWinGISControlGdal;
         [default, source] dispinterface IMapWinGISControlEvents;
     };

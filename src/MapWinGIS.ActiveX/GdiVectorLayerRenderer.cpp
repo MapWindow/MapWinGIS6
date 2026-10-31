@@ -4,8 +4,8 @@
  * @file GdiVectorLayerRenderer.cpp
  * @brief Draws polygon render scenes into a Windows GDI device context.
  *
- * Fits source coordinates into the control bounds and paints polygon fills
- * and outlines without retaining scene or host resources.
+ * Transforms every layer through the same Core viewport and paints polygon
+ * fills and outlines without retaining scene or host resources.
  */
 #include "GdiVectorLayerRenderer.h"
 
@@ -122,8 +122,8 @@ namespace mwg::activex
                 value <= kMaximumGdiCoordinate;
         }
 
-        /// Checks every vertex before drawing so invalid geometry fails the
-        /// whole scene instead of being partially rasterized.
+        /// Checks every vertex of a layer before drawing so invalid geometry
+        /// skips the whole layer instead of being partially rasterized.
         [[nodiscard]] bool HasDrawableCoordinates(
             const rendering::VectorRenderScene& scene,
             const ViewTransform& transform,
@@ -148,6 +148,9 @@ namespace mwg::activex
             return true;
         }
 
+        /// GDI addresses pixels by integer coordinates, so a continuous
+        /// screen position is drawn in the pixel that contains it, as ToPixel
+        /// defines.
         [[nodiscard]] POINT ToPoint(
             const rendering::Point& point,
             const ViewTransform& transform,
@@ -155,44 +158,71 @@ namespace mwg::activex
             const double originY) noexcept
         {
             return {
-                static_cast<LONG>(std::lround(ToDeviceX(point, transform, originX))),
-                static_cast<LONG>(std::lround(ToDeviceY(point, transform, originY)))};
+                static_cast<LONG>(std::floor(ToDeviceX(point, transform, originX))),
+                static_cast<LONG>(std::floor(ToDeviceY(point, transform, originY)))};
+        }
+
+        [[nodiscard]] HRESULT DrawLayer(
+            const HDC deviceContext,
+            const rendering::VectorRenderScene& scene,
+            const ViewTransform& transform,
+            const double originX,
+            const double originY)
+        {
+            for (const rendering::Polygon& polygon : scene.polygons)
+            {
+                std::vector<POINT> points;
+                std::vector<int> ringCounts;
+                for (const rendering::Ring& ring : polygon)
+                {
+                    if (ring.size() < 3)
+                    {
+                        continue;
+                    }
+
+                    const std::size_t maximumPoints =
+                        static_cast<std::size_t>(std::numeric_limits<int>::max());
+                    if (ring.size() > maximumPoints ||
+                        points.size() > maximumPoints - ring.size())
+                    {
+                        return E_INVALIDARG;
+                    }
+
+                    ringCounts.push_back(static_cast<int>(ring.size()));
+                    for (const rendering::Point& point : ring)
+                    {
+                        points.push_back(ToPoint(point, transform, originX, originY));
+                    }
+                }
+
+                if (!points.empty() &&
+                    PolyPolygon(
+                        deviceContext,
+                        points.data(),
+                        ringCounts.data(),
+                        static_cast<int>(ringCounts.size())) == FALSE)
+                {
+                    return E_FAIL;
+                }
+            }
+            return S_OK;
         }
     }
 
     HRESULT GdiVectorLayerRenderer::Draw(
         const HDC deviceContext,
         const RECT& bounds,
-        const rendering::VectorRenderScene& scene) noexcept
+        const rendering::MapRenderScene& scene,
+        const Viewport& viewport) noexcept
     {
-        if (deviceContext == nullptr || scene.extent.IsEmpty() ||
-            scene.extent.Width() <= 0.0 || scene.extent.Height() <= 0.0)
+        _failedLayers.clear();
+        if (deviceContext == nullptr || !MatchesViewport(bounds, viewport))
         {
             return E_INVALIDARG;
         }
 
-        const double targetWidth =
-            static_cast<double>(bounds.right) - static_cast<double>(bounds.left);
-        const double targetHeight =
-            static_cast<double>(bounds.bottom) - static_cast<double>(bounds.top);
-        if (targetWidth <= 2.0 * ViewTransform::kMargin ||
-            targetHeight <= 2.0 * ViewTransform::kMargin)
-        {
-            return S_OK;
-        }
-
-        const auto transform = ViewTransform::Create(
-            scene.extent,
-            targetWidth,
-            targetHeight);
+        const auto transform = ViewTransform::Create(viewport);
         if (!transform.has_value())
-        {
-            return E_INVALIDARG;
-        }
-
-        const double originX = static_cast<double>(bounds.left);
-        const double originY = static_cast<double>(bounds.top);
-        if (!HasDrawableCoordinates(scene, *transform, originX, originY))
         {
             return E_INVALIDARG;
         }
@@ -218,43 +248,31 @@ namespace mwg::activex
             return E_FAIL;
         }
 
+        const double originX = static_cast<double>(bounds.left);
+        const double originY = static_cast<double>(bounds.top);
+        std::size_t drawnLayers = 0;
         try
         {
-            for (const rendering::Polygon& polygon : scene.polygons)
+            for (const rendering::LayerRenderScene& layer : scene.layers)
             {
-                std::vector<POINT> points;
-                std::vector<int> ringCounts;
-                for (const rendering::Ring& ring : polygon)
+                if (!HasDrawableCoordinates(layer.scene, *transform, originX, originY))
                 {
-                    if (ring.size() < 3)
-                    {
-                        continue;
-                    }
-
-                    const std::size_t maximumPoints =
-                        static_cast<std::size_t>(std::numeric_limits<int>::max());
-                    if (ring.size() > maximumPoints ||
-                        points.size() > maximumPoints - ring.size())
-                    {
-                        return E_INVALIDARG;
-                    }
-
-                    ringCounts.push_back(static_cast<int>(ring.size()));
-                    for (const rendering::Point& point : ring)
-                    {
-                        points.push_back(ToPoint(point, *transform, originX, originY));
-                    }
+                    _failedLayers.push_back(layer.layerId);
+                    continue;
                 }
 
-                if (!points.empty() &&
-                    PolyPolygon(
-                        deviceContext,
-                        points.data(),
-                        ringCounts.data(),
-                        static_cast<int>(ringCounts.size())) == FALSE)
+                const HRESULT layerResult =
+                    DrawLayer(deviceContext, layer.scene, *transform, originX, originY);
+                if (layerResult == E_INVALIDARG)
                 {
-                    return E_FAIL;
+                    _failedLayers.push_back(layer.layerId);
+                    continue;
                 }
+                if (FAILED(layerResult))
+                {
+                    return layerResult;
+                }
+                ++drawnLayers;
             }
         }
         catch (const std::bad_alloc&)
@@ -266,6 +284,6 @@ namespace mwg::activex
             return E_OUTOFMEMORY;
         }
 
-        return S_OK;
+        return drawnLayers == 0 && !_failedLayers.empty() ? E_INVALIDARG : S_OK;
     }
 }

@@ -166,13 +166,46 @@ take snapshots.
   resolution that shows it on both axes, so the other axis expands. Padding
   is kept free on every side. Extent edges map to the centers of the
   outermost pixels inside the padding, so pixel rounding never pushes
-  boundary geometry outside the viewport. A zero-span axis does not constrain
-  the resolution; a single point keeps the current resolution. Invalid
+  boundary geometry outside the viewport. If padding does not fit, the extent
+  spans half a pixel around the center instead. A zero-span axis does not constrain
+  the resolution. A single point keeps the current resolution, or uses
+  `kDefaultPointResolution` when no view exists. Invalid
   extents and zero-sized viewports return `false` without changing the view.
 - **Limits.** Sizes are limited to `kMaxDimension` pixels. Centers are clamped
   to `±kMaxCoordinate` and resolutions to `[MinResolution(center),
   kMaxResolution]`, where the minimum is relative to the center's magnitude so
   that pixels stay many representable doubles wide.
+
+## Map view and multi-layer rendering
+
+`mwg::MapView` (`mapwingis/map/MapView.h`) owns one `Map`, the one `Viewport`
+all its layers are drawn through, and the render scene prepared from the map.
+It is the only map and view state: the ActiveX control owns a `MapView` and
+has no extent or transform of its own.
+
+- **Render scene.** `rendering::CreateMapRenderScene`
+  (`mapwingis/rendering/MapRenderScene.h`) copies the polygon geometry of
+  every visible layer into an owned `MapRenderScene`, bottom layer first. Each
+  layer is converted on its own: hidden layers, layers without polygon
+  geometry, and layers that fail (for example, non-polygon layers) are listed
+  in `skippedLayers` with a reason and do not stop the other layers.
+  This includes `std::exception` errors except `std::bad_alloc`, which propagates.
+  Exceptions outside that hierarchy also propagate. The scene
+  holds no view state and no references to the map or its datasets.
+- **Shared viewport.** Renderers draw the scene through the `Viewport` passed
+  with it, so every layer uses the same transformation. A view change, such as
+  a resize, does not rebuild the scene.
+- **Redraws.** Map changes go through `MapView` (`AddLayer`, `RemoveLayer`,
+  `ClearLayers`, `SetLayerVisible`), which marks the scene stale; `Scene()`
+  rebuilds it on the next call. Every mutator returns whether the frame may
+  have changed, and the host requests a redraw when it does. Edits to source
+  geometry are not observed; call `InvalidateScene` after them.
+- **Initial view and resizing.** While the viewport has no view, adding a
+  layer fits the view to the visible map extent. `Resize` keeps the center
+  and resolution, so resizing neither moves nor rescales the map. A fit
+  requested while the viewport has no size, for example before the host
+  window exists or while it is minimized, is done by the first `Resize` that
+  gives it a size.
 
 ## ActiveX and rendering architecture
 
@@ -190,23 +223,35 @@ responsibilities, not a requirement to split them into more DLLs.
 | Future compute work | Host optional compute acceleration only for workloads justified by profiling. | OpenGL being installed or selected |
 
 The OCX is the composition root for control, render-coordinator, and
-host-specific graphics-context lifetimes. The control owns the opened
-`VectorDataset` and its prepared `VectorRenderScene`; each `VectorDataset`
-owns its `VectorLayer` objects. Core creates backend-neutral render input; the
-coordinator binds it to the control target and backend. Backends must not
-retain references to dataset-owned objects after a draw. Core dataset and
-layer objects are not thread-safe, so the control must serialize their use.
+host-specific graphics-context lifetimes. The control owns a `MapView`, which
+owns the map, its layers' datasets (shared), the viewport, and the prepared
+`MapRenderScene`; each `VectorDataset` owns its `VectorLayer` objects. Core
+creates backend-neutral render input; the coordinator binds it to the control
+target and backend. Backends must not retain references to dataset-owned
+objects after a draw, and they keep no view state. Core dataset and layer
+objects are not thread-safe, so the control must serialize their use.
 The OpenGL backend owns its WGL context and reusable pixel buffers; those
-resources are released with the control. Resizing updates the OpenGL viewport
-and staging buffers without changing ownership of map data.
+resources are released with the control. `WM_SIZE` resizes the `MapView`
+viewport. For windowless hosts, `SetObjectRects` supplies the live size.
+`OnDraw` uses a viewport copy sized to the drawing target. Printing, metafile
+output, and scaled draws do not change the live viewport or its pending fit.
+If no view exists yet, drawing fits only that copy to the visible map extent.
+Resizing updates the OpenGL viewport and staging buffers without changing
+ownership of map data.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
-coordinator nor a backend loads datasets or implements GIS rules. Core selects
-the first dataset layer and sequentially reads Polygon, MultiPolygon,
-CurvePolygon, and MultiSurface features into an owned vector scene, linearizing
-curved geometries. The shared `ViewTransform` supplies the same centered,
-aspect-preserving scale and 12-pixel margin to both renderers. The coordinator
-tries the OpenGL backend for simple convex polygons with one ring.
+coordinator nor a backend loads datasets or implements GIS rules. For each
+visible map layer, Core sequentially reads Polygon, MultiPolygon,
+CurvePolygon, and MultiSurface features into an owned vector scene,
+linearizing curved geometries. `ViewTransform` captures the `Viewport` once
+per frame so both backends transform every vertex of every layer with the
+same arithmetic as `Viewport::MapToScreen`; GDI draws a screen position in
+the pixel that contains it (`ToPixel`). One backend draws the whole frame.
+The coordinator tries the OpenGL backend when every layer has only simple
+convex polygons with one ring. GDI checks each layer before drawing it; a
+layer with non-finite or out-of-range device coordinates is skipped and
+reported (`GetFailedLayers`, `RenderingStatus`) while the other layers are
+still drawn.
 OpenGL uses a context created on a hidden, never-presented window, draws with
 fixed-function calls into a framebuffer object (OpenGL 3.0 or
 `GL_EXT_framebuffer_object`), and reads pixels back into a reusable CPU buffer
@@ -218,16 +263,17 @@ support, initialization failures, and drawing failures use the GDI backend.
 The GDI backend draws the currently supported polygon scene, including its
 interior rings. Both backends draw source coordinates without reprojection,
 and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
-and MultiSurface features from the first vector layer only.
+and MultiSurface features.
 
 The `RenderingBackendPreference` automation property is configurable as
 `Automatic`, `OpenGL`, or `GDI`. `Automatic` and `OpenGL` try the OpenGL
 backend first and fall back to GDI when the scene, hardware, allocation, or
 drawing operation is unsupported. The control reports the active backend and
 the reason for a fallback through `RenderingBackend` and `RenderingStatus`.
-These rendering properties are on `IMapWinGISControl2`, the coclass default
-interface, which derives from `IMapWinGISControl`; the original interface and
-its IID are left unchanged so clients built against it keep working.
+These rendering properties are on `IMapWinGISControl2`, which derives from
+`IMapWinGISControl`. The coclass default interface is now `IMapWinGISControl3`,
+which derives from `IMapWinGISControl2` and adds `ClearLayers` at DISPID 8.
+The earlier interfaces and their IIDs remain unchanged.
 OpenGL capability detection checks framebuffer-object entry points, the
 maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
@@ -270,15 +316,30 @@ pauses notification delivery without cancelling operations; a subsequent
 COM reference cancels outstanding work and drops queued notifications.
 Workers never retain COM references or wait for event handlers.
 
-Only the first vector layer in a dataset is considered, and it must be a
-polygon-compatible layer; a dataset whose first layer has another geometry
-type fails to load even if a later layer is polygonal. Raster layers and other
-geometry types are not rendered. There is no map navigation or
-reprojection, so coordinates remain in the source coordinate system.
+`LoadVectorDataset` adds the first vector layer of a dataset on top of the
+map. Earlier layers stay loaded, so calling it again shows several layers.
+This includes repeated loads of the same dataset. Call `ClearLayers` before
+switching or refreshing datasets to avoid duplicate layers. It releases all
+loaded datasets and clears the feature total, but keeps the view.
+The layer must be polygon-compatible: a dataset whose first layer has another
+geometry type fails to load and is not added, even if a later layer is
+polygonal. An empty polygon layer loads but draws nothing. The control reads
+and validates the candidate layer before adding it, so a rejected load cannot
+change the live viewport or schedule a fit.
+`LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
+the cached total over all loaded layers. The control updates the total after
+a successful load and resets it on `ClearLayers`. Property reads do not scan
+datasets or rebuild the scene. Until the control exposes navigation, every load
+fits the view to the whole map. Raster layers and other geometry types are
+not rendered. There is no reprojection, so coordinates remain in the source
+coordinate system and layers are assumed to share one.
 
 Core prepares and retains the complete supported polygon scene in memory,
 reading feature geometries sequentially without WKT serialization and
-reparsing. There is no tiling, paging, or unchanged-geometry cache. The opt-in
+reparsing. Any map change rebuilds the scene for all visible layers, not only
+the changed one. There is no tiling, paging, clipping to the visible extent,
+or unchanged-geometry cache, so a layer whose device coordinates exceed the
+GDI range is skipped by GDI. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation and backend frame costs. OpenGL only supports convex
 single-ring polygons and copies each frame through CPU memory. Its reusable CPU
@@ -288,7 +349,7 @@ Windows CPU fallback; Core has no independent platform-neutral renderer.
 
 The C# host's pixel assertions, activation, and native tests pass for Debug
 and Release on Win32 and x64 in an interactive desktop session.
-The next useful milestone is a tested map-view transform for viewport and
-coordinate-system behavior. Measure scene preparation with representative
+The next milestone is navigation on the shared `MapView`: zoom to map and
+layer, zoom in and out, and pan. Measure scene preparation with representative
 datasets before adding caching, paging, or broader OpenGL geometry support.
 OpenCL and full MapWinGIS 5 API parity remain deferred.
