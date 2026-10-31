@@ -54,7 +54,9 @@ reports whether a layer is loaded and its feature count.
 `IMapWinGISControl2` adds renderer preference, active backend, and status.
 `IMapWinGISControl3` adds `ClearLayers`. `IMapWinGISControl4` adds layer
 management and basic zoom methods, `IMapWinGISControl5` adds raster loading,
-and `IMapWinGISControl6` is the current default automation interface.
+`IMapWinGISControl6` adds navigation history and animated fits, and
+`IMapWinGISControl7` is the current default automation interface. Version 7
+adds layer reordering and XYZ tile loading.
 Loads add layers, including duplicate loads of one dataset. Call `ClearLayers`
 before switching or refreshing datasets. It releases all layers and resets
 the cached feature total while keeping the viewport.
@@ -72,9 +74,10 @@ These are new interfaces, not the MapWinGIS 5 type-library interfaces, and the
 control does not claim binary or API compatibility with existing v5 clients.
 Each vector load selects the first dataset layer. Core prepares an ordered
 scene for all visible map layers, including point, line, and polygon
-geometries; raster layers use bounded display previews. The map uses the first
-layer's declared CRS, transforms other declared CRSs into it, and rejects
-mixing referenced and unreferenced layers. The control does not expose the
+geometries; raster layers are read by viewport-sized windows. XYZ tile URL
+templates use the Web Mercator tile matrix and GDAL's in-memory cache. The map
+uses the first layer's declared CRS, transforms other declared CRSs into it,
+and rejects mixing referenced and unreferenced layers. The control does not expose the
 broad v5 map, layer, shape, event, or editing API. OpenGL only handles convex
 single-ring polygons; GDI handles the supported vector and raster scene as the
 CPU fallback.
@@ -93,9 +96,10 @@ layer's CRS.
 
 `IMapWinGISControl6` adds pan, anchored zoom, configurable zoom factors,
 back/forward view history, animated fits, and host input for mouse, keyboard,
-and touch pan/pinch gestures. It is a new derived interface; earlier IIDs
-remain unchanged. Animated map/layer fits run on the control's owner-thread
-timer and can be canceled explicitly.
+and touch pan/pinch gestures. `IMapWinGISControl7` adds `MoveLayer` and
+`LoadXyzTileLayer`. These are new derived interfaces; earlier IIDs remain
+unchanged. Animated map/layer fits run on the control's owner-thread timer and
+can be canceled explicitly.
 
 Keep these gaps visible when extending the COM surface. Reuse Core behavior,
 add only the automation members required by a concrete use case, and retain a

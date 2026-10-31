@@ -171,6 +171,11 @@ namespace mwg
         /// has no layer with this identity.
         [[nodiscard]] std::optional<int> LayerPosition(LayerId id) const noexcept;
 
+        /// Moves a layer to a new 0-based position. Returns false when the
+        /// layer is unknown or already at that position.
+        /// \throws InvalidArgument when position is outside the collection.
+        bool MoveLayer(LayerId id, int position);
+
         /// Shows or hides a layer. Returns false when the map has no layer
         /// with this identity.
         bool SetLayerVisible(LayerId id, bool visible) noexcept;

@@ -29,7 +29,7 @@ namespace mwg::rendering
         LayerId layerId;
         /// Point, line, and polygon geometry in map coordinates.
         VectorRenderScene scene;
-        /// Bounded raster preview when the layer is raster-backed.
+        /// Raster window, or bounded preview for a map-only scene build.
         std::optional<RasterImage> raster;
     };
 
@@ -63,8 +63,9 @@ namespace mwg::rendering
         std::vector<SkippedLayer> skippedLayers;
     };
 
-    /// Copies drawable vector geometry of every visible map layer into
-    /// owned scene data in map order and the map coordinate system.
+    /// Copies drawable geometry of every visible map layer into owned scene
+    /// data in map order and the map coordinate system. This overload reads
+    /// bounded raster previews; use the viewport overload for raster windows.
     ///
     /// Each layer is converted on its own, so a layer that cannot be
     /// rendered is listed in skippedLayers and does not prevent the other
@@ -73,10 +74,19 @@ namespace mwg::rendering
     /// declared coordinate systems are reprojected to that of the first layer.
     ///
     /// The scene is a snapshot: later changes to the map or its sources are
-    /// not reflected, so create a new scene after the map changes. Reads
-    /// every visible layer completely. Not thread-safe; see Map.
+    /// not reflected, so create a new scene after the map changes. Vector
+    /// layers are read completely. Not thread-safe; see Map.
     /// \throws std::bad_alloc when memory runs out. Other std::exception
     ///         errors from individual layers are reported in skippedLayers.
     ///         Exceptions not derived from std::exception propagate.
     [[nodiscard]] MWG_CORE_API MapRenderScene CreateMapRenderScene(const Map& map);
+
+    /// Builds a render scene whose raster layers are read only for the
+    /// requested visible map window and output size. Vector geometry remains
+    /// a complete scene and is clipped by the rendering backend.
+    [[nodiscard]] MWG_CORE_API MapRenderScene CreateMapRenderScene(
+        const Map& map,
+        const Extent& visibleExtent,
+        int width,
+        int height);
 }

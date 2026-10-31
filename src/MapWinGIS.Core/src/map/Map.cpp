@@ -151,6 +151,18 @@ namespace mwg
     class Map::Impl
     {
     public:
+        [[nodiscard]] std::vector<std::unique_ptr<MapLayer>>::iterator Find(
+            const LayerId id) noexcept
+        {
+            return std::find_if(
+                _layers.begin(),
+                _layers.end(),
+                [id](const std::unique_ptr<MapLayer>& layer)
+                {
+                    return layer->Id() == id;
+                });
+        }
+
         [[nodiscard]] std::vector<std::unique_ptr<MapLayer>>::const_iterator Find(
             const LayerId id) const noexcept
         {
@@ -290,6 +302,38 @@ namespace mwg
             return std::nullopt;
         }
         return static_cast<int>(layer - _impl->_layers.begin());
+    }
+
+    bool Map::MoveLayer(const LayerId id, const int position)
+    {
+        if (position < 0 || position >= LayerCount())
+        {
+            throw InvalidArgument("Map layer position out of range: " + std::to_string(position));
+        }
+
+        const auto layer = _impl->Find(id);
+        if (layer == _impl->_layers.end())
+        {
+            return false;
+        }
+
+        const auto currentPosition =
+            static_cast<int>(layer - _impl->_layers.begin());
+        if (currentPosition == position)
+        {
+            return false;
+        }
+
+        auto target = _impl->_layers.begin() + position;
+        if (currentPosition < position)
+        {
+            std::rotate(layer, layer + 1, target + 1);
+        }
+        else
+        {
+            std::rotate(target, layer, layer + 1);
+        }
+        return true;
     }
 
     bool Map::SetLayerVisible(const LayerId id, const bool visible) noexcept

@@ -147,63 +147,233 @@ namespace mwg::activex
                 value <= kMaximumGdiCoordinate;
         }
 
-        /// Checks every vertex of a layer before drawing so invalid geometry
-        /// skips the whole layer instead of being partially rasterized.
-        [[nodiscard]] bool HasDrawableCoordinates(
-            const rendering::VectorRenderScene& scene,
-            const ViewTransform& transform,
-            const double originX,
-            const double originY) noexcept
+        [[nodiscard]] bool HasFiniteCoordinates(
+            const rendering::VectorRenderScene& scene) noexcept
         {
-            for (const rendering::Point& point : scene.points)
+            const auto finite = [](const rendering::Point& point)
             {
-                if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
-                    !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
-                {
-                    return false;
-                }
+                return std::isfinite(point.x) && std::isfinite(point.y);
+            };
+            if (!std::all_of(scene.points.begin(), scene.points.end(), finite))
+            {
+                return false;
             }
             for (const rendering::Ring& line : scene.lines)
             {
-                for (const rendering::Point& point : line)
+                if (!std::all_of(line.begin(), line.end(), finite))
                 {
-                    if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
-                        !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
-                    {
-                        return false;
-                    }
+                    return false;
                 }
             }
             for (const rendering::Polygon& polygon : scene.polygons)
             {
                 for (const rendering::Ring& ring : polygon)
                 {
-                    for (const rendering::Point& point : ring)
+                    if (!std::all_of(ring.begin(), ring.end(), finite))
                     {
-                        if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
-                            !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
-                        {
-                            return false;
-                        }
+                        return false;
                     }
                 }
             }
-
             return true;
         }
 
-        /// GDI addresses pixels by integer coordinates, so a continuous
-        /// screen position is drawn in the pixel that contains it, as ToPixel
-        /// defines.
-        [[nodiscard]] POINT ToPoint(
+        struct DevicePoint
+        {
+            double x = 0.0;
+            double y = 0.0;
+        };
+
+        [[nodiscard]] DevicePoint ToDevicePoint(
             const rendering::Point& point,
             const ViewTransform& transform,
             const double originX,
             const double originY) noexcept
         {
             return {
-                static_cast<LONG>(std::floor(ToDeviceX(point, transform, originX))),
-                static_cast<LONG>(std::floor(ToDeviceY(point, transform, originY)))};
+                ToDeviceX(point, transform, originX),
+                ToDeviceY(point, transform, originY)};
+        }
+
+        [[nodiscard]] POINT ToPoint(const DevicePoint& point) noexcept
+        {
+            return {
+                static_cast<LONG>(std::floor(point.x)),
+                static_cast<LONG>(std::floor(point.y))};
+        }
+
+        [[nodiscard]] bool ClipSegment(
+            DevicePoint& start,
+            DevicePoint& end,
+            const RECT& clip) noexcept
+        {
+            if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
+                !std::isfinite(end.x) || !std::isfinite(end.y))
+            {
+                return false;
+            }
+
+            const double deltaX = end.x - start.x;
+            const double deltaY = end.y - start.y;
+            if (!std::isfinite(deltaX) || !std::isfinite(deltaY))
+            {
+                return false;
+            }
+
+            double minimum = 0.0;
+            double maximum = 1.0;
+            const double p[] = {-deltaX, deltaX, -deltaY, deltaY};
+            const double q[] = {
+                start.x - clip.left,
+                clip.right - start.x,
+                start.y - clip.top,
+                clip.bottom - start.y};
+            for (int edge = 0; edge < 4; ++edge)
+            {
+                if (p[edge] == 0.0)
+                {
+                    if (q[edge] < 0.0)
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
+                const double ratio = q[edge] / p[edge];
+                if (p[edge] < 0.0)
+                {
+                    minimum = std::max(minimum, ratio);
+                }
+                else
+                {
+                    maximum = std::min(maximum, ratio);
+                }
+                if (minimum > maximum)
+                {
+                    return false;
+                }
+            }
+
+            const DevicePoint originalStart = start;
+            start = {
+                originalStart.x + minimum * deltaX,
+                originalStart.y + minimum * deltaY};
+            end = {
+                originalStart.x + maximum * deltaX,
+                originalStart.y + maximum * deltaY};
+            return true;
+        }
+
+        [[nodiscard]] bool IsInside(
+            const DevicePoint& point,
+            const int edge,
+            const RECT& clip) noexcept
+        {
+            switch (edge)
+            {
+            case 0:
+                return point.x >= clip.left;
+            case 1:
+                return point.x <= clip.right;
+            case 2:
+                return point.y >= clip.top;
+            default:
+                return point.y <= clip.bottom;
+            }
+        }
+
+        [[nodiscard]] DevicePoint IntersectEdge(
+            const DevicePoint& start,
+            const DevicePoint& end,
+            const int edge,
+            const RECT& clip) noexcept
+        {
+            if (edge < 2)
+            {
+                const double x = edge == 0 ? clip.left : clip.right;
+                const double ratio = (x - start.x) / (end.x - start.x);
+                return {x, start.y + ratio * (end.y - start.y)};
+            }
+
+            const double y = edge == 2 ? clip.top : clip.bottom;
+            const double ratio = (y - start.y) / (end.y - start.y);
+            return {start.x + ratio * (end.x - start.x), y};
+        }
+
+        [[nodiscard]] std::vector<DevicePoint> ClipRing(
+            const rendering::Ring& ring,
+            const ViewTransform& transform,
+            const double originX,
+            const double originY,
+            const RECT& clip)
+        {
+            std::vector<DevicePoint> points;
+            points.reserve(ring.size());
+            for (const rendering::Point& point : ring)
+            {
+                const DevicePoint device =
+                    ToDevicePoint(point, transform, originX, originY);
+                if (!std::isfinite(device.x) || !std::isfinite(device.y))
+                {
+                    return {};
+                }
+                points.push_back(device);
+            }
+
+            for (int edge = 0; edge < 4 && !points.empty(); ++edge)
+            {
+                std::vector<DevicePoint> clipped;
+                clipped.reserve(points.size() + 4U);
+                DevicePoint previous = points.back();
+                bool previousInside = IsInside(previous, edge, clip);
+                for (const DevicePoint& current : points)
+                {
+                    const bool currentInside = IsInside(current, edge, clip);
+                    if (currentInside != previousInside)
+                    {
+                        clipped.push_back(IntersectEdge(previous, current, edge, clip));
+                    }
+                    if (currentInside)
+                    {
+                        clipped.push_back(current);
+                    }
+                    previous = current;
+                    previousInside = currentInside;
+                }
+                points = std::move(clipped);
+            }
+            return points;
+        }
+
+        [[nodiscard]] HRESULT DrawClippedLine(
+            const HDC deviceContext,
+            const rendering::Ring& line,
+            const ViewTransform& transform,
+            const double originX,
+            const double originY,
+            const RECT& clip)
+        {
+            if (line.size() < 2)
+            {
+                return S_OK;
+            }
+            for (std::size_t index = 1; index < line.size(); ++index)
+            {
+                DevicePoint start =
+                    ToDevicePoint(line[index - 1], transform, originX, originY);
+                DevicePoint end =
+                    ToDevicePoint(line[index], transform, originX, originY);
+                if (!ClipSegment(start, end, clip))
+                {
+                    continue;
+                }
+                const POINT points[] = {ToPoint(start), ToPoint(end)};
+                if (Polyline(deviceContext, points, 2) == FALSE)
+                {
+                    return E_FAIL;
+                }
+            }
+            return S_OK;
         }
 
         [[nodiscard]] HRESULT DrawLayer(
@@ -211,27 +381,16 @@ namespace mwg::activex
             const rendering::VectorRenderScene& scene,
             const ViewTransform& transform,
             const double originX,
-            const double originY)
+            const double originY,
+            const RECT& clip)
         {
             for (const rendering::Ring& line : scene.lines)
             {
-                if (line.size() < 2)
+                const HRESULT lineResult = DrawClippedLine(
+                    deviceContext, line, transform, originX, originY, clip);
+                if (FAILED(lineResult))
                 {
-                    continue;
-                }
-                if (line.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-                {
-                    return E_INVALIDARG;
-                }
-                std::vector<POINT> points;
-                points.reserve(line.size());
-                for (const rendering::Point& point : line)
-                {
-                    points.push_back(ToPoint(point, transform, originX, originY));
-                }
-                if (Polyline(deviceContext, points.data(), static_cast<int>(points.size())) == FALSE)
-                {
-                    return E_FAIL;
+                    return lineResult;
                 }
             }
 
@@ -246,18 +405,24 @@ namespace mwg::activex
                         continue;
                     }
 
+                    std::vector<DevicePoint> clipped = ClipRing(
+                        ring, transform, originX, originY, clip);
+                    if (clipped.size() < 3)
+                    {
+                        continue;
+                    }
                     const std::size_t maximumPoints =
                         static_cast<std::size_t>(std::numeric_limits<int>::max());
-                    if (ring.size() > maximumPoints ||
-                        points.size() > maximumPoints - ring.size())
+                    if (clipped.size() > maximumPoints ||
+                        points.size() > maximumPoints - clipped.size())
                     {
                         return E_INVALIDARG;
                     }
 
-                    ringCounts.push_back(static_cast<int>(ring.size()));
-                    for (const rendering::Point& point : ring)
+                    ringCounts.push_back(static_cast<int>(clipped.size()));
+                    for (const DevicePoint& point : clipped)
                     {
-                        points.push_back(ToPoint(point, transform, originX, originY));
+                        points.push_back(ToPoint(point));
                     }
                 }
 
@@ -274,7 +439,15 @@ namespace mwg::activex
 
             for (const rendering::Point& point : scene.points)
             {
-                const POINT pixel = ToPoint(point, transform, originX, originY);
+                const DevicePoint device = ToDevicePoint(
+                    point, transform, originX, originY);
+                if (!std::isfinite(device.x) || !std::isfinite(device.y) ||
+                    device.x < clip.left - 3.0 || device.x > clip.right + 3.0 ||
+                    device.y < clip.top - 3.0 || device.y > clip.bottom + 3.0)
+                {
+                    continue;
+                }
+                const POINT pixel = ToPoint(device);
                 if (Ellipse(
                         deviceContext,
                         pixel.x - 3,
@@ -418,6 +591,7 @@ namespace mwg::activex
 
         const double originX = static_cast<double>(bounds.left);
         const double originY = static_cast<double>(bounds.top);
+        const RECT clip = bounds;
         std::size_t drawnLayers = 0;
         try
         {
@@ -444,14 +618,19 @@ namespace mwg::activex
                     continue;
                 }
 
-                if (!HasDrawableCoordinates(layer.scene, *transform, originX, originY))
+                if (!HasFiniteCoordinates(layer.scene))
                 {
                     _failedLayers.push_back(layer.layerId);
                     continue;
                 }
 
-                const HRESULT layerResult =
-                    DrawLayer(deviceContext, layer.scene, *transform, originX, originY);
+                const HRESULT layerResult = DrawLayer(
+                    deviceContext,
+                    layer.scene,
+                    *transform,
+                    originX,
+                    originY,
+                    clip);
                 if (layerResult == E_INVALIDARG)
                 {
                     _failedLayers.push_back(layer.layerId);

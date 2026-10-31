@@ -31,9 +31,10 @@ namespace mwg
     ///
     /// Redraws: every mutator returns whether the displayed frame may have
     /// changed. Hosts request a redraw when it returns true and draw Scene()
-    /// through GetViewport(). Changes to the layer collection or visibility
-    /// mark the scene stale; Scene() rebuilds it on the next call. Edits to
-    /// source geometry are not observed; call InvalidateScene after them.
+    /// through GetViewport(). Changes to the layer collection, visibility, or
+    /// order mark the scene stale; unchanged vector geometry is reused.
+    /// Raster layers are read for the current viewport window. Edits to source
+    /// geometry are not observed; call InvalidateScene after them.
     ///
     /// Initial view: while the viewport has no view, adding a layer fits the
     /// viewport to the map. A fit that cannot happen because the viewport has
@@ -86,6 +87,11 @@ namespace mwg
         /// Shows or hides a layer and returns true when its visibility
         /// changed. Returns false when the map has no such layer.
         bool SetLayerVisible(LayerId id, bool visible) noexcept;
+
+        /// Moves a layer to a new 0-based drawing position. Returns false
+        /// when its position did not change or the identity is unknown.
+        /// \throws InvalidArgument when position is outside the collection.
+        bool MoveLayer(LayerId id, int position);
 
         /// Changes the viewport size, keeping the center and resolution so
         /// the map neither moves nor changes scale; see Viewport::SetSize.
@@ -189,15 +195,17 @@ namespace mwg
 
         [[nodiscard]] bool IsTransitioning() const noexcept;
 
-        /// The render scene of the current map, rebuilt first when the map
-        /// changed since the last call; see rendering::CreateMapRenderScene.
+        /// Render scene of the current map and viewport. Raster layers contain
+        /// viewport-sized windows; unchanged vector geometry is cached by
+        /// layer identity across map changes.
         /// The reference stays valid for the lifetime of the MapView; a later
         /// call that rebuilds the scene replaces its contents.
         /// \throws std::bad_alloc when memory runs out.
         [[nodiscard]] const rendering::MapRenderScene& Scene();
 
-        /// Marks the render scene stale, for example after source geometry
-        /// was edited. Returns true: the frame must be redrawn.
+        /// Marks the render scene and per-layer geometry cache stale, for
+        /// example after source geometry was edited. Returns true: the frame
+        /// must be redrawn.
         bool InvalidateScene() noexcept;
 
     private:

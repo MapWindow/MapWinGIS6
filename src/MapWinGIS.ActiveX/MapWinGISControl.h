@@ -4,10 +4,11 @@
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
- * Provides automation for vector and raster loading, map navigation, file
- * drop, GDAL operations, rendering preferences, and map-layer painting. The control
- * owns one Core MapView, the only map and view state; it forwards host events
- * to it and draws its render scene through its viewport.
+ * Provides automation for vector, raster, and XYZ tile loading, map
+ * navigation, layer ordering, file drop, GDAL operations, and rendering
+ * preferences. The control owns one Core MapView, the only map and view
+ * state; it forwards host events to it and draws its render scene through its
+ * viewport.
  */
 #pragma once
 
@@ -41,8 +42,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
     public ATL::IDispatchImpl<
-        IMapWinGISControl6,
-        &IID_IMapWinGISControl6,
+        IMapWinGISControl7,
+        &IID_IMapWinGISControl7,
         &LIBID_MapWinGISActiveXLib,
         1,
         0>,
@@ -61,6 +62,7 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl7)
         COM_INTERFACE_ENTRY(IMapWinGISControl6)
         COM_INTERFACE_ENTRY(IMapWinGISControl5)
         COM_INTERFACE_ENTRY(IMapWinGISControl4)
@@ -70,7 +72,7 @@ public:
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
         COM_INTERFACE_ENTRY(IDropTarget)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
-        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl6)
+        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl7)
         COM_INTERFACE_ENTRY(IViewObjectEx)
         COM_INTERFACE_ENTRY(IViewObject2)
         COM_INTERFACE_ENTRY(IViewObject)
@@ -140,6 +142,14 @@ public:
     STDMETHOD(AnimateZoomToLayer)(LONGLONG layerId, LONG durationMilliseconds) override;
     STDMETHOD(get_IsAnimating)(VARIANT_BOOL* isAnimating) override;
     STDMETHOD(StopAnimation)() override;
+    STDMETHOD(MoveLayer)(
+        LONGLONG layerId,
+        LONG newPosition,
+        VARIANT_BOOL* changed) override;
+    STDMETHOD(LoadXyzTileLayer)(
+        BSTR urlTemplate,
+        LONG minimumZoom,
+        LONG maximumZoom) override;
     STDMETHOD(ClearLayers)() override;
     STDMETHOD(get_LayerLoaded)(VARIANT_BOOL* loaded) override;
     STDMETHOD(get_FeatureCount)(LONGLONG* count) override;

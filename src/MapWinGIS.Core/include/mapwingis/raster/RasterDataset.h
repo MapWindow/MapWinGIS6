@@ -4,8 +4,8 @@
  * @file RasterDataset.h
  * @brief Declares the read-only raster dataset and display-image API.
  *
- * Raster datasets expose their georeferenced bounds and a bounded RGBA
- * preview for map rendering. GDAL and raster-driver types stay private.
+ * Raster datasets expose georeferenced bounds, viewport-sized RGBA reads, and
+ * bounded previews. GDAL and raster-driver types stay private.
  */
 #pragma once
 
@@ -33,11 +33,12 @@ namespace mwg
     /// An open read-only GDAL raster data source.
     ///
     /// ReadImage limits its longest output edge to maxDimension and uses
-    /// nearest-neighbour resampling. Single-band data is displayed as
-    /// grayscale, paletted data uses its color table, and multiband data uses
-    /// RGB color interpretations or the first three bands. Nodata and alpha
-    /// bands are transparent. A non-empty target WKT reprojects the preview
-    /// before sampling.
+    /// nearest-neighbour resampling. ReadWindow reads only the visible source
+    /// window and samples it to the requested output dimensions. Single-band
+    /// data is displayed as grayscale, paletted data uses its color table,
+    /// and multiband data uses RGB color interpretations or the first three
+    /// bands. Nodata and alpha bands are transparent. A non-empty target WKT
+    /// reprojects the source before sampling.
     class MWG_CORE_API RasterDataset
     {
     public:
@@ -47,6 +48,15 @@ namespace mwg
 
         [[nodiscard]] static std::shared_ptr<RasterDataset> Open(
             const std::filesystem::path& path);
+
+        /// Opens an XYZ tile service using a URL containing {z}, {x}, and {y}.
+        /// Tiles use the Web Mercator matrix and are cached in memory by GDAL.
+        /// \throws InvalidArgument when the URL template or zoom range is invalid.
+        /// \throws OpenFailed when the GDAL WMS driver cannot open the service.
+        [[nodiscard]] static std::shared_ptr<RasterDataset> OpenXyzTiles(
+            const std::string& urlTemplate,
+            int minimumZoom = 0,
+            int maximumZoom = 19);
 
         [[nodiscard]] std::filesystem::path Path() const;
         [[nodiscard]] int Width() const noexcept;
@@ -58,6 +68,15 @@ namespace mwg
         [[nodiscard]] RasterImage ReadImage(
             const std::string& targetProjectionWkt = {},
             int maxDimension = 2048) const;
+
+        /// Reads an output image for a map-coordinate window. Pixels outside
+        /// the raster remain transparent; output dimensions are limited to
+        /// 16 million pixels.
+        [[nodiscard]] RasterImage ReadWindow(
+            const Extent& targetExtent,
+            const std::string& targetProjectionWkt,
+            int width,
+            int height) const;
 
     private:
         class Impl;

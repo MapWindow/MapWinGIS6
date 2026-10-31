@@ -332,6 +332,23 @@ TEST_F(MapRenderSceneTest, IncludesRasterPreviewAndExtentInMapScene)
     EXPECT_TRUE(scene.layers.front().scene.polygons.empty());
 }
 
+TEST_F(MapRenderSceneTest, ReadsRasterOnlyForTheRequestedViewAtItsPixelSize)
+{
+    const std::shared_ptr<RasterDataset> raster =
+        RasterDataset::Open(MakeRaster(_directory.Path()));
+    _map.AddRasterLayer(raster);
+
+    const rendering::MapRenderScene scene =
+        rendering::CreateMapRenderScene(_map, {2.0, 1.0, 10.0, 7.0}, 80, 60);
+
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_TRUE(scene.layers.front().raster.has_value());
+    EXPECT_EQ(scene.layers.front().raster->width, 80);
+    EXPECT_EQ(scene.layers.front().raster->height, 60);
+    EXPECT_DOUBLE_EQ(scene.layers.front().raster->extent.xMin, 2.0);
+    EXPECT_DOUBLE_EQ(scene.layers.front().raster->extent.yMax, 7.0);
+}
+
 TEST_F(MapRenderSceneTest, DuplicateLayersAreSeparateSceneLayers)
 {
     const std::shared_ptr<VectorDataset> dataset = OpenRectangles({{0.0, 0.0, 1.0, 1.0}});

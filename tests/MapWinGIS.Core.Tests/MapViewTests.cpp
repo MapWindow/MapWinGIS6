@@ -247,18 +247,61 @@ TEST_F(MapViewTest, MapChangesRebuildTheSceneAndReportARedraw)
     EXPECT_FALSE(_view.SetLayerVisible(second, true));
 }
 
+TEST_F(MapViewTest, MovingLayerChangesSceneOrderAndRequestsRedraw)
+{
+    const LayerId bottom = _view.AddLayer(OpenRectangles({{0.0, 0.0, 1.0, 1.0}}));
+    const LayerId top = _view.AddLayer(OpenRectangles({{2.0, 2.0, 3.0, 3.0}}));
+    ASSERT_EQ(_view.Scene().layers.size(), 2U);
+
+    ASSERT_TRUE(_view.MoveLayer(bottom, 1));
+    const auto& scene = _view.Scene();
+
+    ASSERT_EQ(scene.layers.size(), 2U);
+    EXPECT_EQ(scene.layers[0].layerId, top);
+    EXPECT_EQ(scene.layers[1].layerId, bottom);
+    EXPECT_FALSE(_view.MoveLayer(bottom, 1));
+    EXPECT_FALSE(_view.MoveLayer(LayerId{99}, 0));
+    EXPECT_THROW((void)_view.MoveLayer(bottom, 2), InvalidArgument);
+}
+
 TEST_F(MapViewTest, SceneIsReusedUntilTheMapChanges)
 {
-    _view.AddLayer(OpenRectangles({{0.0, 0.0, 1.0, 1.0}}));
+    const LayerId first = _view.AddLayer(OpenRectangles({{0.0, 0.0, 1.0, 1.0}}));
     const rendering::MapRenderScene& scene = _view.Scene();
     const rendering::Polygon* polygons = scene.layers.front().scene.polygons.data();
 
     ASSERT_TRUE(_view.Resize(300, 200));
     EXPECT_EQ(_view.Scene().layers.front().scene.polygons.data(), polygons);
 
+    _view.AddLayer(OpenRectangles({{2.0, 2.0, 3.0, 3.0}}));
+    EXPECT_EQ(_view.Scene().layers.front().scene.polygons.data(), polygons);
+
+    ASSERT_TRUE(_view.SetLayerVisible(first, false));
+    ASSERT_TRUE(_view.SetLayerVisible(first, true));
+    EXPECT_EQ(_view.Scene().layers.front().scene.polygons.data(), polygons);
+
     EXPECT_TRUE(_view.InvalidateScene());
     EXPECT_EQ(&_view.Scene(), &scene);
-    EXPECT_EQ(scene.layers.size(), 1U);
+    EXPECT_EQ(scene.layers.size(), 2U);
+}
+
+TEST_F(MapViewTest, RasterSceneTracksTheViewAndUsesViewportPixelDimensions)
+{
+    const std::shared_ptr<RasterDataset> raster =
+        RasterDataset::Open(MakeRaster(_directory.Path()));
+    ASSERT_TRUE(_view.Resize(60, 40));
+    _view.AddRasterLayer(raster);
+
+    const RasterImage first = *_view.Scene().layers.front().raster;
+    ASSERT_TRUE(_view.ZoomIn());
+    const RasterImage zoomed = *_view.Scene().layers.front().raster;
+
+    EXPECT_EQ(first.width, 60);
+    EXPECT_EQ(first.height, 40);
+    EXPECT_EQ(zoomed.width, 60);
+    EXPECT_EQ(zoomed.height, 40);
+    EXPECT_LT(zoomed.extent.Width(), first.extent.Width());
+    EXPECT_LT(zoomed.extent.Height(), first.extent.Height());
 }
 
 TEST_F(MapViewTest, ClearingLayersKeepsTheView)

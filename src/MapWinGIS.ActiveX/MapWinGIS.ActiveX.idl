@@ -182,6 +182,28 @@ library MapWinGISActiveXLib
         object,
         dual,
         oleautomation,
+        uuid(7D989B8F-2B70-4A5E-9AA4-81D0A16BF651),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl7 : IMapWinGISControl6
+    {
+        [id(30)]
+        HRESULT MoveLayer(
+            [in] hyper layerId,
+            [in] LONG newPosition,
+            [out, retval] VARIANT_BOOL* changed);
+
+        [id(31)]
+        HRESULT LoadXyzTileLayer(
+            [in] BSTR urlTemplate,
+            [in] LONG minimumZoom,
+            [in] LONG maximumZoom);
+    };
+
+    [
+        object,
+        dual,
+        oleautomation,
         uuid(65E33073-669C-43E3-9A96-EF8D38F5EDAC),
         pointer_default(unique)
     ]
@@ -232,7 +254,8 @@ library MapWinGISActiveXLib
     ]
     coclass MapWinGISControl
     {
-        [default] interface IMapWinGISControl6;
+        [default] interface IMapWinGISControl7;
+        interface IMapWinGISControl6;
         interface IMapWinGISControl5;
         interface IMapWinGISControl4;
         interface IMapWinGISControl3;

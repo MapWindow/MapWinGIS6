@@ -1125,6 +1125,39 @@ TEST_F(ActiveXMapTest, Control6ExposesNavigationHistoryAndAnimatedFit)
     EXPECT_EQ(isAnimating, VARIANT_FALSE);
 }
 
+TEST_F(ActiveXMapTest, Control7ExposesLayerReordering)
+{
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    ASSERT_EQ(LoadRectangles({{20, 0, 30, 5}}), S_OK);
+    ComPtr<IMapWinGISControl7> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+
+    LONGLONG bottomId = 0;
+    LONGLONG topId = 0;
+    ASSERT_EQ(automation->GetLayerId(0, &bottomId), S_OK);
+    ASSERT_EQ(automation->GetLayerId(1, &topId), S_OK);
+    VARIANT_BOOL changed = VARIANT_FALSE;
+    ASSERT_EQ(automation->MoveLayer(bottomId, 1, &changed), S_OK);
+    EXPECT_EQ(changed, VARIANT_TRUE);
+    ASSERT_EQ(automation->GetLayerId(0, &bottomId), S_OK);
+    EXPECT_EQ(bottomId, topId);
+    ASSERT_EQ(automation->MoveLayer(topId, 0, &changed), S_OK);
+    EXPECT_EQ(changed, VARIANT_FALSE);
+}
+
+TEST_F(ActiveXMapTest, Control7AddsXyzLayerWithoutFetchingUntilDraw)
+{
+    ComPtr<IMapWinGISControl7> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+    ATL::CComBSTR url(L"https://tiles.example.test/{z}/{x}/{y}.png");
+
+    ASSERT_EQ(automation->LoadXyzTileLayer(url, 0, 18), S_OK);
+
+    LONG layerCount = 0;
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+}
+
 TEST_F(ActiveXMapTest, KeyboardArrowKeysPanTheMap)
 {
     ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);

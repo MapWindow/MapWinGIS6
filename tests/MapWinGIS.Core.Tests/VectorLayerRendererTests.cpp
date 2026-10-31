@@ -571,6 +571,25 @@ TEST(VectorLayerRenderer, GdiDrawsLayersWithDifferentExtentsThroughOneViewport)
     ExpectTwoLayerPixels(surface.Get(), moved);
 }
 
+TEST(VectorLayerRenderer, ClipsOffscreenGeometryBeforeConvertingToGdiCoordinates)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    auto scene = MakeMapScene({
+        MakeRectangleLayer({-1.0e12, -1.0e12, 1.0e12, 1.0e12})});
+    mwg::rendering::VectorRenderScene lineLayer;
+    lineLayer.lines.push_back({{-1.0e12, 5.0}, {1.0e12, 5.0}});
+    scene.layers.push_back({mwg::LayerId{2}, std::move(lineLayer)});
+    const mwg::Viewport viewport = FitViewport(bounds);
+
+    mwg::activex::GdiVectorLayerRenderer gdi;
+    EXPECT_EQ(gdi.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_TRUE(gdi.GetFailedLayers().empty());
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(24, 58, 82));
+}
+
 TEST(VectorLayerRenderer, GdiAndOpenGlDrawMultipleLayersAtTheSameViewportPositions)
 {
     BitmapSurface gdiSurface(200, 120);

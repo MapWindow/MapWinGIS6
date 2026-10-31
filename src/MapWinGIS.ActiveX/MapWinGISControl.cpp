@@ -644,6 +644,42 @@ STDMETHODIMP CMapWinGISControl::SetLayerVisible(
     return S_OK;
 }
 
+STDMETHODIMP CMapWinGISControl::MoveLayer(
+    const LONGLONG layerId,
+    const LONG newPosition,
+    VARIANT_BOOL* changed)
+{
+    if (changed == nullptr)
+    {
+        return E_POINTER;
+    }
+    *changed = VARIANT_FALSE;
+    if (layerId <= 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    try
+    {
+        if (_view.MoveLayer(
+                mwg::LayerId{static_cast<std::uint64_t>(layerId)},
+                newPosition))
+        {
+            *changed = VARIANT_TRUE;
+            FireViewChange();
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_FAIL);
+    }
+}
+
 STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
 {
     if (path == nullptr)
@@ -760,6 +796,52 @@ STDMETHODIMP CMapWinGISControl::LoadRasterDataset(BSTR path)
             message,
             IID_IMapWinGISControl5,
             E_FAIL);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::LoadXyzTileLayer(
+    BSTR urlTemplate,
+    const LONG minimumZoom,
+    const LONG maximumZoom)
+{
+    if (urlTemplate == nullptr)
+    {
+        return E_INVALIDARG;
+    }
+    const UINT length = ::SysStringLen(urlTemplate);
+    if (length == 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    try
+    {
+        const std::wstring urlText(urlTemplate, static_cast<std::size_t>(length));
+        if (urlText.find(L'\0') != std::wstring::npos)
+        {
+            return E_INVALIDARG;
+        }
+        std::string url;
+        const HRESULT conversionResult = BstrToUtf8(urlTemplate, url);
+        if (FAILED(conversionResult))
+        {
+            return conversionResult;
+        }
+        auto dataset = mwg::RasterDataset::OpenXyzTiles(
+            url,
+            minimumZoom,
+            maximumZoom);
+        (void)_view.AddRasterLayer(std::move(dataset));
+        FireViewChange();
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_FAIL);
     }
 }
 

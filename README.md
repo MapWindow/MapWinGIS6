@@ -18,7 +18,8 @@ selectively and must not prevent structural improvements.
 ## Status
 
 Early. The core includes GDAL setup, OGR-backed vector dataset and layer
-access, raster display previews, coordinate reprojection, and map navigation.
+access, viewport-windowed raster display, XYZ tile layers, coordinate
+reprojection, and map navigation.
 Available formats depend on the GDAL drivers enabled in the build; tests cover
 shapefiles and GeoPackage. The ActiveX layer supports COM activation, vector
 and raster loading, polygon/line/point rendering, keyboard, touch and mouse
@@ -27,9 +28,10 @@ algorithms with progress and cancellation events.
 
 The map uses the first layer's declared coordinate reference system (CRS).
 Layers in other declared CRSs are reprojected into it; layers with and without
-a CRS cannot be mixed. Raster display uses a bounded preview image. OpenGL
-renders supported simple polygons; GDI draws polygons, lines, points, and
-raster previews.
+a CRS cannot be mixed. Raster layers are read for the visible map window at
+viewport resolution. XYZ URL templates are supported as Web Mercator tile
+layers, with GDAL-managed in-memory tile caching. OpenGL renders supported
+simple polygons; GDI clips and draws polygons, lines, points, and rasters.
 
 The core supports pan, center and cursor-anchored zoom, map/layer fitting,
 back/forward navigation history, and timed animated fits. ActiveX exposes
@@ -39,8 +41,8 @@ the control's owner-thread timer.
 
 Vector loads add layers rather than replace them. The first layer fits the
 initial view; later loads preserve it. Call `ZoomToMap` to include new layers
-in the visible extent, or `ClearLayers` to release loaded datasets before
-switching or refreshing them.
+in the visible extent, `MoveLayer` to change drawing order, or `ClearLayers`
+to release loaded datasets before switching or refreshing them.
 
 Dropped vector and raster files append as layers and the control fits the
 combined visible extent after processing the batch. Unsupported or invalid
