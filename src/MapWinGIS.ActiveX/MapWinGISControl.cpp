@@ -2,7 +2,7 @@
 
 /**
  * @file MapWinGISControl.cpp
- * @brief Implements vector loading, ActiveX state reporting, and host drawing.
+ * @brief Implements vector loading, file drop, ActiveX state, and host drawing.
  *
  * Redraws: every map or view change made through the control goes through
  * its MapView; the control calls FireViewChange when the MapView reports
@@ -12,6 +12,7 @@
 #include "MapWinGISControl.h"
 
 #include <atlconv.h>
+#include <shellapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -89,6 +90,117 @@ namespace
         default:
             return L"Automatic";
         }
+    }
+
+    [[nodiscard]] bool HasFileDropFormat(IDataObject* data) noexcept
+    {
+        if (data == nullptr)
+        {
+            return false;
+        }
+
+        FORMATETC format{
+            CF_HDROP,
+            nullptr,
+            DVASPECT_CONTENT,
+            -1,
+            TYMED_HGLOBAL};
+        return SUCCEEDED(data->QueryGetData(&format));
+    }
+
+    class StgMediumGuard final
+    {
+    public:
+        explicit StgMediumGuard(STGMEDIUM& medium) noexcept
+            : _medium(medium)
+        {
+        }
+
+        ~StgMediumGuard()
+        {
+            ::ReleaseStgMedium(&_medium);
+        }
+
+        StgMediumGuard(const StgMediumGuard&) = delete;
+        StgMediumGuard& operator=(const StgMediumGuard&) = delete;
+
+    private:
+        STGMEDIUM& _medium;
+    };
+
+    [[nodiscard]] HRESULT GetDroppedPaths(
+        IDataObject* data,
+        std::vector<std::filesystem::path>& paths)
+    {
+        if (data == nullptr)
+        {
+            return E_POINTER;
+        }
+
+        FORMATETC format{
+            CF_HDROP,
+            nullptr,
+            DVASPECT_CONTENT,
+            -1,
+            TYMED_HGLOBAL};
+        STGMEDIUM medium{};
+        const HRESULT result = data->GetData(&format, &medium);
+        if (FAILED(result))
+        {
+            return result;
+        }
+        const StgMediumGuard mediumGuard(medium);
+        if (medium.tymed != TYMED_HGLOBAL || medium.hGlobal == nullptr)
+        {
+            return DV_E_TYMED;
+        }
+
+        const HDROP drop = static_cast<HDROP>(medium.hGlobal);
+        const UINT count = ::DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        if (count == 0)
+        {
+            return DV_E_FORMATETC;
+        }
+
+        paths.clear();
+        paths.reserve(count);
+        for (UINT index = 0; index < count; ++index)
+        {
+            const UINT length = ::DragQueryFileW(drop, index, nullptr, 0);
+            if (length == 0 || length == std::numeric_limits<UINT>::max())
+            {
+                return DV_E_FORMATETC;
+            }
+
+            std::wstring path(length + 1, L'\0');
+            const UINT copied = ::DragQueryFileW(
+                drop,
+                index,
+                path.data(),
+                static_cast<UINT>(path.size()));
+            if (copied != length)
+            {
+                return DV_E_FORMATETC;
+            }
+            path.resize(copied);
+            paths.emplace_back(std::move(path));
+        }
+        return S_OK;
+    }
+
+    void LogDropFailure(
+        const std::filesystem::path& path,
+        const HRESULT result) noexcept
+    {
+        wchar_t message[64]{};
+        (void)::swprintf_s(
+            message,
+            64,
+            L"MapWinGIS could not load dropped file (HRESULT 0x%08lX): ",
+            static_cast<unsigned long>(result));
+        ::OutputDebugStringW(message);
+        ::OutputDebugStringW(path.c_str());
+        ::OutputDebugStringW(L"\n");
     }
 }
 
@@ -683,6 +795,198 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
 
     FireViewChange();
     return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::GetDropTarget(IDropTarget** dropTarget)
+{
+    if (dropTarget == nullptr)
+    {
+        return E_POINTER;
+    }
+
+    *dropTarget = static_cast<IDropTarget*>(this);
+    AddRef();
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::DragEnter(
+    IDataObject* data,
+    DWORD,
+    POINTL,
+    DWORD* effect)
+{
+    if (effect == nullptr)
+    {
+        return E_POINTER;
+    }
+
+    const DWORD allowedEffects = *effect;
+    *effect = DROPEFFECT_NONE;
+    _dropAcceptsFiles =
+        (allowedEffects & DROPEFFECT_COPY) != 0 && HasFileDropFormat(data);
+    if (_dropAcceptsFiles)
+    {
+        *effect = DROPEFFECT_COPY;
+    }
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::DragOver(DWORD, POINTL, DWORD* effect)
+{
+    if (effect == nullptr)
+    {
+        return E_POINTER;
+    }
+
+    if (_dropAcceptsFiles && (*effect & DROPEFFECT_COPY) != 0)
+    {
+        *effect = DROPEFFECT_COPY;
+    }
+    else
+    {
+        *effect = DROPEFFECT_NONE;
+    }
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::DragLeave()
+{
+    _dropAcceptsFiles = false;
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::Drop(
+    IDataObject* data,
+    DWORD,
+    POINTL,
+    DWORD* effect)
+{
+    if (effect == nullptr)
+    {
+        return E_POINTER;
+    }
+
+    const DWORD allowedEffects = *effect;
+    *effect = DROPEFFECT_NONE;
+    _dropAcceptsFiles = false;
+    if ((allowedEffects & DROPEFFECT_COPY) == 0)
+    {
+        return S_OK;
+    }
+
+    std::vector<std::filesystem::path> paths;
+    try
+    {
+        const HRESULT extractResult = GetDroppedPaths(data, paths);
+        if (FAILED(extractResult))
+        {
+            ::OutputDebugStringA("MapWinGIS rejected dropped data without usable file paths.\n");
+            return extractResult;
+        }
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        ::OutputDebugStringA(exception.what());
+        return E_FAIL;
+    }
+
+    bool loadedAny = false;
+    HRESULT firstFailure = S_OK;
+    for (const std::filesystem::path& path : paths)
+    {
+        std::error_code fileError;
+        if (!std::filesystem::exists(path, fileError))
+        {
+            const HRESULT pathResult = fileError
+                ? HRESULT_FROM_WIN32(static_cast<DWORD>(fileError.value()))
+                : HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+            LogDropFailure(path, pathResult);
+            if (SUCCEEDED(firstFailure))
+            {
+                firstFailure = pathResult;
+            }
+            continue;
+        }
+
+        HRESULT loadResult = E_FAIL;
+        try
+        {
+            const std::wstring pathText = path.native();
+            if (pathText.size() > std::numeric_limits<UINT>::max())
+            {
+                loadResult = E_INVALIDARG;
+            }
+            else
+            {
+                BSTR pathBstr = ::SysAllocStringLen(
+                    pathText.data(),
+                    static_cast<UINT>(pathText.size()));
+                if (pathBstr == nullptr)
+                {
+                    loadResult = E_OUTOFMEMORY;
+                }
+                else
+                {
+                    loadResult = LoadVectorDataset(pathBstr);
+                    ::SysFreeString(pathBstr);
+                }
+            }
+        }
+        catch (const std::bad_alloc&)
+        {
+            loadResult = E_OUTOFMEMORY;
+        }
+        catch (const std::exception& exception)
+        {
+            ::OutputDebugStringA(exception.what());
+            if (SUCCEEDED(firstFailure))
+            {
+                firstFailure = E_FAIL;
+            }
+        }
+
+        if (FAILED(loadResult))
+        {
+            LogDropFailure(path, loadResult);
+            if (SUCCEEDED(firstFailure))
+            {
+                firstFailure = loadResult;
+            }
+            if (loadResult == E_OUTOFMEMORY)
+            {
+                break;
+            }
+            continue;
+        }
+        loadedAny = true;
+    }
+
+    if (loadedAny)
+    {
+        try
+        {
+            if (_view.FitToMap())
+            {
+                FireViewChange();
+            }
+        }
+        catch (const std::exception& exception)
+        {
+            ::OutputDebugStringA(exception.what());
+            if (SUCCEEDED(firstFailure))
+            {
+                firstFailure = E_FAIL;
+            }
+        }
+        *effect = DROPEFFECT_COPY;
+        return FAILED(firstFailure) ? S_FALSE : S_OK;
+    }
+
+    return FAILED(firstFailure) ? firstFailure : E_FAIL;
 }
 
 bool CMapWinGISControl::ResizeView(const LONG width, const LONG height) noexcept

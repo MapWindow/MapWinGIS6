@@ -28,11 +28,17 @@ The core also supports a shared map viewport with pan, center zoom, anchored
 zoom, and fitting to the visible map or a named layer. These navigation calls
 do not depend on a window. ActiveX exposes map/layer zoom operations and
 supports cursor-anchored mouse-wheel zoom and left-button drag-to-pan.
+The ActiveX control also accepts supported vector datasets through file
+drag-and-drop.
 
 Vector loads add layers rather than replace them. The first layer fits the
 initial view; later loads preserve it. Call `ZoomToMap` to include new layers
 in the visible extent, or `ClearLayers` to release loaded datasets before
 switching or refreshing them.
+
+Dropped files append as layers and the control fits the combined visible
+extent after processing the batch. Unsupported or invalid files are skipped;
+valid files in the same drop are still loaded.
 
 ## Build and test
 
