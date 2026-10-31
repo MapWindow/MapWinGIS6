@@ -196,6 +196,67 @@ the MSBuild solution above stays the supported build. The audit of the current
 MSBuild settings and the decisions the CMake build follows are in
 [CMAKE-MIGRATION.md](CMAKE-MIGRATION.md).
 
+### Building with CMake
+
+The CMake build currently covers `MapWinGIS.Core.dll`; the ActiveX control,
+tests and samples follow. It needs CMake 3.28 or later and Ninja; both ship
+with Visual Studio 2026 and CLion. Run the bootstrap script first, then
+configure from a VS 2026 Developer PowerShell (or any shell after
+`vcvarsall.bat x64`):
+
+```powershell
+pwsh -File build\scripts\bootstrap-vcpkg.ps1
+cmake --preset x64-debug
+cmake --build --preset x64-debug
+```
+
+| Preset | Generator | Build directory |
+|---|---|---|
+| `x64-debug`, `x64-release` | Ninja, x64 | `out\b\x64d`, `out\b\x64r` |
+| `x86-debug`, `x86-release` | Ninja, Win32 (vcvars `x86` or `amd64_x86`) | `out\b\x86d`, `out\b\x86r` |
+| `vs2026-x64`, `vs2026-x86` | Visual Studio 18 2026, `-T v145` (build presets `vs2026-x64-debug`, ...) | `out\b\vs-x64`, `out\b\vs-x86` |
+
+- Output goes to `<build directory>\bin` (`bin\<Config>` for the Visual Studio
+  presets) and import libraries to `lib`, never to the MSBuild `bin\` folder, so
+  both builds can be used side by side.
+- The vcpkg root is found in the same order as above. CMake uses its own install
+  tree, `vcpkg_installed\cmake-<Platform>`, shared by Debug and Release; the
+  binary cache makes it cheap.
+- Manifest features come from `VCPKG_MANIFEST_FEATURES` (presets: `tests`). A
+  change takes effect on the next configure; in CLion use
+  **Tools | CMake | Reset Cache and Reload Project** when a cached value is stale.
+- Only `Debug` and `Release` are supported. Other `CMAKE_BUILD_TYPE` values,
+  such as CLion's default `RelWithDebInfo`, are rejected.
+- Ninja takes the toolset and Windows SDK from the vcvars environment and
+  cannot pin them; configure warns when the SDK differs from `MWG_WINDOWS_SDK`.
+  The Visual Studio presets pin both.
+- The presets' `architecture` only informs Visual Studio. In CLion, give each
+  preset profile a Visual Studio toolchain with the matching architecture
+  (`amd64` for x64, `x86` or `amd64_x86` for x86); a mismatch stops configure
+  with an explanation.
+
+| CMake option | Default | MSBuild equivalent |
+|---|---|---|
+| `MWG_WINDOWS_SDK` | `10.0.28000.0` | `MwgWindowsSdk` (`10.0` = newest) |
+| `MWG_VCPKG_ROOT` | resolved | `MwgVcpkgRoot` |
+| `VCPKG_MANIFEST_FEATURES` | `tests` | `MwgVcpkgFeatures` |
+| `MWG_ENABLE_ASAN` | `OFF` | `MwgEnableAsan` |
+| `MWG_DEPLOY_RUNTIME_DATA` | `ON` | `MwgDeployRuntimeData` |
+| `MWG_BUILD_TESTS` | `ON` | — (adds the `tests` feature) |
+| `MWG_BUILD_SAMPLES` | `ON` | — |
+
+Machine-specific settings belong in an uncommitted `CMakeUserPresets.json`
+that inherits from the presets, for example:
+
+```json
+{
+  "version": 6,
+  "configurePresets": [
+    { "name": "my-x64-debug", "inherits": "x64-debug", "cacheVariables": { "MWG_WINDOWS_SDK": "10.0" } }
+  ]
+}
+```
+
 To measure flag and binary parity, `build\scripts\Compare-CompileCommands.ps1`
 records a detailed MSBuild log and writes a normalised report to `out\parity\`.
 It finds MSBuild through `MWG_MSBUILD`, `PATH` or `vswhere`, so it also works
