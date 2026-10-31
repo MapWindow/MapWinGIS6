@@ -166,8 +166,10 @@ take snapshots.
   resolution that shows it on both axes, so the other axis expands. Padding
   is kept free on every side. Extent edges map to the centers of the
   outermost pixels inside the padding, so pixel rounding never pushes
-  boundary geometry outside the viewport. A zero-span axis does not constrain
-  the resolution; a single point keeps the current resolution. Invalid
+  boundary geometry outside the viewport. If padding does not fit, the extent
+  spans half a pixel around the center instead. A zero-span axis does not constrain
+  the resolution. A single point keeps the current resolution, or uses
+  `kDefaultPointResolution` when no view exists. Invalid
   extents and zero-sized viewports return `false` without changing the view.
 - **Limits.** Sizes are limited to `kMaxDimension` pixels. Centers are clamped
   to `±kMaxCoordinate` and resolutions to `[MinResolution(center),
@@ -186,7 +188,9 @@ has no extent or transform of its own.
   every visible layer into an owned `MapRenderScene`, bottom layer first. Each
   layer is converted on its own: hidden layers, layers without polygon
   geometry, and layers that fail (for example, non-polygon layers) are listed
-  in `skippedLayers` with a reason and do not stop the other layers. The scene
+  in `skippedLayers` with a reason and do not stop the other layers.
+  This includes `std::exception` errors except `std::bad_alloc`, which propagates.
+  Exceptions outside that hierarchy also propagate. The scene
   holds no view state and no references to the map or its datasets.
 - **Shared viewport.** Renderers draw the scene through the `Viewport` passed
   with it, so every layer uses the same transformation. A view change, such as
@@ -228,8 +232,10 @@ objects after a draw, and they keep no view state. Core dataset and layer
 objects are not thread-safe, so the control must serialize their use.
 The OpenGL backend owns its WGL context and reusable pixel buffers; those
 resources are released with the control. `WM_SIZE` resizes the `MapView`
-viewport, and `OnDraw` also sets it to the drawn bounds because windowless
-hosts never send `WM_SIZE`; a redraw is requested only when the view changed.
+viewport. For windowless hosts, `SetObjectRects` supplies the live size.
+`OnDraw` uses a viewport copy sized to the drawing target. Printing, metafile
+output, and scaled draws do not change the live viewport or its pending fit.
+If no view exists yet, drawing fits only that copy to the visible map extent.
 Resizing updates the OpenGL viewport and staging buffers without changing
 ownership of map data.
 
@@ -264,9 +270,10 @@ The `RenderingBackendPreference` automation property is configurable as
 backend first and fall back to GDI when the scene, hardware, allocation, or
 drawing operation is unsupported. The control reports the active backend and
 the reason for a fallback through `RenderingBackend` and `RenderingStatus`.
-These rendering properties are on `IMapWinGISControl2`, the coclass default
-interface, which derives from `IMapWinGISControl`; the original interface and
-its IID are left unchanged so clients built against it keep working.
+These rendering properties are on `IMapWinGISControl2`, which derives from
+`IMapWinGISControl`. The coclass default interface is now `IMapWinGISControl3`,
+which derives from `IMapWinGISControl2` and adds `ClearLayers` at DISPID 8.
+The earlier interfaces and their IIDs remain unchanged.
 OpenGL capability detection checks framebuffer-object entry points, the
 maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
@@ -310,12 +317,19 @@ COM reference cancels outstanding work and drops queued notifications.
 Workers never retain COM references or wait for event handlers.
 
 `LoadVectorDataset` adds the first vector layer of a dataset on top of the
-map; earlier layers stay loaded, so calling it again shows several layers.
+map. Earlier layers stay loaded, so calling it again shows several layers.
+This includes repeated loads of the same dataset. Call `ClearLayers` before
+switching or refreshing datasets to avoid duplicate layers. It releases all
+loaded datasets and clears the feature total, but keeps the view.
 The layer must be polygon-compatible: a dataset whose first layer has another
 geometry type fails to load and is not added, even if a later layer is
-polygonal. An empty polygon layer loads but draws nothing.
+polygonal. An empty polygon layer loads but draws nothing. The control reads
+and validates the candidate layer before adding it, so a rejected load cannot
+change the live viewport or schedule a fit.
 `LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
-the total over all layers. Until the control exposes navigation, every load
+the cached total over all loaded layers. The control updates the total after
+a successful load and resets it on `ClearLayers`. Property reads do not scan
+datasets or rebuild the scene. Until the control exposes navigation, every load
 fits the view to the whole map. Raster layers and other geometry types are
 not rendered. There is no reprojection, so coordinates remain in the source
 coordinate system and layers are assumed to share one.

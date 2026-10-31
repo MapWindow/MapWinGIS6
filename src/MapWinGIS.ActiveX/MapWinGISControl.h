@@ -38,8 +38,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
     public ATL::IDispatchImpl<
-        IMapWinGISControl2,
-        &IID_IMapWinGISControl2,
+        IMapWinGISControl3,
+        &IID_IMapWinGISControl3,
         &LIBID_MapWinGISActiveXLib,
         1,
         0>,
@@ -58,11 +58,12 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl3)
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
-        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl2)
+        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl3)
         COM_INTERFACE_ENTRY(IViewObjectEx)
         COM_INTERFACE_ENTRY(IViewObject2)
         COM_INTERFACE_ENTRY(IViewObject)
@@ -93,6 +94,7 @@ public:
 
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
     STDMETHOD(LoadVectorDataset)(BSTR path) override;
+    STDMETHOD(ClearLayers)() override;
     STDMETHOD(get_LayerLoaded)(VARIANT_BOOL* loaded) override;
     STDMETHOD(get_FeatureCount)(LONGLONG* count) override;
     STDMETHOD(get_RenderingBackend)(BSTR* backend) override;
@@ -115,6 +117,7 @@ public:
         BSTR* diagnostics,
         SAFEARRAY** warnings) override;
     STDMETHOD(Close)(DWORD saveOption) override;
+    STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnGdalDispatch(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -129,6 +132,7 @@ private:
     bool ResizeView(LONG width, LONG height) noexcept;
 
     mwg::MapView _view;
+    LONGLONG _featureCount = 0;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
 };

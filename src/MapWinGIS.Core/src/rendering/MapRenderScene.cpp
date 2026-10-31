@@ -6,9 +6,9 @@
  */
 #include "mapwingis/rendering/MapRenderScene.h"
 
+#include <exception>
+#include <new>
 #include <utility>
-
-#include "mapwingis/core/Error.h"
 
 #include "internal/VectorRenderSceneBuilder.h"
 
@@ -31,7 +31,11 @@ namespace mwg::rendering
             {
                 scene = detail::BuildVectorRenderScene(layer.Source());
             }
-            catch (const CoreError& error)
+            catch (const std::bad_alloc&)
+            {
+                throw;
+            }
+            catch (const std::exception& error)
             {
                 result.skippedLayers.push_back({layer.Id(), LayerSkipReason::Failed, error.what()});
                 continue;

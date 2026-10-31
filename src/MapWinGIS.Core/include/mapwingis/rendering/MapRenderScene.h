@@ -71,7 +71,8 @@ namespace mwg::rendering
     /// The scene is a snapshot: later changes to the map or its sources are
     /// not reflected, so create a new scene after the map changes. Reads
     /// every visible layer completely. Not thread-safe; see Map.
-    /// \throws std::bad_alloc when memory runs out. Errors of single layers
-    ///         are reported in skippedLayers instead of thrown.
+    /// \throws std::bad_alloc when memory runs out. Other std::exception
+    ///         errors from individual layers are reported in skippedLayers.
+    ///         Exceptions not derived from std::exception propagate.
     [[nodiscard]] MWG_CORE_API MapRenderScene CreateMapRenderScene(const Map& map);
 }

@@ -20,6 +20,8 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <fstream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -30,6 +32,7 @@
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
+#include "mapwingis/map/Viewport.h"
 
 namespace
 {
@@ -747,6 +750,153 @@ namespace
         HMODULE _handle;
     };
 
+    class ActiveXMapTest : public testing::Test
+    {
+    protected:
+        void SetUp() override
+        {
+            ASSERT_TRUE(SUCCEEDED(_apartment.Result()));
+            wchar_t executablePath[MAX_PATH]{};
+            const DWORD length = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
+            ASSERT_GT(length, 0U);
+            ASSERT_LT(length, static_cast<DWORD>(MAX_PATH));
+            _module = std::make_unique<Module>(LoadLibraryW(
+                (std::filesystem::path(executablePath).parent_path() / L"MapWinGIS.ocx").c_str()));
+            ASSERT_NE(_module->Get(), nullptr);
+            using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+            const auto getClassObject = reinterpret_cast<GetClassObject>(
+                GetProcAddress(_module->Get(), "DllGetClassObject"));
+            ASSERT_NE(getClassObject, nullptr);
+            ComPtr<IClassFactory> factory;
+            ASSERT_EQ(getClassObject(__uuidof(MapWinGISControl), IID_PPV_ARGS(&factory)), S_OK);
+            ASSERT_EQ(factory->CreateInstance(nullptr, IID_PPV_ARGS(&_control)), S_OK);
+            ASSERT_EQ(_control.As(&_window), S_OK);
+            ASSERT_EQ(_control.As(&_viewObject), S_OK);
+            ASSERT_EQ(_control->put_RenderingBackendPreference(ATL::CComBSTR(L"GDI")), S_OK);
+        }
+
+        HRESULT LoadRectangles(const std::vector<mwg::Extent>& rectangles)
+        {
+            const auto path = mwg::test::MakeRectanglesDataset(
+                _directory.Path(), "layer-" + std::to_string(_datasetCount++) + ".gpkg", rectangles);
+            return _control->LoadVectorDataset(ATL::CComBSTR(path.c_str()));
+        }
+
+        HRESULT LoadLine()
+        {
+            const auto path = _directory.Path() / "line.geojson";
+            std::ofstream output(path);
+            output << R"({"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1000,1000],[1010,1010]]}}]})";
+            output.close();
+            if (!output)
+            {
+                return E_FAIL;
+            }
+            return _control->LoadVectorDataset(ATL::CComBSTR(path.c_str()));
+        }
+
+        HRESULT Resize(const int width, const int height)
+        {
+            LRESULT result = 0;
+            return _window->OnWindowMessage(WM_SIZE, 0, MAKELPARAM(width, height), &result);
+        }
+
+        HRESULT Draw(const HDC target, const int width, const int height)
+        {
+            const RECTL bounds{0, 0, width, height};
+            return _viewObject->Draw(
+                DVASPECT_CONTENT, -1, nullptr, nullptr, nullptr, target,
+                &bounds, nullptr, nullptr, 0);
+        }
+
+        ComApartment _apartment;
+        std::unique_ptr<Module> _module;
+        mwg::test::TempDirectory _directory;
+        ComPtr<IMapWinGISControl3> _control;
+        ComPtr<IOleInPlaceObjectWindowless> _window;
+        ComPtr<IViewObjectEx> _viewObject;
+        int _datasetCount = 0;
+    };
+
+}
+
+TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
+{
+    ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}, {3, 0, 5, 2}}), S_OK);
+    ASSERT_EQ(LoadRectangles({{10, 0, 12, 2}}), S_OK);
+    LONGLONG count = -1;
+    for (int read = 0; read < 3; ++read)
+    {
+        ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+        EXPECT_EQ(count, 3);
+    }
+    EXPECT_EQ(_control->get_FeatureCount(nullptr), E_POINTER);
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    VARIANT_BOOL loaded = VARIANT_TRUE;
+    ASSERT_EQ(_control->get_LayerLoaded(&loaded), S_OK);
+    EXPECT_EQ(loaded, VARIANT_FALSE);
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 0);
+    // Windows refuses an exclusive file open while GDAL still holds it.
+    const auto path = _directory.Path() / "layer-0.gpkg";
+    const HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    ASSERT_NE(file, INVALID_HANDLE_VALUE);
+    CloseHandle(file);
+    ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}}), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 1);
+}
+
+TEST_F(ActiveXMapTest, RejectedLoadsLeaveTheMapAndRenderingUnchanged)
+{
+    EXPECT_EQ(LoadLine(), E_FAIL);
+    VARIANT_BOOL loaded = VARIANT_TRUE;
+    ASSERT_EQ(_control->get_LayerLoaded(&loaded), S_OK);
+    EXPECT_EQ(loaded, VARIANT_FALSE);
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    BitmapSurface before(120, 100);
+    BitmapSurface after(120, 100);
+    ASSERT_TRUE(before.IsValid());
+    ASSERT_TRUE(after.IsValid());
+    ASSERT_EQ(Draw(before.Get(), 120, 100), S_OK);
+    EXPECT_EQ(LoadLine(), E_FAIL);
+    LONGLONG count = -1;
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 1);
+    ASSERT_EQ(Draw(after.Get(), 120, 100), S_OK);
+    for (int y = 0; y < 100; ++y)
+    {
+        for (int x = 0; x < 120; ++x)
+        {
+            ASSERT_EQ(GetPixel(before.Get(), x, y), GetPixel(after.Get(), x, y)) << x << ", " << y;
+        }
+    }
+}
+
+TEST_F(ActiveXMapTest, AlternateDrawBoundsDoNotChangeTheLiveSizeUsedForFitting)
+{
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 24, 18), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    mwg::Viewport expected(120, 100);
+    ASSERT_TRUE(expected.FitExtent({0, 0, 10, 5}, 12.0));
+    const auto sample = mwg::ToPixel(*expected.MapToScreen({1, 2.5}));
+    ASSERT_TRUE(sample.has_value());
+    EXPECT_EQ(GetPixel(surface.Get(), sample->x, sample->y), RGB(61, 122, 169));
+    ASSERT_EQ(Resize(200, 120), S_OK);
+    BitmapSurface resized(200, 120);
+    ASSERT_TRUE(resized.IsValid());
+    ASSERT_EQ(Draw(resized.Get(), 200, 120), S_OK);
+    expected.SetSize(200, 120);
+    const auto moved = mwg::ToPixel(*expected.MapToScreen({1, 2.5}));
+    ASSERT_TRUE(moved.has_value());
+    EXPECT_EQ(GetPixel(resized.Get(), moved->x, moved->y), RGB(61, 122, 169));
 }
 
 TEST(ActiveXActivation, CreatesControlThroughClassFactory)

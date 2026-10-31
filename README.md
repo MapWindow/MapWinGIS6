@@ -24,6 +24,9 @@ and GeoPackage. The ActiveX layer supports COM activation, vector loading,
 polygon rendering, and asynchronous generic GDAL algorithms with progress and
 cancellation events.
 
+Vector loads add layers rather than replace them. Call `ClearLayers` to
+release the loaded datasets before switching or refreshing them.
+
 ## Build and test
 
 ### Prerequisites

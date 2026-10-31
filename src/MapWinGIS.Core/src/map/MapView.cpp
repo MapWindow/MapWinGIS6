@@ -117,8 +117,8 @@ namespace mwg
             return true;
         }
 
-        // FitExtent fails for an invalid extent or a zero-sized viewport;
-        // only the second can succeed later without another request.
+        // Valid extents, including points and lines, fit any positive size.
+        // Padding that cannot fit is reduced by Viewport::FitExtent.
         if (extent.IsValid())
         {
             _impl->_pendingFitPadding = paddingPixels;
