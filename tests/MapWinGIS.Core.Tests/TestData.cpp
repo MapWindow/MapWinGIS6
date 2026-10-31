@@ -170,6 +170,46 @@ namespace mwg::test
         return path;
     }
 
+    std::filesystem::path MakeRectanglesDataset(const std::filesystem::path& directory,
+                                                const std::string& fileName,
+                                                const std::span<const Extent> rectangles)
+    {
+        GdalEnvironment::Initialize();
+
+        const std::filesystem::path path = directory / fileName;
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+        if (driver == nullptr) throw std::runtime_error("GPKG driver is not available");
+
+        GDALDatasetUniquePtr dataset(
+            driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+        if (!dataset) throw std::runtime_error("Cannot create " + ToUtf8(path));
+
+        OGRLayer* layer = dataset->CreateLayer("rectangles", nullptr, wkbPolygon, nullptr);
+        if (layer == nullptr) throw std::runtime_error("Cannot create layer");
+
+        for (const Extent& rectangle : rectangles)
+        {
+            OGRLinearRing ring;
+            ring.addPoint(rectangle.xMin, rectangle.yMin);
+            ring.addPoint(rectangle.xMax, rectangle.yMin);
+            ring.addPoint(rectangle.xMax, rectangle.yMax);
+            ring.addPoint(rectangle.xMin, rectangle.yMax);
+            ring.closeRings();
+
+            OGRPolygon polygon;
+            polygon.addRing(&ring);
+            OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
+            if (feature->SetGeometry(&polygon) != OGRERR_NONE ||
+                layer->CreateFeature(feature.get()) != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot write rectangle feature");
+            }
+        }
+
+        dataset.reset();
+        return path;
+    }
+
     std::filesystem::path MakeSampleShapefile(const std::filesystem::path& directory,
                                               const std::string& baseName)
     {

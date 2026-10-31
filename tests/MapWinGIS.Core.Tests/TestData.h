@@ -11,7 +11,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
+
+#include "mapwingis/core/Extent.h"
 
 namespace mwg::test
 {
@@ -68,6 +71,14 @@ namespace mwg::test
         static constexpr double kMaxX = 3.0;
         static constexpr double kMaxY = 1.0;
     };
+
+    /// Writes a GeoPackage with one polygon layer named "rectangles" that has
+    /// one axis-aligned rectangle feature per extent, in the given order, and
+    /// no projection. With no extents the layer is empty and has no extent.
+    /// Used for map and multi-layer tests that need layers at chosen places.
+    std::filesystem::path MakeRectanglesDataset(const std::filesystem::path& directory,
+                                                const std::string& fileName,
+                                                std::span<const Extent> rectangles);
 
     /// Creates a directory that is deleted when the object goes out of scope.
     class TempDirectory
