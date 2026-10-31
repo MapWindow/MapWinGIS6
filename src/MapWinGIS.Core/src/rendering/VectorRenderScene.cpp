@@ -19,6 +19,7 @@
 #include "mapwingis/vector/VectorDataset.h"
 
 #include "internal/VectorLayerAccess.h"
+#include "internal/VectorRenderSceneBuilder.h"
 
 namespace mwg::rendering
 {
@@ -96,7 +97,7 @@ namespace mwg::rendering
         }
     }
 
-    VectorRenderScene CreateVectorRenderScene(const VectorLayer& layer)
+    VectorRenderScene detail::BuildVectorRenderScene(const VectorLayer& layer)
     {
         if (BaseShapeType(layer.Type()) != ShapeType::Polygon)
         {
@@ -106,13 +107,18 @@ namespace mwg::rendering
         VectorRenderScene scene;
         scene.extent = layer.GetExtent();
         scene.sourceFeatureCount = layer.FeatureCount();
-        detail::VectorLayerAccess::ForEachGeometry(
+        mwg::detail::VectorLayerAccess::ForEachGeometry(
             layer,
             [&scene](const OGRGeometry& geometry)
             {
                 AppendGeometry(geometry, scene);
             });
+        return scene;
+    }
 
+    VectorRenderScene CreateVectorRenderScene(const VectorLayer& layer)
+    {
+        VectorRenderScene scene = detail::BuildVectorRenderScene(layer);
         if (scene.polygons.empty())
         {
             throw CoreError("Vector layer contains no polygon geometry to render");
