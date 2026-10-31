@@ -64,6 +64,7 @@
     <ClCompile Include="GdalUtilsTests.cpp" />
     <ClCompile Include="ActiveXActivationTests.cpp" />
     <ClCompile Include="Main.cpp" />
+    <ClCompile Include="MapTests.cpp" />
     <ClCompile Include="TestData.cpp" />
     <ClCompile Include="RenderingBaselineTests.cpp" />
     <ClCompile Include="VectorLayerRendererTests.cpp" />

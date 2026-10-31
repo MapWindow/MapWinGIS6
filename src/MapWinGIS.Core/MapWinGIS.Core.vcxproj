@@ -60,6 +60,7 @@
     <ClInclude Include="include\mapwingis\gdal\GdalTypedOptions.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalModern.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalUtils.h" />
+    <ClInclude Include="include\mapwingis\map\Map.h" />
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
     <ClInclude Include="include\mapwingis\rendering\VectorRenderScene.h" />
@@ -77,6 +78,7 @@
     <ClCompile Include="src\gdal\GdalRuntime.cpp" />
     <ClCompile Include="src\gdal\GdalTypedOptions.cpp" />
     <ClCompile Include="src\gdal\GdalUtils.cpp" />
+    <ClCompile Include="src\map\Map.cpp" />
     <ClCompile Include="src\vector\VectorDataset.cpp" />
     <ClCompile Include="src\rendering\VectorRenderScene.cpp" />
   </ItemGroup>

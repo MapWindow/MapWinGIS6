@@ -4,8 +4,10 @@
   default through `MwgVcpkgFeatures`).
 - Test project: `tests/MapWinGIS.Core.Tests`, built with the solution.
 - Shared fixtures and helpers live in `TestData.h/.cpp` (`TempDirectory`,
-  `MakeSampleShapefile`, `MakeProvincesDataset`, and layer constants). Extend
-  these instead of writing per-file fixture code.
+  `MakeSampleShapefile`, `MakeProvincesDataset`, `MakeRectanglesDataset`, and
+  layer constants). Extend these instead of writing per-file fixture code.
+  `MakeRectanglesDataset` writes one rectangle per given extent, so map tests
+  can place layers at chosen coordinates or create an empty layer.
 
 ## Running
 

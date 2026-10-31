@@ -106,6 +106,38 @@ pattern is: one dataset object per thread, or serialized access.
 `GdalEnvironment` initialization is the exception — safe to call from
 anywhere.
 
+## Map model
+
+`mwg::Map` (`mapwingis/map/Map.h`) is the authoritative owner of the layer
+collection and map-level layer state. It has no windowing, COM, or rendering
+state; hosts and renderers read from it.
+
+- **Identity.** `Map::AddLayer` returns a `LayerId`. Identities start at 1,
+  increase, and are never reused by the same map, even after `RemoveLayer` or
+  `Clear`. `LayerId{}` (0) identifies no layer. Neither display names nor
+  positions identify a layer.
+- **Ordering.** Position 0 is the bottom layer and is drawn first; new layers
+  are appended on top. Positions shift on removal; identities do not.
+- **Ownership.** The map owns its `MapLayer` objects. A `MapLayer` reference
+  stays valid until that layer is removed, the map is cleared, or the map is
+  destroyed; changes to other layers do not invalidate it. Each `MapLayer`
+  shares ownership of its `VectorDataset` (`std::shared_ptr`), so the dataset
+  lives as long as any map layer or other owner uses it.
+- **Duplicates.** The same source layer may be added more than once; each
+  addition is an independent map layer with its own identity and visibility.
+- **Visibility.** Layers are visible when added. `Map::SetLayerVisible`
+  changes visibility. Hidden layers are excluded from
+  `GetExtent(ExtentScope::VisibleLayers)`, the default and the extent used for
+  zoom-to-map, and included in `GetExtent(ExtentScope::AllLayers)`.
+- **Extents.** Map extents are the union of valid layer extents
+  (`Extent::IsValid`: non-empty and finite). They are computed on each call
+  rather than cached, so visibility changes, added or removed layers, and
+  source edits are reflected without invalidation. A map with no valid layer
+  extent reports an empty `Extent`.
+- **Coordinates.** Layers are assumed to share compatible source coordinates.
+  The map does not reproject; layers in different coordinate reference
+  systems do not align until coordinate transformations are implemented.
+
 ## ActiveX and rendering architecture
 
 The first ActiveX and rendering vertical slice is implemented across the
