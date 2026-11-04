@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -31,6 +32,34 @@ namespace mwg
 
     namespace
     {
+        struct ReadingReset final
+        {
+            OGRLayer& layer;
+
+            ~ReadingReset()
+            {
+                layer.ResetReading();
+            }
+        };
+
+        OGRFeatureUniquePtr ReadNextFeature(OGRLayer& layer)
+        {
+            CPLErrorReset();
+            OGRFeatureUniquePtr feature{layer.GetNextFeature()};
+            if (feature == nullptr && CPLGetLastErrorType() >= CE_Failure)
+            {
+                std::string message = "Failed to read vector layer features";
+                const char* const detail = CPLGetLastErrorMsg();
+                if (detail != nullptr && detail[0] != '\0')
+                {
+                    message += ": ";
+                    message += detail;
+                }
+                throw CoreError(message);
+            }
+            return feature;
+        }
+
         ShapeType ToShapeType(const OGRwkbGeometryType type)
         {
             const OGRwkbGeometryType flat = wkbFlatten(type);
@@ -175,7 +204,23 @@ namespace mwg
         [[nodiscard]] std::int64_t FeatureCount() const
         {
             if (!_featureCount)
-                _featureCount = static_cast<std::int64_t>(_layer->GetFeatureCount(TRUE));
+            {
+                GdalEnvironment::ClearLastError();
+                const GIntBig count = _layer->GetFeatureCount(TRUE);
+                if (count >= 0)
+                {
+                    _featureCount = static_cast<std::int64_t>(count);
+                }
+                else
+                {
+                    if (CPLGetLastErrorType() >= CE_Failure)
+                    {
+                        throw CoreError("Cannot determine vector layer feature count: " +
+                                        GdalEnvironment::LastErrorMessage());
+                    }
+                    EnsureFeatureIds();
+                }
+            }
             return *_featureCount;
         }
 
@@ -196,6 +241,8 @@ namespace mwg
         std::vector<FieldInfo> _fields;
 
     private:
+        friend struct detail::VectorLayerAccess;
+
         /// MapWinGIS addresses features by 0-based index; OGR addresses them by
         /// feature id, which is not the same thing: shapefile ids start at 0,
         /// GeoPackage ids at 1, and either can have gaps. Building the mapping
@@ -223,10 +270,18 @@ namespace mwg
             }
 
             _layer->ResetReading();
-            while (const OGRFeatureUniquePtr feature{_layer->GetNextFeature()})
+            const ReadingReset readingReset{*_layer};
+            while (const OGRFeatureUniquePtr feature{ReadNextFeature(*_layer)})
+            {
+                if (std::cmp_greater_equal(
+                        _featureIds.size(), std::numeric_limits<std::int64_t>::max()))
+                {
+                    throw CoreError("Vector layer feature count is out of range");
+                }
                 _featureIds.push_back(feature->GetFID());
-            _layer->ResetReading();
+            }
 
+            _featureCount = static_cast<std::int64_t>(_featureIds.size());
             _featureIdsValid = true;
         }
 
@@ -268,48 +323,30 @@ namespace mwg
         mutable std::optional<Extent> _extent;
     };
 
-    void detail::VectorLayerAccess::ForEachGeometry(
+    std::int64_t detail::VectorLayerAccess::ForEachGeometry(
         const VectorLayer& layer,
         const std::function<void(const OGRGeometry&)>& callback)
     {
         OGRLayer& ogrLayer = *layer._impl->_layer;
         ogrLayer.ResetReading();
-        struct ReadingReset final
+        const ReadingReset readingReset{ogrLayer};
+
+        std::int64_t count = 0;
+        while (const OGRFeatureUniquePtr feature{ReadNextFeature(ogrLayer)})
         {
-            OGRLayer& layer;
-
-            ~ReadingReset()
+            if (count == std::numeric_limits<std::int64_t>::max())
             {
-                layer.ResetReading();
+                throw CoreError("Vector layer feature count is out of range");
             }
-        } readingReset{ogrLayer};
-
-        while (true)
-        {
-            CPLErrorReset();
-            OGRFeatureUniquePtr feature{ogrLayer.GetNextFeature()};
-            if (feature == nullptr)
-            {
-                if (CPLGetLastErrorType() >= CE_Failure)
-                {
-                    std::string message = "Failed to read vector layer features";
-                    const char* const detail = CPLGetLastErrorMsg();
-                    if (detail != nullptr && detail[0] != '\0')
-                    {
-                        message += ": ";
-                        message += detail;
-                    }
-                    throw CoreError(message);
-                }
-                break;
-            }
-
+            ++count;
             const OGRGeometry* geometry = feature->GetGeometryRef();
             if (geometry != nullptr && !geometry->IsEmpty())
             {
                 callback(*geometry);
             }
         }
+        layer._impl->_featureCount = count;
+        return count;
     }
 
     VectorLayer::VectorLayer(std::unique_ptr<Impl> impl)

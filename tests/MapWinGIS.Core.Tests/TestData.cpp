@@ -11,9 +11,11 @@
 
 #include <random>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 #include <gdal_priv.h>
+#include <cpl_error.h>
 #include <ogrsf_frmts.h>
 
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -34,6 +36,157 @@ namespace mwg::test
             std::uniform_int_distribution<std::uint64_t> distribution;
             return "mwg-test-" + std::to_string(distribution(engine));
         }
+
+        class VectorReadTestLayer final : public OGRLayer
+        {
+        public:
+            explicit VectorReadTestLayer(VectorReadTestDriver& state)
+                : _state(state),
+                  _definition(OGRFeatureDefn::CreateFeatureDefn("features"))
+            {
+                _definition->Reference();
+                _definition->SetGeomType(wkbPolygon);
+            }
+
+            ~VectorReadTestLayer() override
+            {
+                _definition->Release();
+            }
+
+            void ResetReading() override
+            {
+                _state.nextFeature = 0;
+            }
+
+            OGRFeature* GetNextFeature() override
+            {
+                ++_state.readCalls;
+                if (_state.failOnSecondRead && _state.nextFeature == 1)
+                {
+                    CPLError(CE_Failure, CPLE_AppDefined,
+                             "Simulated feature read failure");
+                    return nullptr;
+                }
+                if (_state.nextFeature == 3)
+                {
+                    return nullptr;
+                }
+                return GetFeature(_state.nextFeature++);
+            }
+
+            OGRFeature* GetFeature(const GIntBig id) override
+            {
+                OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(_definition));
+                feature->SetFID(id);
+                if (!_state.ignoredFields && id != 1)
+                {
+                    OGRPolygon polygon;
+                    if (id == 0)
+                    {
+                        OGRLinearRing ring;
+                        ring.addPoint(0.0, 0.0);
+                        ring.addPoint(1.0, 0.0);
+                        ring.addPoint(1.0, 1.0);
+                        ring.addPoint(0.0, 1.0);
+                        ring.addPoint(0.0, 0.0);
+                        polygon.addRing(&ring);
+                    }
+                    if (feature->SetGeometry(&polygon) != OGRERR_NONE)
+                    {
+                        throw std::runtime_error("Cannot create test geometry");
+                    }
+                }
+                return feature.release();
+            }
+
+            GIntBig GetFeatureCount(int) override
+            {
+                ++_state.countCalls;
+                return _state.unknownCount ? -1 : 3;
+            }
+
+            OGRErr SetIgnoredFields(CSLConstList fields) override
+            {
+                _state.ignoredFields = fields != nullptr;
+                return OGRERR_NONE;
+            }
+
+            const OGRFeatureDefn* GetLayerDefn() const override
+            {
+                return _definition;
+            }
+
+            int TestCapability(const char*) const override
+            {
+                return FALSE;
+            }
+
+        protected:
+            OGRErr IGetExtent(int, OGREnvelope* extent, bool) override
+            {
+                extent->MinX = 0.0;
+                extent->MinY = 0.0;
+                extent->MaxX = 1.0;
+                extent->MaxY = 1.0;
+                return OGRERR_NONE;
+            }
+
+        private:
+            VectorReadTestDriver& _state;
+            OGRFeatureDefn* _definition;
+        };
+
+        class VectorReadTestDataset final : public GDALDataset
+        {
+        public:
+            explicit VectorReadTestDataset(VectorReadTestDriver& state)
+                : _layer(state)
+            {
+            }
+
+            int GetLayerCount() const override
+            {
+                return 1;
+            }
+
+            const OGRLayer* GetLayer(const int index) const override
+            {
+                return index == 0 ? &_layer : nullptr;
+            }
+
+        private:
+            VectorReadTestLayer _layer;
+        };
+    }
+
+    VectorReadTestDriver::VectorReadTestDriver()
+        : _driver(std::make_unique<GDALDriver>())
+    {
+        GdalEnvironment::Initialize();
+        _driver->SetDescription("MWGVectorReadTest");
+        _driver->SetMetadataItem(GDAL_DCAP_VECTOR, "YES");
+        _driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
+        _driver->pDriverData = this;
+        _driver->pfnIdentify = [](GDALOpenInfo* info)
+        {
+            return std::string_view(info->pszFilename) == kPath ? TRUE : FALSE;
+        };
+        _driver->pfnOpen = [](GDALOpenInfo* info) -> GDALDataset*
+        {
+            if (std::string_view(info->pszFilename) != kPath)
+            {
+                return nullptr;
+            }
+            GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("MWGVectorReadTest");
+            return new VectorReadTestDataset(
+                *static_cast<VectorReadTestDriver*>(driver->pDriverData));
+        };
+        GetGDALDriverManager()->RegisterDriver(_driver.get());
+    }
+
+    VectorReadTestDriver::~VectorReadTestDriver()
+    {
+        GetGDALDriverManager()->DeregisterDriver(_driver.get());
     }
 
     TempDirectory::TempDirectory()

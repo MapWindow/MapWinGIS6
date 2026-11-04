@@ -112,11 +112,13 @@ The owner-thread dispatch window also polls for queued notifications every
 Event-handler failures are reported separately from GDAL execution status with
 their HRESULT and message. Result retrieval returns `E_PENDING` while an event
 handler is running, so handlers must retrieve results after event delivery
-returns. Destroying the control window suspends dispatch and requests
-cancellation; `IOleObject::Close` permanently shuts down the dispatcher.
-Reactivation resumes dispatch for retained results. A worker does not wait for
-the UI thread, but a GDAL driver without progress callbacks may continue until
-its current native call returns.
+returns. Ordinary control-window destruction suspends notifications without
+cancelling active operations. Workers continue and retain their resources until
+completion. Reactivation resumes notifications for retained results.
+`IOleObject::Close` permanently shuts down the dispatcher and requests
+cancellation. Call `CancelGdalOperation` to request cancellation explicitly.
+A worker does not wait for the UI thread. A GDAL driver without progress
+callbacks can continue until its current native call returns after cancellation.
 
 This is a new v6 interface, not a binary-compatible implementation of the
 legacy `IGdalUtils` interface. The old interface uses a different IID and

@@ -29,8 +29,9 @@ namespace mwg
     /// Redraws: every mutator returns whether the displayed frame may have
     /// changed. Hosts request a redraw when it returns true and draw Scene()
     /// through GetViewport(). Changes to the layer collection or visibility
-    /// mark the scene stale; Scene() rebuilds it on the next call. Edits to
-    /// source geometry are not observed; call InvalidateScene after them.
+    /// mark the scene stale; Scene() rebuilds it on the next call. Adding a
+    /// prepared scene retains the existing geometry instead. Edits to source
+    /// geometry are not observed; call InvalidateScene after them.
     ///
     /// Initial view: while the viewport has no view, adding a layer fits the
     /// viewport to the map. A fit that cannot happen because the viewport has
@@ -66,6 +67,16 @@ namespace mwg
         /// to the map when the viewport has no view yet.
         /// \throws InvalidArgument as Map::AddLayer does.
         LayerId AddLayer(std::shared_ptr<VectorDataset> dataset, int layerIndex = 0);
+
+        /// Adds a layer with an already prepared snapshot of its geometry.
+        /// The scene must match the specified source layer without intervening
+        /// edits. An empty scene adds a layer with no drawable geometry.
+        /// Transfers scene ownership and retains the current layers' scenes,
+        /// rebuilding stale scenes first. The next Scene() does not reread data.
+        /// Fitting and argument errors are the same as the other AddLayer overload.
+        /// \throws std::bad_alloc when memory runs out.
+        LayerId AddLayer(std::shared_ptr<VectorDataset> dataset,
+                         rendering::VectorRenderScene scene, int layerIndex = 0);
 
         /// Removes a layer; see Map::RemoveLayer. The view is kept.
         bool RemoveLayer(LayerId id) noexcept;

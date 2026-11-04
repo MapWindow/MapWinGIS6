@@ -812,6 +812,7 @@ namespace
         ComApartment _apartment;
         std::unique_ptr<Module> _module;
         mwg::test::TempDirectory _directory;
+        std::unique_ptr<mwg::test::VectorReadTestDriver> _readDriver;
         ComPtr<IMapWinGISControl3> _control;
         ComPtr<IOleInPlaceObjectWindowless> _window;
         ComPtr<IViewObjectEx> _viewObject;
@@ -874,6 +875,49 @@ TEST_F(ActiveXMapTest, RejectedLoadsLeaveTheMapAndRenderingUnchanged)
             ASSERT_EQ(GetPixel(before.Get(), x, y), GetPixel(after.Get(), x, y)) << x << ", " << y;
         }
     }
+}
+
+TEST_F(ActiveXMapTest, LoadsLayersWhenTheDriverCannotReportAFeatureCount)
+{
+    _readDriver = std::make_unique<mwg::test::VectorReadTestDriver>();
+    _readDriver->unknownCount = true;
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(_control->LoadVectorDataset(
+        ATL::CComBSTR(mwg::test::VectorReadTestDriver::kPath)), S_OK);
+
+    LONGLONG count = -1;
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 3);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
+}
+
+TEST_F(ActiveXMapTest, ValidatedLoadsDoNotRereadGeometryOnTheFirstDraw)
+{
+    _readDriver = std::make_unique<mwg::test::VectorReadTestDriver>();
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    for (int load = 1; load <= 2; ++load)
+    {
+        ASSERT_EQ(_control->LoadVectorDataset(
+            ATL::CComBSTR(mwg::test::VectorReadTestDriver::kPath)), S_OK);
+        ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+        EXPECT_EQ(_readDriver->readCalls, 4 * load);
+        EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
+    }
+
+    _readDriver->failOnSecondRead = true;
+    EXPECT_EQ(_control->LoadVectorDataset(
+        ATL::CComBSTR(mwg::test::VectorReadTestDriver::kPath)), E_FAIL);
+    LONGLONG count = -1;
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 6);
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_EQ(_readDriver->readCalls, 10);
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
 }
 
 TEST_F(ActiveXMapTest, AlternateDrawBoundsDoNotChangeTheLiveSizeUsedForFitting)

@@ -56,6 +56,62 @@ TEST_P(VectorLayerTest, ReportsTheLayer)
     EXPECT_EQ(_layer->FeatureCount(), Provinces::kFeatureCount);
 }
 
+TEST(VectorLayer, RetriesTheFeatureIdScanAfterAReadFailure)
+{
+    VectorReadTestDriver driver;
+    driver.failOnSecondRead = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    const VectorLayer& layer = dataset->Layer(0);
+
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        try
+        {
+            (void)layer.GeometryWkt(2);
+            FAIL() << "Expected the feature ID scan to report a read failure";
+        }
+        catch (const CoreError& error)
+        {
+            EXPECT_NE(std::string(error.what()).find("Simulated feature read failure"),
+                      std::string::npos);
+        }
+        EXPECT_EQ(driver.nextFeature, 0);
+        EXPECT_FALSE(driver.ignoredFields);
+    }
+
+    driver.failOnSecondRead = false;
+    EXPECT_EQ(layer.GeometryWkt(2), "POLYGON EMPTY");
+    EXPECT_FALSE(layer.GeometryWkt(0).empty());
+    EXPECT_THROW((void)layer.GeometryWkt(3), CoreError);
+}
+
+TEST(VectorLayer, CountsFeaturesWhenTheDriverReportsAnUnknownCount)
+{
+    VectorReadTestDriver driver;
+    driver.unknownCount = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    const VectorLayer& layer = dataset->Layer(0);
+
+    EXPECT_EQ(layer.FeatureCount(), 3);
+    EXPECT_EQ(driver.readCalls, 4);
+    EXPECT_EQ(layer.FeatureCount(), 3);
+    EXPECT_EQ(layer.GeometryWkt(2), "POLYGON EMPTY");
+    EXPECT_EQ(driver.readCalls, 4);
+}
+
+TEST(VectorLayer, DoesNotCacheAnIncompleteFallbackFeatureCount)
+{
+    VectorReadTestDriver driver;
+    driver.unknownCount = true;
+    driver.failOnSecondRead = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    const VectorLayer& layer = dataset->Layer(0);
+
+    EXPECT_THROW((void)layer.FeatureCount(), CoreError);
+    driver.failOnSecondRead = false;
+    EXPECT_EQ(layer.FeatureCount(), 3);
+}
+
 TEST_P(VectorLayerTest, ReportsTheExtent)
 {
     const Extent extent = _layer->GetExtent();

@@ -104,6 +104,35 @@ namespace mwg
         return id;
     }
 
+    LayerId MapView::AddLayer(std::shared_ptr<VectorDataset> dataset,
+                             rendering::VectorRenderScene scene, const int layerIndex)
+    {
+        (void)Scene();
+        const bool empty = scene.polygons.empty();
+        if (empty)
+        {
+            _impl->_scene.skippedLayers.reserve(_impl->_scene.skippedLayers.size() + 1);
+        }
+        else
+        {
+            _impl->_scene.layers.reserve(_impl->_scene.layers.size() + 1);
+        }
+
+        // Allocate before AddLayer can change the map or its pending fit.
+        const LayerId id = AddLayer(std::move(dataset), layerIndex);
+        if (empty)
+        {
+            _impl->_scene.skippedLayers.push_back(
+                {id, rendering::LayerSkipReason::NoGeometry, {}});
+        }
+        else
+        {
+            _impl->_scene.layers.push_back({id, std::move(scene)});
+        }
+        _impl->_sceneStale = false;
+        return id;
+    }
+
     bool MapView::RemoveLayer(const LayerId id) noexcept
     {
         if (!_impl->_map.RemoveLayer(id))

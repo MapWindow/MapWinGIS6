@@ -203,7 +203,10 @@ has no extent or transform of its own.
   a resize, does not rebuild the scene.
 - **Redraws.** Map changes go through `MapView` (`AddLayer`, `RemoveLayer`,
   `ClearLayers`, `SetLayerVisible`), which marks the scene stale; `Scene()`
-  rebuilds it on the next call. Every mutator returns whether the frame may
+  rebuilds it on the next call. The `AddLayer` overload that accepts a prepared
+  vector scene transfers that geometry into the current scene without another
+  traversal. It rebuilds any stale existing scenes before adding the new layer.
+  Every mutator returns whether the frame may
   have changed, and the host requests a redraw when it does. Edits to source
   geometry are not observed; call `InvalidateScene` after them.
 - **Initial view and resizing.** While the viewport has no view, adding a
@@ -346,10 +349,17 @@ The layer must be polygon-compatible: a dataset whose first layer has another
 geometry type fails to load and is not added, even if a later layer is
 polygonal. An empty polygon layer loads but draws nothing. The control reads
 and validates the candidate layer before adding it, so a rejected load cannot
-change the live viewport or schedule a fit.
+change the live viewport or schedule a fit. The control transfers the validated
+scene into `MapView`. Loading another layer and drawing the first frame reuse
+the prepared geometry of existing layers.
 `LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
 the cached total over all loaded layers. The control updates the total after
-a successful load and resets it on `ClearLayers`. Property reads do not scan
+a successful load and resets it on `ClearLayers`. Scene preparation counts
+all source features, including null and empty geometries, during its geometry
+traversal. Drivers that report an unknown count can still load. The native
+`VectorLayer::FeatureCount` also returns an exact count. If the driver cannot
+provide one, it builds the feature ID index and reports read failures.
+COM property reads do not scan
 datasets or rebuild the scene. Until the control exposes navigation, every load
 fits the view to the whole map. Raster layers and other geometry types are
 not rendered. There is no reprojection, so coordinates remain in the source
@@ -357,10 +367,10 @@ coordinate system and layers are assumed to share one.
 
 Core prepares and retains the complete supported polygon scene in memory,
 reading feature geometries sequentially without WKT serialization and
-reparsing. Any map change rebuilds the scene for all visible layers, not only
-the changed one. There is no tiling, paging, clipping to the visible extent,
-or unchanged-geometry cache, so a layer whose device coordinates exceed the
-GDI range is skipped by GDI. The opt-in
+reparsing. Adding a prepared layer retains the existing scene. Other layer
+changes and explicit invalidation rebuild the scene for all visible layers.
+There is no tiling, paging, or clipping to the visible extent. GDI skips a
+layer whose device coordinates exceed its range. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation and backend frame costs. OpenGL only supports convex
 single-ring polygons and copies each frame through CPU memory. Its reusable CPU

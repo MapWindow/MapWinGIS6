@@ -11,13 +11,39 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <string>
 
 #include "mapwingis/core/Extent.h"
 
+class GDALDriver;
+
 namespace mwg::test
 {
+    /// Registers a synthetic polygon driver. Destroy opened datasets before
+    /// this helper. Its three features have polygon, null, and empty geometry.
+    class VectorReadTestDriver
+    {
+    public:
+        VectorReadTestDriver();
+        ~VectorReadTestDriver();
+
+        VectorReadTestDriver(const VectorReadTestDriver&) = delete;
+        VectorReadTestDriver& operator=(const VectorReadTestDriver&) = delete;
+
+        static constexpr const char* kPath = "MWG_VECTOR_READ_TEST:features";
+        bool failOnSecondRead = false;
+        bool unknownCount = false;
+        bool ignoredFields = false;
+        int nextFeature = 0;
+        int readCalls = 0;
+        int countCalls = 0;
+
+    private:
+        std::unique_ptr<GDALDriver> _driver;
+    };
+
     /// Writes a 12-by-8, single-band Byte GeoTIFF in EPSG:4326.
     /// Pixels have the given value. Each pixel spans one degree, with the
     /// top-left corner at (originX, 8) and rows running south.
