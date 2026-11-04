@@ -31,6 +31,34 @@ namespace mwg
 
     namespace
     {
+        struct ReadingReset final
+        {
+            OGRLayer& layer;
+
+            ~ReadingReset()
+            {
+                layer.ResetReading();
+            }
+        };
+
+        OGRFeatureUniquePtr ReadNextFeature(OGRLayer& layer)
+        {
+            CPLErrorReset();
+            OGRFeatureUniquePtr feature{layer.GetNextFeature()};
+            if (feature == nullptr && CPLGetLastErrorType() >= CE_Failure)
+            {
+                std::string message = "Failed to read vector layer features";
+                const char* const detail = CPLGetLastErrorMsg();
+                if (detail != nullptr && detail[0] != '\0')
+                {
+                    message += ": ";
+                    message += detail;
+                }
+                throw CoreError(message);
+            }
+            return feature;
+        }
+
         ShapeType ToShapeType(const OGRwkbGeometryType type)
         {
             const OGRwkbGeometryType flat = wkbFlatten(type);
@@ -223,9 +251,9 @@ namespace mwg
             }
 
             _layer->ResetReading();
-            while (const OGRFeatureUniquePtr feature{_layer->GetNextFeature()})
+            const ReadingReset readingReset{*_layer};
+            while (const OGRFeatureUniquePtr feature{ReadNextFeature(*_layer)})
                 _featureIds.push_back(feature->GetFID());
-            _layer->ResetReading();
 
             _featureIdsValid = true;
         }
@@ -274,36 +302,10 @@ namespace mwg
     {
         OGRLayer& ogrLayer = *layer._impl->_layer;
         ogrLayer.ResetReading();
-        struct ReadingReset final
+        const ReadingReset readingReset{ogrLayer};
+
+        while (const OGRFeatureUniquePtr feature{ReadNextFeature(ogrLayer)})
         {
-            OGRLayer& layer;
-
-            ~ReadingReset()
-            {
-                layer.ResetReading();
-            }
-        } readingReset{ogrLayer};
-
-        while (true)
-        {
-            CPLErrorReset();
-            OGRFeatureUniquePtr feature{ogrLayer.GetNextFeature()};
-            if (feature == nullptr)
-            {
-                if (CPLGetLastErrorType() >= CE_Failure)
-                {
-                    std::string message = "Failed to read vector layer features";
-                    const char* const detail = CPLGetLastErrorMsg();
-                    if (detail != nullptr && detail[0] != '\0')
-                    {
-                        message += ": ";
-                        message += detail;
-                    }
-                    throw CoreError(message);
-                }
-                break;
-            }
-
             const OGRGeometry* geometry = feature->GetGeometryRef();
             if (geometry != nullptr && !geometry->IsEmpty())
             {
