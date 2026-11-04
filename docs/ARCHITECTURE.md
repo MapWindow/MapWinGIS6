@@ -349,7 +349,12 @@ and validates the candidate layer before adding it, so a rejected load cannot
 change the live viewport or schedule a fit.
 `LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
 the cached total over all loaded layers. The control updates the total after
-a successful load and resets it on `ClearLayers`. Property reads do not scan
+a successful load and resets it on `ClearLayers`. Scene preparation counts
+all source features, including null and empty geometries, during its geometry
+traversal. Drivers that report an unknown count can still load. The native
+`VectorLayer::FeatureCount` also returns an exact count. If the driver cannot
+provide one, it builds the feature ID index and reports read failures.
+COM property reads do not scan
 datasets or rebuild the scene. Until the control exposes navigation, every load
 fits the view to the whole map. Raster layers and other geometry types are
 not rendered. There is no reprojection, so coordinates remain in the source
