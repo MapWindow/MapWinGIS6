@@ -323,7 +323,7 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
         // Validate before AddLayer can auto-fit or schedule a pending fit.
         mwg::Map candidate;
         candidate.AddLayer(dataset);
-        const mwg::rendering::MapRenderScene scene =
+        mwg::rendering::MapRenderScene scene =
             mwg::rendering::CreateMapRenderScene(candidate);
         for (const mwg::rendering::SkippedLayer& skipped : scene.skippedLayers)
         {
@@ -332,15 +332,22 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
                 throw mwg::CoreError(skipped.message);
             }
         }
-        const LONGLONG count = scene.layers.empty()
-            ? static_cast<LONGLONG>(dataset->Layer(0).FeatureCount())
-            : static_cast<LONGLONG>(scene.layers.front().scene.sourceFeatureCount);
+        mwg::rendering::VectorRenderScene preparedScene;
+        if (scene.layers.empty())
+        {
+            preparedScene.sourceFeatureCount = dataset->Layer(0).FeatureCount();
+        }
+        else
+        {
+            preparedScene = std::move(scene.layers.front().scene);
+        }
+        const LONGLONG count = static_cast<LONGLONG>(preparedScene.sourceFeatureCount);
         if (count < 0 || count > std::numeric_limits<LONGLONG>::max() - _featureCount)
         {
             throw mwg::CoreError("Map feature count is out of range");
         }
 
-        const mwg::LayerId id = _view.AddLayer(std::move(dataset));
+        const mwg::LayerId id = _view.AddLayer(std::move(dataset), std::move(preparedScene));
         try
         {
             // Until the control exposes navigation, every load shows the

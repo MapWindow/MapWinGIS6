@@ -201,6 +201,10 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
   without registration. They cover stacked loads, rejected loads, cached
   feature totals, dataset release through `ClearLayers`, `WM_SIZE`, and draws
   into alternate-sized targets that must not change the live fitting size.
+- `VectorReadTestDriver` simulates unknown feature counts and read failures.
+  Its features include polygon, null, and empty geometries. Tests cover retrying
+  failed ID scans, exact counts, and scene reuse through Core and ActiveX.
+  Read counters detect repeated traversal during loading and the first draw.
 - Renderer regressions compare edge-adjacent pixels at quarter- and
   three-quarter-pixel rectangle coordinates for GDI and OpenGL. Overlapping
   layers make drawing order visible: the top fill covers the bottom outline.

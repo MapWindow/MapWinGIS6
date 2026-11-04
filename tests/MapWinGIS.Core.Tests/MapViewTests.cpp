@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "TestData.h"
@@ -258,6 +259,56 @@ TEST_F(MapViewTest, SceneIsReusedUntilTheMapChanges)
     EXPECT_TRUE(_view.InvalidateScene());
     EXPECT_EQ(&_view.Scene(), &scene);
     EXPECT_EQ(scene.layers.size(), 1U);
+}
+
+TEST_F(MapViewTest, PreparedLayersRetainTheirGeometryUntilInvalidated)
+{
+    VectorReadTestDriver driver;
+    std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    auto first = rendering::CreateVectorRenderScene(*dataset);
+    auto second = rendering::CreateVectorRenderScene(*dataset);
+    const auto* firstPolygons = first.polygons.data();
+    const auto* secondPolygons = second.polygons.data();
+    ASSERT_EQ(driver.readCalls, 8);
+
+    const LayerId firstId = view.AddLayer(dataset, std::move(first));
+    const LayerId secondId = view.AddLayer(dataset, std::move(second));
+    ASSERT_TRUE(view.Resize(300, 200));
+    ASSERT_TRUE(view.FitToMap());
+    ASSERT_EQ(view.Scene().layers.size(), 2U);
+    EXPECT_EQ(view.Scene().layers[0].layerId, firstId);
+    EXPECT_EQ(view.Scene().layers[1].layerId, secondId);
+    EXPECT_EQ(view.Scene().layers[0].scene.polygons.data(), firstPolygons);
+    EXPECT_EQ(view.Scene().layers[1].scene.polygons.data(), secondPolygons);
+    EXPECT_EQ(driver.readCalls, 8);
+
+    EXPECT_TRUE(view.InvalidateScene());
+    EXPECT_EQ(view.Scene().layers.size(), 2U);
+    EXPECT_EQ(driver.readCalls, 16);
+}
+
+TEST_F(MapViewTest, PreparedEmptyLayerPreservesExistingAndStaleScenes)
+{
+    const LayerId first = _view.AddLayer(OpenRectangles({{0, 0, 1, 1}}));
+    auto empty = OpenRectangles({});
+    const LayerId emptyId = _view.AddLayer(empty, rendering::VectorRenderScene{});
+    ASSERT_EQ(_view.Scene().layers.size(), 1U);
+    EXPECT_EQ(_view.Scene().layers.front().layerId, first);
+    ASSERT_EQ(_view.Scene().skippedLayers.size(), 1U);
+    EXPECT_EQ(_view.Scene().skippedLayers.front().layerId, emptyId);
+    EXPECT_EQ(_view.Scene().skippedLayers.front().reason,
+              rendering::LayerSkipReason::NoGeometry);
+
+    EXPECT_TRUE(_view.SetLayerVisible(first, false));
+    const auto dataset = OpenRectangles({{2, 2, 3, 3}});
+    const LayerId last = _view.AddLayer(
+        dataset, rendering::CreateVectorRenderScene(*dataset));
+    ASSERT_EQ(_view.Scene().layers.size(), 1U);
+    EXPECT_EQ(_view.Scene().layers.front().layerId, last);
+    ASSERT_EQ(_view.Scene().skippedLayers.size(), 2U);
+    EXPECT_EQ(_view.Scene().skippedLayers.front().reason,
+              rendering::LayerSkipReason::Hidden);
 }
 
 TEST_F(MapViewTest, ClearingLayersKeepsTheView)
