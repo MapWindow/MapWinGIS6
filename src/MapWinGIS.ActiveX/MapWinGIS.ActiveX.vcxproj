@@ -81,14 +81,8 @@
 
   <ItemGroup>
     <ClCompile Include="ActiveXModule.cpp" />
-    <ClCompile Include="ComConversion.cpp" />
-    <ClCompile Include="GdalOperationDispatcher.cpp" />
     <ClCompile Include="GdalEventSource.cpp" />
-    <ClCompile Include="GdiVectorLayerRenderer.cpp" />
     <ClCompile Include="MapWinGISControl.cpp" />
-    <ClCompile Include="OpenGlVectorLayerRenderer.cpp" />
-    <ClCompile Include="VectorLayerRenderer.cpp" />
-    <ClCompile Include="ViewTransform.cpp" />
     <ClCompile Include="$(IntDir)MapWinGIS.ActiveX_i.c" />
   </ItemGroup>
 
@@ -100,6 +94,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="MapWinGIS.ActiveX.Impl.vcxproj">
+      <Project>{9d1cdd38-30b1-42b0-8d75-9c217bfdb5a8}</Project>
+    </ProjectReference>
     <ProjectReference Include="..\MapWinGIS.Core\MapWinGIS.Core.vcxproj">
       <Project>{2B6A9A3B-0C5E-4E6E-9E31-3E8F5A2D1C01}</Project>
     </ProjectReference>

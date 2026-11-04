@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "OpenGlVectorLayerRenderer.h"
+#include "OpenGlVectorLayerRendererTestAccess.h"
 #include "VectorLayerRenderer.h"
 #include "ViewTransform.h"
 
@@ -228,7 +229,8 @@ TEST(VectorLayerRenderer, OpenGlRecreatesLostContextOnLaterDraw)
     }
     ASSERT_EQ(firstResult, S_OK);
 
-    renderer.SimulateContextLossForTesting();
+    mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::
+        SimulateContextLoss(renderer);
     EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), E_FAIL);
     EXPECT_EQ(
         renderer.GetLastFailureReason(),

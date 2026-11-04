@@ -2,7 +2,7 @@
 
 /**
  * @file Main.cpp
- * @brief Provides the GoogleTest entry point for the core test executable.
+ * @brief Provides the GoogleTest entry point for native test executables.
  *
  * Defines main locally so the test target does not link GoogleTest's main
  * libraries, which are auto-linked by the configured vcpkg setup.

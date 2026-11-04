@@ -25,18 +25,21 @@ Run these commands from the repository root:
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
 Run one GoogleTest case by adding its suite and test name:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe --gtest_filter=VectorDatasetTest.ReportsTheDriverAndPath
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe --gtest_filter=VectorLayerRenderer.OpenGlRecreatesLostContextOnLaterDraw
 ```
 
 Write a JUnit-style test report when needed:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresults.xml
 ```
 
 The test project uses GoogleTest. Shared generated data and temporary-directory

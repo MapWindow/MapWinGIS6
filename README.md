@@ -61,16 +61,18 @@ Studio and build the `Debug | x64` configuration.
 
 ### Run the C++ tests
 
-The solution build includes the GoogleTest project by default. After building,
-run the test executable from the repository root:
+The solution build includes both GoogleTest projects by default. After
+building, run the test executables from the repository root:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
 You can also run the tests through Visual Studio's Test Explorer. For the
 Release configuration, build with `-p:Configuration=Release` and run
-`bin\Release\x64\MapWinGIS.Core.Tests.exe`.
+`bin\Release\x64\MapWinGIS.Core.Tests.exe` and
+`bin\Release\x64\MapWinGIS.ActiveX.Tests.exe`.
 
 For additional configurations, dependency features, and troubleshooting, see
 [docs/BUILDING.md](docs/BUILDING.md).
@@ -80,7 +82,8 @@ For additional configurations, dependency features, and troubleshooting, see
 | Path | Contents |
 |---|---|
 | `src/MapWinGIS.Core/` | The core engine. Public headers in `include/mapwingis/` |
-| `tests/MapWinGIS.Core.Tests/` | C++ unit tests (GoogleTest) |
+| `tests/MapWinGIS.Core.Tests/` | Core C++ unit tests (GoogleTest) |
+| `tests/MapWinGIS.ActiveX.Tests/` | ActiveX and COM-hosting C++ unit tests (GoogleTest) |
 | `samples/Cpp/` | Buildable native C++ examples |
 | `build/` | Shared MSBuild props, vcpkg triplets and scripts |
 | `docs/` | Build, architecture, coding, GDAL integration, porting and testing documentation |

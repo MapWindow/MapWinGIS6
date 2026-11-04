@@ -59,10 +59,16 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
-          $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/MapWinGIS.Core.Tests.exe"
-          & $exe --gtest_output="xml:testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          foreach ($test in @(
+            @{ Name = "core"; Project = "MapWinGIS.Core.Tests" },
+            @{ Name = "activex"; Project = "MapWinGIS.ActiveX.Tests" }
+          )) {
+            $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/$($test.Project).exe"
+            $report = "testresults-$($test.Name)-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
+            & $exe --gtest_output="xml:$report"
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           }
 
       - name: Upload test results
@@ -70,7 +76,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: testresults-${{ matrix.platform }}-${{ matrix.configuration }}
-          path: testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml
+          path: testresults-*-${{ matrix.platform }}-${{ matrix.configuration }}.xml
           if-no-files-found: ignore
 
       - name: Upload binaries

@@ -34,7 +34,8 @@ complexity or limiting improvements. Do not transliterate the legacy code.
 | Path | Contents |
 |---|---|
 | `src/MapWinGIS.Core/` | Core engine. Public headers in `include/mapwingis/`, implementation in `src/`, grouped by area (`core`, `gdal`, `vector`, ...) |
-| `tests/MapWinGIS.Core.Tests/` | GoogleTest unit tests; shared fixtures in `TestData.h/.cpp` |
+| `tests/MapWinGIS.Core.Tests/` | Core GoogleTest unit tests and shared fixtures in `TestData.h/.cpp` |
+| `tests/MapWinGIS.ActiveX.Tests/` | ActiveX implementation and COM-hosting GoogleTest unit tests |
 | `build/` | Shared MSBuild props, vcpkg overlay triplets, bootstrap scripts |
 | `docs/` | Detailed documentation (see table below) |
 
@@ -44,6 +45,7 @@ complexity or limiting improvements. Do not transliterate the legacy code.
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
 Every task must leave the tree in this state: `Debug | x64` builds with no
