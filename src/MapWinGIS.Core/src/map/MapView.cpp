@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -704,23 +705,56 @@ namespace mwg
                   _impl->_rasterView->extent.yMax != rasterView->extent.yMax))
         {
             std::vector<std::pair<rendering::LayerRenderScene*, RasterImage>> replacements;
+            std::vector<LayerId> failedLayerIds;
+            std::vector<rendering::SkippedLayer> skippedLayers;
             for (rendering::LayerRenderScene& renderLayer : _impl->_scene.layers)
             {
                 const MapLayer* layer = _impl->_map.FindLayer(renderLayer.layerId);
                 if (layer != nullptr && layer->IsRaster() && layer->IsVisible())
                 {
-                    replacements.emplace_back(
-                        &renderLayer,
-                        layer->RasterSource()->ReadWindow(
-                            rasterView->extent,
-                            _impl->_map.CoordinateSystemWkt(),
-                            rasterView->width,
-                            rasterView->height));
+                    try
+                    {
+                        replacements.emplace_back(
+                            &renderLayer,
+                            layer->RasterSource()->ReadWindow(
+                                rasterView->extent,
+                                _impl->_map.CoordinateSystemWkt(),
+                                rasterView->width,
+                                rasterView->height));
+                    }
+                    catch (const std::bad_alloc&)
+                    {
+                        throw;
+                    }
+                    catch (const std::exception& error)
+                    {
+                        failedLayerIds.push_back(renderLayer.layerId);
+                        skippedLayers.push_back(
+                            {renderLayer.layerId, rendering::LayerSkipReason::Failed, error.what()});
+                    }
                 }
             }
+            _impl->_scene.skippedLayers.reserve(
+                _impl->_scene.skippedLayers.size() + skippedLayers.size());
             for (auto& [layer, image] : replacements)
             {
                 layer->raster = std::move(image);
+            }
+            if (!failedLayerIds.empty())
+            {
+                std::erase_if(
+                    _impl->_scene.layers,
+                    [&failedLayerIds](const rendering::LayerRenderScene& layer)
+                    {
+                        return std::find(
+                                   failedLayerIds.begin(),
+                                   failedLayerIds.end(),
+                                   layer.layerId) != failedLayerIds.end();
+                    });
+                _impl->_scene.skippedLayers.insert(
+                    _impl->_scene.skippedLayers.end(),
+                    std::make_move_iterator(skippedLayers.begin()),
+                    std::make_move_iterator(skippedLayers.end()));
             }
             _impl->_rasterView = rasterView;
         }
