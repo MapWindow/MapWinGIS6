@@ -74,6 +74,43 @@ library MapWinGISActiveXLib
         object,
         dual,
         oleautomation,
+        uuid(EA0484AC-2A78-462C-AAE1-B0D6F11E4D7A),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl4 : IMapWinGISControl3
+    {
+        [propget, id(9)]
+        HRESULT LayerCount([out, retval] LONG* count);
+
+        [id(10)]
+        HRESULT GetLayerId([in] LONG index, [out, retval] hyper* layerId);
+
+        [id(11)]
+        HRESULT ZoomToMap([out, retval] VARIANT_BOOL* changed);
+
+        [id(12)]
+        HRESULT ZoomToLayer([in] hyper layerId, [out, retval] VARIANT_BOOL* changed);
+
+        [id(13)]
+        HRESULT ZoomIn([out, retval] VARIANT_BOOL* changed);
+
+        [id(14)]
+        HRESULT ZoomOut([out, retval] VARIANT_BOOL* changed);
+
+        [id(15)]
+        HRESULT RemoveLayer([in] hyper layerId, [out, retval] VARIANT_BOOL* changed);
+
+        [id(16)]
+        HRESULT SetLayerVisible(
+            [in] hyper layerId,
+            [in] VARIANT_BOOL visible,
+            [out, retval] VARIANT_BOOL* changed);
+    };
+
+    [
+        object,
+        dual,
+        oleautomation,
         uuid(65E33073-669C-43E3-9A96-EF8D38F5EDAC),
         pointer_default(unique)
     ]
@@ -124,7 +161,10 @@ library MapWinGISActiveXLib
     ]
     coclass MapWinGISControl
     {
-        [default] interface IMapWinGISControl3;
+        [default] interface IMapWinGISControl4;
+        interface IMapWinGISControl3;
+        interface IMapWinGISControl2;
+        interface IMapWinGISControl;
         interface IMapWinGISControlGdal;
         [default, source] dispinterface IMapWinGISControlEvents;
     };
