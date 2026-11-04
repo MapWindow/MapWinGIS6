@@ -88,6 +88,28 @@ TEST_F(MapTest, AppendsNewLayersOnTop)
     EXPECT_EQ(_map.LayerPosition(top), 2);
 }
 
+TEST_F(MapTest, MovesLayersWithoutChangingIdentityOrLayerReferences)
+{
+    const LayerId bottom = _map.AddLayer(OpenRectangles({{0, 0, 1, 1}}));
+    const LayerId middle = _map.AddLayer(OpenRectangles({{2, 2, 3, 3}}));
+    const LayerId top = _map.AddLayer(OpenRectangles({{4, 4, 5, 5}}));
+    const MapLayer* const middleLayer = _map.FindLayer(middle);
+
+    ASSERT_TRUE(_map.MoveLayer(bottom, 2));
+
+    EXPECT_EQ(_map.Layer(0).Id(), middle);
+    EXPECT_EQ(_map.Layer(1).Id(), top);
+    EXPECT_EQ(_map.Layer(2).Id(), bottom);
+    EXPECT_EQ(_map.FindLayer(middle), middleLayer);
+    EXPECT_EQ(_map.LayerPosition(bottom), 2);
+    EXPECT_EQ(_map.LayerPosition(middle), 0);
+    EXPECT_EQ(_map.LayerPosition(top), 1);
+    EXPECT_FALSE(_map.MoveLayer(middle, 0));
+    EXPECT_FALSE(_map.MoveLayer(LayerId{99}, 0));
+    EXPECT_THROW((void)_map.MoveLayer(middle, -1), InvalidArgument);
+    EXPECT_THROW((void)_map.MoveLayer(middle, 3), InvalidArgument);
+}
+
 TEST_F(MapTest, RejectsMissingDatasetAndOutOfRangeLayerIndex)
 {
     const std::shared_ptr<VectorDataset> dataset = OpenRectangles({{0, 0, 1, 1}});

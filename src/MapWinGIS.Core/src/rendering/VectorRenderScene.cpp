@@ -2,9 +2,9 @@
 
 /**
  * @file VectorRenderScene.cpp
- * @brief Builds owned polygon scene data from vector layers.
+ * @brief Builds owned point, line, and polygon scene data from vector layers.
  *
- * Reads vector geometries sequentially and copies supported polygon
+ * Reads vector geometries sequentially and copies supported geometry
  * coordinates into owned scene data before releasing each feature.
  */
 #include "mapwingis/rendering/VectorRenderScene.h"
@@ -18,6 +18,7 @@
 #include "mapwingis/core/Error.h"
 #include "mapwingis/vector/VectorDataset.h"
 
+#include "internal/CoordinateTransformation.h"
 #include "internal/VectorLayerAccess.h"
 #include "internal/VectorRenderSceneBuilder.h"
 
@@ -61,6 +62,56 @@ namespace mwg::rendering
         {
             switch (wkbFlatten(geometry.getGeometryType()))
             {
+            case wkbPoint:
+            {
+                const auto& point = static_cast<const OGRPoint&>(geometry);
+                if (!point.IsEmpty())
+                {
+                    scene.points.push_back({point.getX(), point.getY()});
+                }
+                return;
+            }
+
+            case wkbMultiPoint:
+            case wkbMultiLineString:
+            case wkbMultiCurve:
+            case wkbGeometryCollection:
+            {
+                const auto& collection = static_cast<const OGRGeometryCollection&>(geometry);
+                for (int index = 0; index < collection.getNumGeometries(); ++index)
+                {
+                    const OGRGeometry* child = collection.getGeometryRef(index);
+                    if (child != nullptr)
+                    {
+                        AppendGeometry(*child, scene);
+                    }
+                }
+                return;
+            }
+
+            case wkbLineString:
+            case wkbCircularString:
+            case wkbCompoundCurve:
+            {
+                const std::unique_ptr<OGRGeometry> linear(geometry.getLinearGeometry());
+                if (linear == nullptr)
+                {
+                    throw CoreError("Cannot linearize curved vector geometry");
+                }
+                const auto& line = static_cast<const OGRLineString&>(*linear);
+                if (line.getNumPoints() >= 2)
+                {
+                    Ring points;
+                    points.reserve(static_cast<std::size_t>(line.getNumPoints()));
+                    for (int index = 0; index < line.getNumPoints(); ++index)
+                    {
+                        points.push_back({line.getX(index), line.getY(index)});
+                    }
+                    scene.lines.push_back(std::move(points));
+                }
+                return;
+            }
+
             case wkbPolygon:
                 AppendPolygon(static_cast<const OGRPolygon&>(geometry), scene);
                 return;
@@ -80,7 +131,6 @@ namespace mwg::rendering
             }
 
             case wkbCurvePolygon:
-            case wkbMultiSurface:
             {
                 const std::unique_ptr<OGRGeometry> linear(geometry.getLinearGeometry());
                 if (linear == nullptr)
@@ -91,27 +141,60 @@ namespace mwg::rendering
                 return;
             }
 
+            case wkbMultiSurface:
+            {
+                const auto& surfaces = static_cast<const OGRGeometryCollection&>(geometry);
+                for (int index = 0; index < surfaces.getNumGeometries(); ++index)
+                {
+                    const OGRGeometry* surface = surfaces.getGeometryRef(index);
+                    if (surface != nullptr)
+                    {
+                        AppendGeometry(*surface, scene);
+                    }
+                }
+                return;
+            }
+
             default:
-                throw CoreError("Vector rendering supports Polygon and MultiPolygon geometries only");
+                throw CoreError("Vector rendering does not support this geometry type");
             }
         }
     }
 
-    VectorRenderScene detail::BuildVectorRenderScene(const VectorLayer& layer)
+    VectorRenderScene detail::BuildVectorRenderScene(
+        const VectorLayer& layer,
+        const std::string& mapProjectionWkt)
     {
-        if (BaseShapeType(layer.Type()) != ShapeType::Polygon)
+        const ShapeType shapeType = BaseShapeType(layer.Type());
+        if (shapeType != ShapeType::Point && shapeType != ShapeType::MultiPoint &&
+            shapeType != ShapeType::PolyLine && shapeType != ShapeType::Polygon)
         {
-            throw CoreError("Vector rendering supports polygon layers only");
+            throw CoreError("Vector rendering does not support this layer geometry type");
         }
 
         VectorRenderScene scene;
         scene.extent = layer.GetExtent();
         scene.sourceFeatureCount = layer.FeatureCount();
+        const std::string sourceWkt = layer.ProjectionWkt();
+        const std::string& targetWkt =
+            mapProjectionWkt.empty() ? sourceWkt : mapProjectionWkt;
+        const mwg::detail::CoordinateTransformation transform(sourceWkt, targetWkt);
         mwg::detail::VectorLayerAccess::ForEachGeometry(
             layer,
-            [&scene](const OGRGeometry& geometry)
+            [&scene, &transform](const OGRGeometry& geometry)
             {
-                AppendGeometry(geometry, scene);
+                if (!transform.IsNeeded())
+                {
+                    AppendGeometry(geometry, scene);
+                    return;
+                }
+                std::unique_ptr<OGRGeometry> transformed(geometry.clone());
+                if (transformed == nullptr ||
+                    transformed->transform(transform.Get()) != OGRERR_NONE)
+                {
+                    throw CoreError("Cannot transform vector geometry into the map coordinate system");
+                }
+                AppendGeometry(*transformed, scene);
             });
         return scene;
     }
@@ -119,9 +202,9 @@ namespace mwg::rendering
     VectorRenderScene CreateVectorRenderScene(const VectorLayer& layer)
     {
         VectorRenderScene scene = detail::BuildVectorRenderScene(layer);
-        if (scene.polygons.empty())
+        if (scene.points.empty() && scene.lines.empty() && scene.polygons.empty())
         {
-            throw CoreError("Vector layer contains no polygon geometry to render");
+            throw CoreError("Vector layer contains no geometry to render");
         }
         return scene;
     }

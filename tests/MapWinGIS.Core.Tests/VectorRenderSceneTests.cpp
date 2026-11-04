@@ -433,14 +433,14 @@ TEST(VectorRenderScene, DatasetOverloadUsesFirstPolygonLayer)
     ExpectSameScene(scene, firstLayerScene);
 }
 
-TEST(VectorRenderScene, DatasetOverloadDoesNotSearchPastNonPolygonFirstLayer)
+TEST(VectorRenderScene, DatasetOverloadDoesNotSearchPastUnsupportedFirstLayer)
 {
     TempDirectory directory;
     const auto path = MakeTwoLayerDataset(
         directory.Path(),
-        "point-first.gpkg",
-        wkbPoint,
-        "POINT (0 0)",
+        "collection-first.gpkg",
+        wkbGeometryCollection,
+        "GEOMETRYCOLLECTION (POINT (0 0))",
         wkbPolygon,
         "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))");
     const auto dataset = VectorDataset::Open(path);

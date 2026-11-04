@@ -2,7 +2,7 @@
 
 /**
  * @file GdiVectorLayerRenderer.h
- * @brief Declares the GDI backend for polygon render scenes.
+ * @brief Declares the GDI backend for vector render scenes.
  *
  * The backend paints supported vector scene geometry into the supplied
  * device context and does not retain host or scene resources.
@@ -18,7 +18,7 @@ namespace mwg::activex
     class GdiVectorLayerRenderer final : public IVectorRenderBackend
     {
     public:
-        /// Draws the layers bottom first. A layer with a vertex outside the
+        /// Draws points, lines, and polygons bottom first. A layer with a vertex outside the
         /// GDI coordinate range, or a non-finite vertex, is skipped as a
         /// whole and listed by GetFailedLayers; the other layers are still
         /// drawn. Returns E_INVALIDARG when every layer was skipped, and S_OK

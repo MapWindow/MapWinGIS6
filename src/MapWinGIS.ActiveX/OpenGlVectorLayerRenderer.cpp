@@ -223,6 +223,11 @@ namespace mwg::activex
         {
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
+                if (layer.raster.has_value() ||
+                    !layer.scene.points.empty() || !layer.scene.lines.empty())
+                {
+                    return false;
+                }
                 for (const rendering::Polygon& polygon : layer.scene.polygons)
                 {
                     if (polygon.size() != 1 || !IsConvex(polygon.front()))
