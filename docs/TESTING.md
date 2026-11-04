@@ -51,6 +51,17 @@ run exceeded 30 seconds); rerun it before treating a timeout as a hang. These
 integration checks require Windows and an interactive desktop session; they
 are not currently part of CI.
 
+The navigation checks make sure that a polygon edge stays under the wheel
+cursor and that off-control wheel input zooms around the viewport center.
+A diagonal drag checks both axes. Hover checks cover button-up outside the
+control and a missed button-up. Reload checks sample pixels before an explicit
+zoom, both after `ClearLayers` and after removal of the last layer.
+Repaint waits compare only the map client area until three successive samples
+stay unchanged, with a five-second timeout. The UI message loop runs normally
+between samples. Wheel checks start from a fitted fixture view, far from the
+resolution limits, and compare map pixels without a minimum changed-pixel
+count. Window borders and status text do not affect these comparisons.
+
 The host executable accepts `--automated`, `--results <path>`, and
 `--timeout-seconds <5-300>`. The PowerShell launcher supplies these options
 and starts the host without changing COM registration.

@@ -30,9 +30,11 @@ do not depend on a window. ActiveX exposes map/layer zoom operations and
 supports cursor-anchored mouse-wheel zoom and left-button drag-to-pan.
 
 Vector loads add layers rather than replace them. The first layer fits the
-initial view; later loads preserve it. Call `ZoomToMap` to include new layers
+initial view, including after the map becomes empty. Later loads preserve it.
+Call `ZoomToMap` to include new layers
 in the visible extent, or `ClearLayers` to release loaded datasets before
-switching or refreshing them.
+switching or refreshing them. Clearing the map or removing its last layer
+resets the view.
 
 ## Build and test
 

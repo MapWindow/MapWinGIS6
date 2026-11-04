@@ -207,7 +207,9 @@ has no extent or transform of its own.
   have changed, and the host requests a redraw when it does. Edits to source
   geometry are not observed; call `InvalidateScene` after them.
 - **Initial view and resizing.** While the viewport has no view, adding a
-  layer fits the view to the visible map extent. `Resize` keeps the center
+  layer fits the view to the visible map extent. Clearing the map or removing
+  its last layer clears the view and any pending fit, but keeps the viewport
+  size. The next layer gets an initial fit. `Resize` keeps the center
   and resolution, so resizing neither moves nor rescales the map. A fit
   requested while the viewport has no size, for example before the host
   window exists or while it is minimized, is done by the first `Resize` that
@@ -343,24 +345,33 @@ Workers never retain COM references or wait for event handlers.
 map. Earlier layers stay loaded, so calling it again shows several layers.
 This includes repeated loads of the same dataset. Call `ClearLayers` before
 switching or refreshing datasets to avoid duplicate layers. It releases all
-loaded datasets and clears the feature total, but keeps the view.
+loaded datasets and clears the feature total and view.
 The layer must be polygon-compatible: a dataset whose first layer has another
 geometry type fails to load and is not added, even if a later layer is
 polygonal. An empty polygon layer loads but draws nothing. The control reads
 and validates the candidate layer before adding it, so a rejected load cannot
 change the live viewport or schedule a fit.
 `LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
-the cached total over all loaded layers. The control updates the total after a
-successful load or removal and resets it on `ClearLayers`; property reads do
-not scan datasets or rebuild the scene. The first layer fits the initial view;
-later loads preserve the current view, and callers can use `ZoomToMap` to
+the cached total over all loaded layers. The control saves each layer's
+contribution at load time and subtracts that same count on removal.
+`ClearLayers` resets the total. Property reads and removal do not scan
+datasets or rebuild the scene. The first layer fits the initial view,
+including after clearing the map or removing its last layer.
+Later loads preserve the current view, and callers can use `ZoomToMap` to
 include new layers in the visible extent. `IMapWinGISControl4` exposes layer
 count and stable layer IDs, removal, visibility, `ZoomToMap`, `ZoomToLayer`,
 `ZoomIn`, and `ZoomOut`; it inherits `ClearLayers` from `IMapWinGISControl3`.
 Layer reordering is not exposed because Core has no reorder operation.
-Mouse-wheel zoom is anchored at the cursor. Left-button dragging pans the
+Mouse-wheel zoom is anchored at the cursor when it is inside the control.
+Otherwise, zoom uses the viewport center. Left-button dragging pans the
 view, with windowless mouse capture released on button-up, capture loss,
-cancellation, or control destruction. Raster layers and other geometry types
+cancellation, close, or in-place deactivation. A mouse move without the left
+button pressed also ends a drag, even if the host misses button-up.
+Mouse navigation errors use a shared debug trace and leave the input message
+unhandled so the host can process it. A failed pan also releases capture.
+Mouse messages do not provide the HRESULT and `IErrorInfo` error contract of
+automation calls.
+Raster layers and other geometry types
 are not rendered. There is no reprojection, so coordinates remain in the
 source coordinate system and layers are assumed to share one.
 

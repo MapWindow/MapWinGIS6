@@ -15,6 +15,8 @@
 #include "resource.h"
 
 #include <cstdint>
+#include <utility>
+#include <vector>
 
 #include <atlctl.h>
 
@@ -135,6 +137,7 @@ public:
         BSTR* diagnostics,
         SAFEARRAY** warnings) override;
     STDMETHOD(Close)(DWORD saveOption) override;
+    STDMETHOD(InPlaceDeactivate)() override;
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -166,6 +169,7 @@ private:
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
+    std::vector<std::pair<mwg::LayerId, LONGLONG>> _layerFeatureCounts;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
     mwg::ScreenPoint _lastPanPosition{};
