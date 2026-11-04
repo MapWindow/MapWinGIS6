@@ -4,10 +4,10 @@
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
- * Provides automation for vector loading and map navigation, file drop, GDAL
- * operations, rendering preferences, and painting polygon layers. The control
- * owns one Core MapView, the only map and view state; it forwards host events
- * to it and draws its render scene through its viewport.
+ * Provides automation for vector loading, map navigation, file drop, GDAL
+ * operations, and rendering preferences. The control owns one Core MapView as
+ * its map and view state, forwards host events to it, and draws its render
+ * scene through its viewport.
  */
 #pragma once
 
@@ -15,6 +15,8 @@
 #include "resource.h"
 
 #include <cstdint>
+#include <utility>
+#include <vector>
 
 #include <atlctl.h>
 
@@ -150,6 +152,7 @@ public:
         POINTL point,
         DWORD* effect) override;
     STDMETHOD(Close)(DWORD saveOption) override;
+    STDMETHOD(InPlaceDeactivate)() override;
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -181,6 +184,7 @@ private:
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
+    std::vector<std::pair<mwg::LayerId, LONGLONG>> _layerFeatureCounts;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
     mwg::ScreenPoint _lastPanPosition{};

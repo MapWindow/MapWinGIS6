@@ -111,6 +111,11 @@ namespace mwg
             return false;
         }
         _impl->_sceneStale = true;
+        if (_impl->_map.LayerCount() == 0)
+        {
+            _impl->_viewport.ClearView();
+            _impl->_pendingFit.reset();
+        }
         return true;
     }
 
@@ -121,6 +126,8 @@ namespace mwg
             return false;
         }
         _impl->_map.Clear();
+        _impl->_viewport.ClearView();
+        _impl->_pendingFit.reset();
         _impl->_sceneStale = true;
         return true;
     }

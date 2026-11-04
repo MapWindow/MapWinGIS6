@@ -32,9 +32,10 @@ The ActiveX control also accepts supported vector datasets through file
 drag-and-drop.
 
 Vector loads add layers rather than replace them. The first layer fits the
-initial view; later loads preserve it. Call `ZoomToMap` to include new layers
-in the visible extent, or `ClearLayers` to release loaded datasets before
-switching or refreshing them.
+initial view, including after the map becomes empty. Later loads preserve it.
+Call `ZoomToMap` to include new layers in the visible extent, or `ClearLayers`
+to release loaded datasets before switching or refreshing them. Clearing the
+map or removing its last layer resets the view.
 
 Dropped files append as layers and the control fits the combined visible
 extent after processing the batch. Unsupported or invalid files are skipped;
