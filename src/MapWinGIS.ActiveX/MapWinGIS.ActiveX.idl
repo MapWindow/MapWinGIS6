@@ -153,6 +153,17 @@ library MapWinGISActiveXLib
 
             [id(2)]
             void GdalOperationCompleted([in] hyper operationId);
+
+            // Drops are queued on the control's owning thread. These events
+            // report each file result and then the batch result.
+            [id(3)]
+            void DropFileCompleted([in] BSTR path, [in] LONG errorCode);
+
+            [id(4)]
+            void DropCompleted(
+                [in] LONG loadedCount,
+                [in] LONG failedCount,
+                [in] LONG errorCode);
     };
 
     [

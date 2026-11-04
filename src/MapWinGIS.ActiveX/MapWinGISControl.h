@@ -4,10 +4,10 @@
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
- * Provides automation for vector loading and map navigation, GDAL operations,
- * rendering preferences, and painting the map's polygon layers. The control
- * owns one Core MapView, the only map and view state; it forwards host events
- * to it and draws its render scene through its viewport.
+ * Provides automation for vector loading, map navigation, file drop, GDAL
+ * operations, and rendering preferences. The control owns one Core MapView as
+ * its map and view state, forwards host events to it, and draws its render
+ * scene through its viewport.
  */
 #pragma once
 
@@ -15,6 +15,9 @@
 #include "resource.h"
 
 #include <cstdint>
+#include <deque>
+#include <filesystem>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -36,6 +39,7 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IOleControlImpl<CMapWinGISControl>,
     public ATL::IOleObjectImpl<CMapWinGISControl>,
     public ATL::IOleInPlaceActiveObjectImpl<CMapWinGISControl>,
+    public IDropTarget,
     public ATL::IViewObjectExImpl<CMapWinGISControl>,
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
@@ -65,6 +69,7 @@ public:
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
+        COM_INTERFACE_ENTRY(IDropTarget)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
         COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IViewObjectEx)
@@ -88,6 +93,7 @@ public:
     END_PROP_MAP()
 
     BEGIN_MSG_MAP(CMapWinGISControl)
+        MESSAGE_HANDLER(WM_CREATE, OnCreate)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
@@ -136,11 +142,25 @@ public:
         BSTR* summary,
         BSTR* diagnostics,
         SAFEARRAY** warnings) override;
+    STDMETHOD(GetDropTarget)(IDropTarget** dropTarget) override;
+    STDMETHOD(DragEnter)(
+        IDataObject* data,
+        DWORD keyState,
+        POINTL point,
+        DWORD* effect) override;
+    STDMETHOD(DragOver)(DWORD keyState, POINTL point, DWORD* effect) override;
+    STDMETHOD(DragLeave)() override;
+    STDMETHOD(Drop)(
+        IDataObject* data,
+        DWORD keyState,
+        POINTL point,
+        DWORD* effect) override;
     STDMETHOD(Close)(DWORD saveOption) override;
     STDMETHOD(InPlaceDeactivate)() override;
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnCreate(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseWheel(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonDown(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseMove(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -166,6 +186,12 @@ private:
     HRESULT SetPointerCapture(bool capture) noexcept;
     /// Ends a drag and optionally releases capture still owned by this control.
     void EndPan(bool releaseCapture) noexcept;
+    void RevokeWindowDropTarget() noexcept;
+    void CloseDropQueue() noexcept;
+    static void DispatchDroppedFiles(void* control) noexcept;
+    HRESULT LoadDroppedFile(const std::filesystem::path& path) noexcept;
+    void LoadDroppedFiles(const std::vector<std::filesystem::path>& paths) noexcept;
+    void FireDropEvent(DISPID eventId, ATL::CComVariant* arguments, UINT count) noexcept;
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
@@ -174,6 +200,12 @@ private:
     mwg::activex::GdalEventSource _gdalEvents;
     mwg::ScreenPoint _lastPanPosition{};
     bool _isPanning = false;
+    bool _dropAcceptsFiles = false;
+    HWND _dropTargetWindow = nullptr;
+    std::shared_ptr<mwg::activex::GdalDispatchWindow> _dropDispatchWindow;
+    std::deque<std::vector<std::filesystem::path>> _pendingDrops;
+    bool _dispatchingDrop = false;
+    bool _dropQueueClosed = false;
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

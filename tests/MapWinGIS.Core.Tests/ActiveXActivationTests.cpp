@@ -2,20 +2,25 @@
 
 /**
  * @file ActiveXActivationTests.cpp
- * @brief Tests COM activation, view rendering, and the hosted control lifecycle.
+ * @brief Tests COM activation, file drops, rendering, and the hosted control lifecycle.
  */
 #include <Windows.h>
 #include <atlbase.h>
 #include <atlhost.h>
 #include <objbase.h>
+#include <shellapi.h>
+#include <shlobj.h>
 #include <wrl/client.h>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -47,6 +52,18 @@ namespace
     class GdalEventSink final : public IDispatch
     {
     public:
+        struct DropFileResult
+        {
+            std::filesystem::path path;
+            HRESULT result;
+        };
+        std::vector<DropFileResult> droppedFiles;
+        LONG droppedLoadedCount = 0;
+        LONG droppedFailedCount = 0;
+        HRESULT dropResult = E_PENDING;
+        int dropBatchCount = 0;
+        IOleObject* closeOnDropFile = nullptr;
+
         using ProgressCallback = HRESULT(*)(void*, LONGLONG);
         using CompletionCallback = HRESULT(*)(void*, LONGLONG);
 
@@ -126,6 +143,45 @@ namespace
             if (parameters == nullptr || parameters->rgvarg == nullptr)
             {
                 return E_INVALIDARG;
+            }
+            if (memberId == 3)
+            {
+                if (parameters->cArgs != 2 ||
+                    parameters->rgvarg[0].vt != VT_I4 ||
+                    parameters->rgvarg[1].vt != VT_BSTR)
+                {
+                    return E_INVALIDARG;
+                }
+                try
+                {
+                    droppedFiles.push_back({
+                        parameters->rgvarg[1].bstrVal,
+                        parameters->rgvarg[0].lVal});
+                }
+                catch (const std::bad_alloc&)
+                {
+                    return E_OUTOFMEMORY;
+                }
+                if (closeOnDropFile != nullptr)
+                {
+                    return closeOnDropFile->Close(OLECLOSE_NOSAVE);
+                }
+                return S_OK;
+            }
+            if (memberId == 4)
+            {
+                if (parameters->cArgs != 3 ||
+                    parameters->rgvarg[0].vt != VT_I4 ||
+                    parameters->rgvarg[1].vt != VT_I4 ||
+                    parameters->rgvarg[2].vt != VT_I4)
+                {
+                    return E_INVALIDARG;
+                }
+                dropResult = parameters->rgvarg[0].lVal;
+                droppedFailedCount = parameters->rgvarg[1].lVal;
+                droppedLoadedCount = parameters->rgvarg[2].lVal;
+                ++dropBatchCount;
+                return S_OK;
             }
 
             if ((memberId == 1 && parameters->cArgs != 3) ||
@@ -750,6 +806,191 @@ namespace
         HMODULE _handle;
     };
 
+    class FileDropDataObject final : public IDataObject
+    {
+    public:
+        explicit FileDropDataObject(
+            const std::vector<std::filesystem::path>& paths,
+            const CLIPFORMAT format = CF_HDROP)
+            : _format(format)
+        {
+            for (const std::filesystem::path& path : paths)
+            {
+                const std::wstring text = path.native();
+                _fileList.insert(_fileList.end(), text.begin(), text.end());
+                _fileList.push_back(L'\0');
+            }
+            _fileList.push_back(L'\0');
+        }
+
+        HRESULT STDMETHODCALLTYPE QueryInterface(
+            REFIID interfaceId,
+            void** result) override
+        {
+            if (result == nullptr)
+            {
+                return E_POINTER;
+            }
+            *result = nullptr;
+            if (IsEqualIID(interfaceId, IID_IUnknown) ||
+                IsEqualIID(interfaceId, IID_IDataObject))
+            {
+                *result = static_cast<IDataObject*>(this);
+                AddRef();
+                return S_OK;
+            }
+            return E_NOINTERFACE;
+        }
+
+        ULONG STDMETHODCALLTYPE AddRef() override
+        {
+            return ++_references;
+        }
+
+        ULONG STDMETHODCALLTYPE Release() override
+        {
+            const ULONG remaining = --_references;
+            if (remaining == 0)
+            {
+                delete this;
+            }
+            return remaining;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetData(
+            FORMATETC* format,
+            STGMEDIUM* medium) override
+        {
+            if (medium == nullptr)
+            {
+                return E_POINTER;
+            }
+            const HRESULT queryResult = QueryGetData(format);
+            if (FAILED(queryResult))
+            {
+                return queryResult;
+            }
+
+            const SIZE_T byteCount = sizeof(DROPFILES) +
+                _fileList.size() * sizeof(wchar_t);
+            HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, byteCount);
+            if (memory == nullptr)
+            {
+                return E_OUTOFMEMORY;
+            }
+
+            auto* dropFiles = static_cast<DROPFILES*>(::GlobalLock(memory));
+            if (dropFiles == nullptr)
+            {
+                ::GlobalFree(memory);
+                return E_OUTOFMEMORY;
+            }
+            *dropFiles = {};
+            dropFiles->pFiles = sizeof(DROPFILES);
+            dropFiles->fWide = TRUE;
+            std::memcpy(
+                reinterpret_cast<std::byte*>(dropFiles) + sizeof(DROPFILES),
+                _fileList.data(),
+                _fileList.size() * sizeof(wchar_t));
+            ::GlobalUnlock(memory);
+
+            medium->tymed = TYMED_HGLOBAL;
+            medium->hGlobal = memory;
+            medium->pUnkForRelease = nullptr;
+            return S_OK;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetDataHere(
+            FORMATETC*,
+            STGMEDIUM*) override
+        {
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* format) override
+        {
+            if (format == nullptr)
+            {
+                return E_POINTER;
+            }
+            if (format->cfFormat != _format ||
+                format->dwAspect != DVASPECT_CONTENT ||
+                format->lindex != -1 ||
+                (format->tymed & TYMED_HGLOBAL) == 0)
+            {
+                return DV_E_FORMATETC;
+            }
+            return S_OK;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(
+            FORMATETC*,
+            FORMATETC* output) override
+        {
+            if (output == nullptr)
+            {
+                return E_POINTER;
+            }
+            output->ptd = nullptr;
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE SetData(
+            FORMATETC*,
+            STGMEDIUM*,
+            BOOL) override
+        {
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE EnumFormatEtc(
+            DWORD,
+            IEnumFORMATETC** output) override
+        {
+            if (output == nullptr)
+            {
+                return E_POINTER;
+            }
+            *output = nullptr;
+            return E_NOTIMPL;
+        }
+
+        HRESULT STDMETHODCALLTYPE DAdvise(
+            FORMATETC*,
+            DWORD,
+            IAdviseSink*,
+            DWORD* connection) override
+        {
+            if (connection == nullptr)
+            {
+                return E_POINTER;
+            }
+            *connection = 0;
+            return OLE_E_ADVISENOTSUPPORTED;
+        }
+
+        HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override
+        {
+            return OLE_E_ADVISENOTSUPPORTED;
+        }
+
+        HRESULT STDMETHODCALLTYPE EnumDAdvise(
+            IEnumSTATDATA** output) override
+        {
+            if (output == nullptr)
+            {
+                return E_POINTER;
+            }
+            *output = nullptr;
+            return OLE_E_ADVISENOTSUPPORTED;
+        }
+
+    private:
+        std::atomic<ULONG> _references{1};
+        CLIPFORMAT _format;
+        std::vector<wchar_t> _fileList;
+    };
+
     class ActiveXMapTest : public testing::Test
     {
     protected:
@@ -773,6 +1014,25 @@ namespace
             ASSERT_EQ(_control.As(&_window), S_OK);
             ASSERT_EQ(_control.As(&_viewObject), S_OK);
             ASSERT_EQ(_control->put_RenderingBackendPreference(ATL::CComBSTR(L"GDI")), S_OK);
+            ComPtr<IConnectionPointContainer> points;
+            ASSERT_EQ(_control.As(&points), S_OK);
+            ASSERT_EQ(points->FindConnectionPoint(
+                __uuidof(IMapWinGISControlEvents), &_dropConnection), S_OK);
+            _dropSink.Attach(new GdalEventSink());
+            ASSERT_EQ(_dropConnection->Advise(_dropSink.Get(), &_dropCookie), S_OK);
+        }
+
+        void TearDown() override
+        {
+            if (_dropConnection != nullptr && _dropCookie != 0)
+            {
+                EXPECT_EQ(_dropConnection->Unadvise(_dropCookie), S_OK);
+            }
+            ComPtr<IOleObject> object;
+            if (SUCCEEDED(_control.As(&object)))
+            {
+                EXPECT_EQ(object->Close(OLECLOSE_NOSAVE), S_OK);
+            }
         }
 
         HRESULT LoadRectangles(const std::vector<mwg::Extent>& rectangles)
@@ -795,6 +1055,60 @@ namespace
             return _control->LoadVectorDataset(ATL::CComBSTR(path.c_str()));
         }
 
+        HRESULT DropFiles(
+            const std::vector<std::filesystem::path>& paths,
+            DWORD& effect)
+        {
+            ComPtr<IDropTarget> target;
+            HRESULT result = _window->GetDropTarget(&target);
+            if (FAILED(result))
+            {
+                return result;
+            }
+
+            ComPtr<IDataObject> data;
+            data.Attach(new (std::nothrow) FileDropDataObject(paths));
+            if (data == nullptr)
+            {
+                return E_OUTOFMEMORY;
+            }
+
+            effect = DROPEFFECT_COPY;
+            const POINTL point{20, 20};
+            result = target->DragEnter(data.Get(), 0, point, &effect);
+            if (FAILED(result) || (effect & DROPEFFECT_COPY) == 0)
+            {
+                return result;
+            }
+            result = target->DragOver(0, point, &effect);
+            if (FAILED(result))
+            {
+                return result;
+            }
+            return target->Drop(data.Get(), 0, point, &effect);
+        }
+
+        bool WaitForDrop(const int batchCount)
+        {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (_dropSink->dropBatchCount < batchCount &&
+                std::chrono::steady_clock::now() < deadline)
+            {
+                MSG message{};
+                while (::PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+                {
+                    ::TranslateMessage(&message);
+                    ::DispatchMessageW(&message);
+                }
+                if (_dropSink->dropBatchCount < batchCount)
+                {
+                    (void)::MsgWaitForMultipleObjectsEx(
+                        0, nullptr, 20, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                }
+            }
+            return _dropSink->dropBatchCount == batchCount;
+        }
+
         HRESULT Resize(const int width, const int height)
         {
             LRESULT result = 0;
@@ -815,6 +1129,9 @@ namespace
         ComPtr<IMapWinGISControl3> _control;
         ComPtr<IOleInPlaceObjectWindowless> _window;
         ComPtr<IViewObjectEx> _viewObject;
+        ComPtr<GdalEventSink> _dropSink;
+        ComPtr<IConnectionPoint> _dropConnection;
+        DWORD _dropCookie = 0;
         int _datasetCount = 0;
     };
 
@@ -845,6 +1162,235 @@ TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
     ASSERT_NE(file, INVALID_HANDLE_VALUE);
     CloseHandle(file);
     ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}}), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 1);
+}
+
+TEST_F(ActiveXMapTest, FileDropAddsMultipleLayersAndFitsTheirCombinedExtent)
+{
+    ASSERT_EQ(Resize(200, 120), S_OK);
+    const std::array firstExtent{mwg::Extent{0, 0, 2, 2}};
+    const std::array secondExtent{mwg::Extent{100, 0, 102, 2}};
+    const auto first = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "dropped-first.gpkg", firstExtent);
+    const auto second = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "dropped-second.gpkg", secondExtent);
+
+    DWORD effect = DROPEFFECT_NONE;
+    ASSERT_EQ(DropFiles({first, second}, effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_COPY));
+
+    ComPtr<IMapWinGISControl4> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+    LONG layerCount = 0;
+    LONGLONG featureCount = 0;
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+    EXPECT_EQ(_dropSink->dropBatchCount, 0);
+    ASSERT_TRUE(WaitForDrop(1));
+    EXPECT_EQ(_dropSink->dropResult, S_OK);
+    EXPECT_EQ(_dropSink->droppedLoadedCount, 2);
+    EXPECT_EQ(_dropSink->droppedFailedCount, 0);
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(layerCount, 2);
+    EXPECT_EQ(featureCount, 2);
+
+    BitmapSurface surface(200, 120);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 200, 120), S_OK);
+    mwg::Viewport expected(200, 120);
+    ASSERT_TRUE(expected.FitExtent({0, 0, 102, 2}, 12.0));
+    for (const mwg::MapPoint point : {mwg::MapPoint{1, 1}, mwg::MapPoint{101, 1}})
+    {
+        const auto screen = expected.MapToScreen(point);
+        ASSERT_TRUE(screen.has_value());
+        const auto pixel = mwg::ToPixel(*screen);
+        ASSERT_TRUE(pixel.has_value());
+        EXPECT_EQ(GetPixel(surface.Get(), pixel->x, pixel->y), RGB(61, 122, 169));
+    }
+}
+
+TEST_F(ActiveXMapTest, FileDropKeepsSuccessfulFilesWhenOthersAreUnsupported)
+{
+    const auto unsupported = _directory.Path() / "unsupported.txt";
+    {
+        std::ofstream output(unsupported);
+        output << "not a vector dataset";
+        ASSERT_TRUE(output.good());
+    }
+    const auto valid = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "dropped-valid.gpkg",
+        std::array{mwg::Extent{0, 0, 2, 2}});
+
+    DWORD effect = DROPEFFECT_NONE;
+    const auto missing = _directory.Path() / "missing.geojson";
+    ASSERT_EQ(DropFiles({unsupported, missing, valid}, effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_COPY));
+    ASSERT_TRUE(WaitForDrop(1));
+    EXPECT_TRUE(FAILED(_dropSink->dropResult));
+    EXPECT_EQ(_dropSink->droppedLoadedCount, 1);
+    EXPECT_EQ(_dropSink->droppedFailedCount, 2);
+    ASSERT_EQ(_dropSink->droppedFiles.size(), 3U);
+    EXPECT_EQ(_dropSink->droppedFiles[0].path, unsupported);
+    EXPECT_TRUE(FAILED(_dropSink->droppedFiles[0].result));
+    EXPECT_EQ(_dropSink->droppedFiles[1].path, missing);
+    EXPECT_EQ(_dropSink->droppedFiles[1].result, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND));
+    EXPECT_EQ(_dropSink->droppedFiles[2].path, valid);
+    EXPECT_EQ(_dropSink->droppedFiles[2].result, S_OK);
+
+    ComPtr<IMapWinGISControl4> automation;
+    ASSERT_EQ(_control.As(&automation), S_OK);
+    LONG layerCount = 0;
+    LONGLONG featureCount = 0;
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+    EXPECT_EQ(featureCount, 1);
+
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    effect = DROPEFFECT_COPY;
+    ASSERT_EQ(DropFiles({missing, unsupported}, effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_COPY));
+    ASSERT_TRUE(WaitForDrop(2));
+    EXPECT_EQ(_dropSink->dropResult, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND));
+    EXPECT_EQ(_dropSink->droppedLoadedCount, 0);
+    EXPECT_EQ(_dropSink->droppedFailedCount, 2);
+    ASSERT_EQ(automation->get_LayerCount(&layerCount), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+    EXPECT_EQ(featureCount, 0);
+}
+
+TEST_F(ActiveXMapTest, FileDropRejectsOtherFormatsMoveOnlyAndDragLeave)
+{
+    ComPtr<IDropTarget> target;
+    ASSERT_EQ(_window->GetDropTarget(&target), S_OK);
+    const POINTL point{20, 20};
+    ComPtr<IDataObject> text;
+    text.Attach(new FileDropDataObject({}, CF_UNICODETEXT));
+    DWORD effect = DROPEFFECT_COPY;
+    ASSERT_EQ(target->DragEnter(text.Get(), 0, point, &effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+    effect = DROPEFFECT_COPY;
+    ASSERT_EQ(target->DragOver(0, point, &effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+    effect = DROPEFFECT_COPY;
+    EXPECT_EQ(target->Drop(text.Get(), 0, point, &effect), DV_E_FORMATETC);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+
+    ComPtr<IDataObject> files;
+    files.Attach(new FileDropDataObject({_directory.Path() / "not-loaded.gpkg"}));
+    effect = DROPEFFECT_MOVE;
+    ASSERT_EQ(target->DragEnter(files.Get(), 0, point, &effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+    effect = DROPEFFECT_MOVE;
+    ASSERT_EQ(target->Drop(files.Get(), 0, point, &effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+
+    effect = DROPEFFECT_COPY;
+    ASSERT_EQ(target->DragEnter(files.Get(), 0, point, &effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_COPY));
+    ASSERT_EQ(target->DragLeave(), S_OK);
+    effect = DROPEFFECT_COPY;
+    ASSERT_EQ(target->DragOver(0, point, &effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+    EXPECT_EQ(_dropSink->dropBatchCount, 0);
+}
+
+TEST_F(ActiveXMapTest, ClosingCancelsQueuedFileDrops)
+{
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "cancelled.gpkg", std::array{mwg::Extent{0, 0, 2, 2}});
+    DWORD effect = DROPEFFECT_COPY;
+    ASSERT_EQ(DropFiles({path}, effect), S_OK);
+    ComPtr<IOleObject> object;
+    ASSERT_EQ(_control.As(&object), S_OK);
+    ASSERT_EQ(object->Close(OLECLOSE_NOSAVE), S_OK);
+    MSG message{};
+    while (::PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+    {
+        ::DispatchMessageW(&message);
+    }
+    LONGLONG count = -1;
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 0);
+    EXPECT_EQ(_dropSink->dropBatchCount, 0);
+    EXPECT_EQ(DropFiles({path}, effect), S_OK);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+    ComPtr<IDropTarget> target;
+    ASSERT_EQ(_window->GetDropTarget(&target), S_OK);
+    ComPtr<IDataObject> data;
+    data.Attach(new FileDropDataObject({path}));
+    effect = DROPEFFECT_COPY;
+    EXPECT_EQ(target->Drop(data.Get(), 0, POINTL{}, &effect), E_UNEXPECTED);
+    EXPECT_EQ(effect, static_cast<DWORD>(DROPEFFECT_NONE));
+}
+
+TEST_F(ActiveXMapTest, WindowedHostRegistersAndRevokesItsDropTarget)
+{
+    const HRESULT oleResult = ::OleInitialize(nullptr);
+    ASSERT_TRUE(SUCCEEDED(oleResult));
+    struct OleGuard final
+    {
+        ~OleGuard() { ::OleUninitialize(); }
+    } oleGuard;
+    ASSERT_TRUE(AtlAxWinInit());
+    TestHostWindow hostWindow;
+    ASSERT_NE(hostWindow.Get(), nullptr);
+    ATL::CComObject<ATL::CAxHostWindow>* hostObject = nullptr;
+    ASSERT_EQ(ATL::CComObject<ATL::CAxHostWindow>::CreateInstance(&hostObject), S_OK);
+    ATL::CComPtr<IAxWinHostWindow> host(hostObject);
+    ATL::CComQIPtr<IAxWinAmbientDispatch> ambient(host);
+    ASSERT_NE(ambient.p, nullptr);
+    ASSERT_EQ(ambient->put_AllowWindowlessActivation(VARIANT_FALSE), S_OK);
+    ASSERT_EQ(host->AttachControl(_control.Get(), hostWindow.Get()), S_OK);
+
+    HWND controlWindow = nullptr;
+    ASSERT_EQ(_window->GetWindow(&controlWindow), S_OK);
+    ASSERT_NE(controlWindow, nullptr);
+    ASSERT_NE(controlWindow, hostWindow.Get());
+    ComPtr<IDropTarget> target;
+    ASSERT_EQ(_window->GetDropTarget(&target), S_OK);
+    const HRESULT registerResult = ::RegisterDragDrop(controlWindow, target.Get());
+    if (registerResult == S_OK)
+    {
+        // Avoid retaining a test registration when the control failed to register.
+        EXPECT_EQ(::RevokeDragDrop(controlWindow), S_OK);
+    }
+    ASSERT_EQ(registerResult, DRAGDROP_E_ALREADYREGISTERED);
+
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "windowed.gpkg", std::array{mwg::Extent{0, 0, 2, 2}});
+    DWORD effect = DROPEFFECT_COPY;
+    ASSERT_EQ(DropFiles({path}, effect), S_OK);
+    ASSERT_TRUE(WaitForDrop(1));
+    EXPECT_EQ(_dropSink->droppedLoadedCount, 1);
+    ASSERT_EQ(_window->InPlaceDeactivate(), S_OK);
+    EXPECT_FALSE(::IsWindow(controlWindow));
+    EXPECT_EQ(::RevokeDragDrop(controlWindow), DRAGDROP_E_INVALIDHWND);
+    ASSERT_TRUE(hostWindow.Destroy());
+}
+
+TEST_F(ActiveXMapTest, ClosingFromAFileEventStopsTheRemainingBatch)
+{
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "close-from-event.gpkg", std::array{mwg::Extent{0, 0, 2, 2}});
+    ComPtr<IOleObject> object;
+    ASSERT_EQ(_control.As(&object), S_OK);
+    _dropSink->closeOnDropFile = object.Get();
+    DWORD effect = DROPEFFECT_COPY;
+    ASSERT_EQ(DropFiles({path, path}, effect), S_OK);
+    MSG message{};
+    while (::PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+    {
+        ::DispatchMessageW(&message);
+    }
+    _dropSink->closeOnDropFile = nullptr;
+    ASSERT_EQ(_dropSink->droppedFiles.size(), 1U);
+    EXPECT_EQ(_dropSink->dropBatchCount, 0);
+    LONGLONG count = -1;
     ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
     EXPECT_EQ(count, 1);
 }

@@ -2,7 +2,7 @@
 
 /**
  * @file MapWinGISControl.cpp
- * @brief Implements vector loading, ActiveX state reporting, and host drawing.
+ * @brief Implements vector loading, file drop, ActiveX state, and host drawing.
  *
  * Redraws: every map or view change made through the control goes through
  * its MapView; the control calls FireViewChange when the MapView reports
@@ -12,6 +12,7 @@
 #include "MapWinGISControl.h"
 
 #include <atlconv.h>
+#include <shellapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -96,6 +97,117 @@ namespace
         default:
             return L"Automatic";
         }
+    }
+
+    [[nodiscard]] bool HasFileDropFormat(IDataObject* data) noexcept
+    {
+        if (data == nullptr)
+        {
+            return false;
+        }
+
+        FORMATETC format{
+            CF_HDROP,
+            nullptr,
+            DVASPECT_CONTENT,
+            -1,
+            TYMED_HGLOBAL};
+        return SUCCEEDED(data->QueryGetData(&format));
+    }
+
+    class StgMediumGuard final
+    {
+    public:
+        explicit StgMediumGuard(STGMEDIUM& medium) noexcept
+            : _medium(medium)
+        {
+        }
+
+        ~StgMediumGuard()
+        {
+            ::ReleaseStgMedium(&_medium);
+        }
+
+        StgMediumGuard(const StgMediumGuard&) = delete;
+        StgMediumGuard& operator=(const StgMediumGuard&) = delete;
+
+    private:
+        STGMEDIUM& _medium;
+    };
+
+    [[nodiscard]] HRESULT GetDroppedPaths(
+        IDataObject* data,
+        std::vector<std::filesystem::path>& paths)
+    {
+        if (data == nullptr)
+        {
+            return E_POINTER;
+        }
+
+        FORMATETC format{
+            CF_HDROP,
+            nullptr,
+            DVASPECT_CONTENT,
+            -1,
+            TYMED_HGLOBAL};
+        STGMEDIUM medium{};
+        const HRESULT result = data->GetData(&format, &medium);
+        if (FAILED(result))
+        {
+            return result;
+        }
+        const StgMediumGuard mediumGuard(medium);
+        if (medium.tymed != TYMED_HGLOBAL || medium.hGlobal == nullptr)
+        {
+            return DV_E_TYMED;
+        }
+
+        const HDROP drop = static_cast<HDROP>(medium.hGlobal);
+        const UINT count = ::DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        if (count == 0)
+        {
+            return DV_E_FORMATETC;
+        }
+
+        paths.clear();
+        paths.reserve(count);
+        for (UINT index = 0; index < count; ++index)
+        {
+            const UINT length = ::DragQueryFileW(drop, index, nullptr, 0);
+            if (length == 0 || length == std::numeric_limits<UINT>::max())
+            {
+                return DV_E_FORMATETC;
+            }
+
+            std::wstring path(length + 1, L'\0');
+            const UINT copied = ::DragQueryFileW(
+                drop,
+                index,
+                path.data(),
+                static_cast<UINT>(path.size()));
+            if (copied != length)
+            {
+                return DV_E_FORMATETC;
+            }
+            path.resize(copied);
+            paths.emplace_back(std::move(path));
+        }
+        return S_OK;
+    }
+
+    void LogDropFailure(
+        const std::filesystem::path& path,
+        const HRESULT result) noexcept
+    {
+        wchar_t message[64]{};
+        (void)::swprintf_s(
+            message,
+            64,
+            L"MapWinGIS could not load dropped file (HRESULT 0x%08lX): ",
+            static_cast<unsigned long>(result));
+        ::OutputDebugStringW(message);
+        ::OutputDebugStringW(path.c_str());
+        ::OutputDebugStringW(L"\n");
     }
 }
 
@@ -733,6 +845,366 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
     return S_OK;
 }
 
+STDMETHODIMP CMapWinGISControl::GetDropTarget(IDropTarget** dropTarget)
+{
+    if (dropTarget == nullptr)
+    {
+        return E_POINTER;
+    }
+
+    *dropTarget = static_cast<IDropTarget*>(this);
+    AddRef();
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::DragEnter(
+    IDataObject* data,
+    DWORD,
+    POINTL,
+    DWORD* effect)
+{
+    if (effect == nullptr)
+    {
+        return E_POINTER;
+    }
+
+    const DWORD allowedEffects = *effect;
+    *effect = DROPEFFECT_NONE;
+    _dropAcceptsFiles =
+        !_dropQueueClosed &&
+        (allowedEffects & DROPEFFECT_COPY) != 0 && HasFileDropFormat(data);
+    if (_dropAcceptsFiles)
+    {
+        *effect = DROPEFFECT_COPY;
+    }
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::DragOver(DWORD, POINTL, DWORD* effect)
+{
+    if (effect == nullptr)
+    {
+        return E_POINTER;
+    }
+
+    if (_dropAcceptsFiles && (*effect & DROPEFFECT_COPY) != 0)
+    {
+        *effect = DROPEFFECT_COPY;
+    }
+    else
+    {
+        *effect = DROPEFFECT_NONE;
+    }
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::DragLeave()
+{
+    _dropAcceptsFiles = false;
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::Drop(
+    IDataObject* data,
+    DWORD,
+    POINTL,
+    DWORD* effect)
+{
+    if (effect == nullptr)
+    {
+        return E_POINTER;
+    }
+
+    const DWORD allowedEffects = *effect;
+    *effect = DROPEFFECT_NONE;
+    _dropAcceptsFiles = false;
+    if ((allowedEffects & DROPEFFECT_COPY) == 0)
+    {
+        return S_OK;
+    }
+    if (_dropQueueClosed)
+    {
+        return E_UNEXPECTED;
+    }
+
+    std::vector<std::filesystem::path> paths;
+    try
+    {
+        const HRESULT extractResult = GetDroppedPaths(data, paths);
+        if (FAILED(extractResult))
+        {
+            ::OutputDebugStringA("MapWinGIS rejected dropped data without usable file paths.\n");
+            return extractResult;
+        }
+        if (paths.size() > static_cast<std::size_t>(std::numeric_limits<LONG>::max()))
+        {
+            return E_INVALIDARG;
+        }
+        if (_dropDispatchWindow == nullptr)
+        {
+            _dropDispatchWindow = std::make_shared<mwg::activex::GdalDispatchWindow>();
+            if (_dropDispatchWindow->Create(
+                    &CMapWinGISControl::DispatchDroppedFiles, this) == nullptr)
+            {
+                const DWORD error = ::GetLastError();
+                _dropDispatchWindow.reset();
+                return error == ERROR_SUCCESS ? E_FAIL : HRESULT_FROM_WIN32(error);
+            }
+        }
+        _pendingDrops.push_back(std::move(paths));
+        if (!::PostMessageW(
+                _dropDispatchWindow->m_hWnd,
+                mwg::activex::kGdalDispatchMessage, 0, 0))
+        {
+            const DWORD error = ::GetLastError();
+            _pendingDrops.pop_back();
+            return error == ERROR_SUCCESS ? E_FAIL : HRESULT_FROM_WIN32(error);
+        }
+        *effect = DROPEFFECT_COPY;
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetNavigationErrorInfo(exception.what(), E_FAIL);
+    }
+}
+
+HRESULT CMapWinGISControl::LoadDroppedFile(
+    const std::filesystem::path& path) noexcept
+{
+    try
+    {
+        std::error_code fileError;
+        if (!std::filesystem::exists(path, fileError))
+        {
+            return fileError
+                ? HRESULT_FROM_WIN32(static_cast<DWORD>(fileError.value()))
+                : HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+        }
+        const std::wstring& pathText = path.native();
+        if (pathText.size() > std::numeric_limits<UINT>::max())
+        {
+            return E_INVALIDARG;
+        }
+        ATL::CComBSTR pathBstr;
+        pathBstr.Attach(::SysAllocStringLen(
+            pathText.data(), static_cast<UINT>(pathText.size())));
+        if (pathBstr.m_str == nullptr)
+        {
+            return E_OUTOFMEMORY;
+        }
+        return LoadVectorDataset(pathBstr);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return E_OUTOFMEMORY;
+    }
+    catch (const ATL::CAtlException& exception)
+    {
+        return exception.m_hr;
+    }
+    catch (const std::exception& exception)
+    {
+        ::OutputDebugStringA(exception.what());
+        return E_FAIL;
+    }
+}
+
+void CMapWinGISControl::LoadDroppedFiles(
+    const std::vector<std::filesystem::path>& paths) noexcept
+{
+    LONG loadedCount = 0;
+    LONG failedCount = 0;
+    HRESULT firstFailure = S_OK;
+    for (const std::filesystem::path& path : paths)
+    {
+        if (_dropQueueClosed)
+        {
+            return;
+        }
+        const HRESULT loadResult = LoadDroppedFile(path);
+        if (FAILED(loadResult))
+        {
+            ++failedCount;
+            LogDropFailure(path, loadResult);
+            if (SUCCEEDED(firstFailure))
+            {
+                firstFailure = loadResult;
+            }
+        }
+        else
+        {
+            ++loadedCount;
+        }
+        ATL::CComVariant arguments[2];
+        arguments[0] = loadResult;
+        arguments[1].vt = VT_BSTR;
+        arguments[1].bstrVal = ::SysAllocString(path.c_str());
+        if (arguments[1].bstrVal == nullptr)
+        {
+            ::OutputDebugStringA("MapWinGIS could not allocate the dropped path event.\n");
+            if (SUCCEEDED(firstFailure))
+            {
+                firstFailure = E_OUTOFMEMORY;
+            }
+        }
+        else
+        {
+            FireDropEvent(3, arguments, 2);
+        }
+    }
+
+    if (_dropQueueClosed)
+    {
+        return;
+    }
+    if (loadedCount != 0)
+    {
+        try
+        {
+            if (_view.FitToMap())
+            {
+                FireViewChange();
+            }
+        }
+        catch (const std::bad_alloc&)
+        {
+            if (SUCCEEDED(firstFailure))
+            {
+                firstFailure = E_OUTOFMEMORY;
+            }
+        }
+        catch (const std::exception& exception)
+        {
+            ::OutputDebugStringA(exception.what());
+            if (SUCCEEDED(firstFailure))
+            {
+                firstFailure = E_FAIL;
+            }
+        }
+    }
+    ATL::CComVariant arguments[]{
+        ATL::CComVariant(firstFailure),
+        ATL::CComVariant(failedCount),
+        ATL::CComVariant(loadedCount)};
+    FireDropEvent(4, arguments, 3);
+}
+
+void CMapWinGISControl::FireDropEvent(
+    const DISPID eventId,
+    ATL::CComVariant* arguments,
+    const UINT count) noexcept
+{
+    try
+    {
+        std::vector<ATL::CComPtr<IUnknown>> sinks;
+        for (int index = 0; index < m_vec.GetSize(); ++index)
+        {
+            if (IUnknown* sink = m_vec.GetAt(index))
+            {
+                sinks.emplace_back(sink);
+            }
+        }
+        for (const auto& unknown : sinks)
+        {
+            if (_dropQueueClosed)
+            {
+                break;
+            }
+            ATL::CComQIPtr<IDispatch> sink(unknown);
+            if (sink == nullptr)
+            {
+                ::OutputDebugStringA("MapWinGIS drop event sink does not support IDispatch.\n");
+                continue;
+            }
+            ATL::CComVariant copy[3];
+            for (UINT index = 0; index < count; ++index)
+            {
+                const HRESULT result = copy[index].Copy(&arguments[index]);
+                if (FAILED(result))
+                {
+                    AtlThrow(result);
+                }
+            }
+            DISPPARAMS parameters{copy, nullptr, count, 0};
+            if (FAILED(sink->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT,
+                    DISPATCH_METHOD, &parameters, nullptr, nullptr, nullptr)))
+            {
+                ::OutputDebugStringA("MapWinGIS drop event callback failed.\n");
+            }
+        }
+    }
+    catch (const ATL::CAtlException&)
+    {
+        ::OutputDebugStringA("MapWinGIS could not allocate drop event arguments.\n");
+    }
+    catch (const std::exception& exception)
+    {
+        ::OutputDebugStringA(exception.what());
+    }
+}
+
+void CMapWinGISControl::DispatchDroppedFiles(void* const control) noexcept
+{
+    auto* const instance = static_cast<CMapWinGISControl*>(control);
+    ATL::CComPtr<CMapWinGISControl> lifetime(instance);
+    if (instance->_dispatchingDrop || instance->_dropQueueClosed)
+    {
+        return;
+    }
+    instance->_dispatchingDrop = true;
+    while (!instance->_pendingDrops.empty() && !instance->_dropQueueClosed)
+    {
+        auto paths = std::move(instance->_pendingDrops.front());
+        instance->_pendingDrops.pop_front();
+        instance->LoadDroppedFiles(paths);
+    }
+    instance->_dispatchingDrop = false;
+}
+
+void CMapWinGISControl::CloseDropQueue() noexcept
+{
+    _dropQueueClosed = true;
+    _dropAcceptsFiles = false;
+    _pendingDrops.clear();
+    if (_dropDispatchWindow != nullptr)
+    {
+        _dropDispatchWindow->Destroy();
+        _dropDispatchWindow.reset();
+    }
+}
+
+LRESULT CMapWinGISControl::OnCreate(UINT, WPARAM, LPARAM, BOOL& handled)
+{
+    const HRESULT result = ::RegisterDragDrop(m_hWndCD, this);
+    if (FAILED(result))
+    {
+        (void)AtlReportError(CLSID_MapWinGISControl,
+            L"Could not register the window drop target", IID_IMapWinGISControl4, result);
+        handled = TRUE;
+        return -1;
+    }
+    _dropTargetWindow = m_hWndCD;
+    handled = FALSE;
+    return 0;
+}
+
+void CMapWinGISControl::RevokeWindowDropTarget() noexcept
+{
+    if (_dropTargetWindow != nullptr)
+    {
+        const HWND window = std::exchange(_dropTargetWindow, nullptr);
+        if (FAILED(::RevokeDragDrop(window)))
+        {
+            ::OutputDebugStringA("MapWinGIS could not revoke the window drop target.\n");
+        }
+    }
+}
+
 bool CMapWinGISControl::ResizeView(const LONG width, const LONG height) noexcept
 {
     try
@@ -1026,6 +1498,7 @@ LRESULT CMapWinGISControl::OnDestroy(
     BOOL& handled)
 {
     EndPan(true);
+    RevokeWindowDropTarget();
     _gdalEvents.OnDestroy();
     handled = FALSE;
     return 0;
@@ -1053,6 +1526,8 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
 STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
 {
     EndPan(true);
+    CloseDropQueue();
+    RevokeWindowDropTarget();
     _gdalEvents.Close();
     return ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
 }
@@ -1142,5 +1617,6 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
 
 CMapWinGISControl::~CMapWinGISControl()
 {
+    CloseDropQueue();
     _gdalEvents.Shutdown();
 }
