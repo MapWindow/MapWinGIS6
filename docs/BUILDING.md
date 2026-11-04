@@ -34,7 +34,7 @@ COM activation without machine-wide registration, run the activation check
 from a PowerShell process that matches the target architecture:
 
 ```powershell
-pwsh -File tests\MapWinGIS.Core.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
+pwsh -File tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
 ```
 
 The script registers the control for the current user, creates it through its
@@ -79,16 +79,18 @@ registration-based test.
 
 ### Validating both native architectures
 
-Build and run the native tests for each platform. Use `-restore` when
+Build and run both native test executables for each platform. Use `-restore` when
 alternating architectures so the matching vcpkg triplet and managed host
 assets are restored:
 
 ```powershell
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=Win32 -m
 bin\Debug\Win32\MapWinGIS.Core.Tests.exe
+bin\Debug\Win32\MapWinGIS.ActiveX.Tests.exe
 ```
 
 The native activation check uses a PowerShell process with the same bitness as
@@ -168,6 +170,7 @@ $env:VCPKG_BINARY_SOURCES = 'clear;files,\\server\share\vcpkg-cache,readwrite'
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
 Or use Test Explorer in Visual Studio, which picks up the GoogleTest adapter
@@ -176,7 +179,8 @@ automatically.
 For CI, write a JUnit-style report:
 
 ```powershell
-bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml
+bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:core-testresults.xml
+bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresults.xml
 ```
 
 ## Extra build switches

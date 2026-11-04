@@ -2,7 +2,10 @@
 
 - Framework: GoogleTest, provided by the vcpkg `tests` feature (enabled by
   default through `MwgVcpkgFeatures`).
-- Test project: `tests/MapWinGIS.Core.Tests`, built with the solution.
+- Core test project: `tests/MapWinGIS.Core.Tests`, built with the solution.
+- ActiveX test project: `tests/MapWinGIS.ActiveX.Tests`, built with the solution.
+- ActiveX implementation units shared by the OCX and its tests are built as
+  `MapWinGIS.ActiveX.Impl.lib`.
 - Shared fixtures and helpers live in `TestData.h/.cpp` (`TempDirectory`,
   `MakeSampleShapefile`, `MakeProvincesDataset`, `MakeRectanglesDataset`, and
   layer constants). Extend these instead of writing per-file fixture code.
@@ -13,13 +16,20 @@
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml   # CI
+bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresults.xml
 ```
 
 Also runnable from Visual Studio Test Explorer (GoogleTest adapter picks it
 up automatically).
 
 ## ActiveX host integration checks
+
+The native `MapWinGIS.ActiveX.Tests` project covers COM activation, registered
+control rendering through GDI and OpenGL, and GDAL progress/completion events.
+The registered-control host test is opt-in and runs through
+`tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1`.
 
 The .NET 10 WinForms host exercises the real ActiveX control through `AxHost`
 using registration-free COM activation from its embedded application
@@ -149,7 +159,7 @@ Release build for meaningful numbers:
 ```powershell
 $env:MWG_RUN_RENDERING_BASELINE = '1'
 $env:MWG_RENDERING_BASELINE_FEATURES = '100000'   # optional; default 50000
-bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_filter=RenderingBaseline.*
+bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_filter=RenderingBaseline.*
 ```
 
 Measurements on one developer workstation (Release, hardware OpenGL); the

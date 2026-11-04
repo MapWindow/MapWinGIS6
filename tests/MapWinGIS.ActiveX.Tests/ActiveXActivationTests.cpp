@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <cwchar>
 #include <fstream>
 #include <string>
 #include <thread>
@@ -1107,6 +1108,7 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
         << std::hex << static_cast<unsigned long>(apartment.Result());
     ASSERT_TRUE(AtlAxWinInit());
 
+    bool openGlUnavailable = false;
     for (int iteration = 0; iteration < 2; ++iteration)
     {
         TestHostWindow hostWindow;
@@ -1508,6 +1510,87 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             GetPixel(resizedSurface.Get(), resizedWidth - 1, resizedHeight - 1),
             GetSysColor(COLOR_WINDOW));
 
+        if (iteration == 0)
+        {
+            ATL::CComQIPtr<IMapWinGISControl3> rendererControl(hostedControl);
+            ASSERT_NE(rendererControl.p, nullptr);
+            mwg::test::TempDirectory renderDirectory;
+            const std::vector<mwg::Extent> renderRectangles{{0, 0, 10, 5}};
+            const std::filesystem::path renderDataset =
+                mwg::test::MakeRectanglesDataset(
+                    renderDirectory.Path(),
+                    "registered-render.gpkg",
+                    renderRectangles);
+            const std::wstring renderDatasetText = renderDataset.wstring();
+            ATL::CComBSTR renderDatasetBstr(renderDatasetText.c_str());
+            ASSERT_EQ(rendererControl->LoadVectorDataset(renderDatasetBstr), S_OK);
+
+            const RECT rendererRect{0, 0, resizedWidth, resizedHeight};
+            const RECTL rendererBounds{0, 0, resizedWidth, resizedHeight};
+            ATL::CComBSTR gdiPreference(L"GDI");
+            ASSERT_EQ(
+                rendererControl->put_RenderingBackendPreference(gdiPreference),
+                S_OK);
+            ASSERT_NE(FillRect(
+                resizedSurface.Get(),
+                &rendererRect,
+                GetSysColorBrush(COLOR_WINDOW)), 0);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                resizedSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            ATL::CComBSTR gdiBackend;
+            ASSERT_TRUE(SUCCEEDED(rendererControl->get_RenderingBackend(&gdiBackend)));
+            EXPECT_STREQ(gdiBackend, L"GDI");
+            EXPECT_EQ(
+                GetPixel(resizedSurface.Get(), resizedWidth / 2, resizedHeight / 2),
+                RGB(61, 122, 169));
+
+            ATL::CComBSTR openGlPreference(L"OpenGL");
+            ASSERT_EQ(
+                rendererControl->put_RenderingBackendPreference(openGlPreference),
+                S_OK);
+            ASSERT_NE(FillRect(
+                resizedSurface.Get(),
+                &rendererRect,
+                GetSysColorBrush(COLOR_WINDOW)), 0);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                resizedSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            ATL::CComBSTR openGlBackend;
+            ASSERT_TRUE(SUCCEEDED(
+                rendererControl->get_RenderingBackend(&openGlBackend)));
+            if (openGlBackend == nullptr ||
+                std::wcscmp(openGlBackend, L"OpenGL") != 0)
+            {
+                openGlUnavailable = true;
+            }
+            else
+            {
+                EXPECT_EQ(
+                    GetPixel(
+                        resizedSurface.Get(),
+                        resizedWidth / 2,
+                        resizedHeight / 2),
+                    RGB(61, 122, 169));
+            }
+        }
+
         if (iteration == 1)
         {
             ATL::CComQIPtr<IMapWinGISControlGdal> gdalControl(hostedControl);
@@ -1586,5 +1669,10 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             host = nullptr;
             EXPECT_TRUE(hostWindow.Destroy());
         }
+    }
+
+    if (openGlUnavailable)
+    {
+        GTEST_SKIP() << "The registered control selected GDI for the OpenGL preference.";
     }
 }

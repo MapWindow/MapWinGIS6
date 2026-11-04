@@ -27,9 +27,6 @@
 #include "mapwingis/gdal/GdalUtils.h"
 #include "TestData.h"
 
-#pragma warning(push)
-#pragma warning(disable: 4996)
-
 using namespace mwg;
 
 namespace
@@ -37,6 +34,70 @@ namespace
     static_assert(std::is_same_v<decltype(std::declval<const GdalUtils&>().Errors()),
                                  const std::vector<GdalError>&>);
     static_assert(noexcept(std::declval<const GdalUtils&>().Errors()));
+
+#pragma warning(push)
+#pragma warning(disable: 4996)
+
+    bool RunLegacyRasterTranslate(
+        GdalUtils& utils,
+        const std::filesystem::path& source,
+        const std::filesystem::path& destination,
+        const std::vector<std::string>& options)
+    {
+        return utils.GdalRasterTranslate(source, destination, options);
+    }
+
+    bool RunLegacyRasterWarp(
+        GdalUtils& utils,
+        const std::filesystem::path& source,
+        const std::filesystem::path& destination,
+        const std::vector<std::string>& options)
+    {
+        return utils.GdalRasterWarp(source, destination, options);
+    }
+
+    bool RunLegacyVectorTranslate(
+        GdalUtils& utils,
+        const std::filesystem::path& source,
+        const std::filesystem::path& destination,
+        const std::vector<std::string>& options)
+    {
+        return utils.GdalVectorTranslate(source, destination, options);
+    }
+
+    bool RunLegacyVectorReproject(
+        GdalUtils& utils,
+        const std::filesystem::path& source,
+        const std::filesystem::path& destination,
+        const int sourceEpsgCode,
+        const int destinationEpsgCode)
+    {
+        return utils.GdalVectorReproject(
+            source, destination, sourceEpsgCode, destinationEpsgCode);
+    }
+
+    bool RunLegacyBuildOverviews(
+        GdalUtils& utils,
+        const std::filesystem::path& source,
+        const std::string_view resampling,
+        const std::vector<int>& overviewList,
+        const std::vector<int>& bandList,
+        const std::vector<std::pair<std::string, std::string>>& configOptions = {})
+    {
+        return utils.GdalBuildOverviews(
+            source, resampling, overviewList, bandList, configOptions);
+    }
+
+    bool RunLegacyClipVectorWithVector(
+        GdalUtils& utils,
+        const std::filesystem::path& subject,
+        const std::filesystem::path& overlay,
+        const std::filesystem::path& destination)
+    {
+        return utils.ClipVectorWithVector(subject, overlay, destination);
+    }
+
+#pragma warning(pop)
 
     GdalDatasetPtr OpenDataset(const std::filesystem::path& path, const unsigned int flags)
     {
@@ -161,7 +222,7 @@ TEST(GdalUtils, TranslatesRasterWithLegacyTypeResolutionResamplingAndWindowOptio
         directory.Path() / std::filesystem::path(u8"legacy-出力.tif");
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.GdalRasterTranslate(
+    ASSERT_TRUE(RunLegacyRasterTranslate(utils,
         input, output,
         {"-of", "GTiff", "-ot", "Float32", "-tr", "0.5", "0.5",
          "-r", "bilinear", "-projwin", "0", "8", "12", "0"}))
@@ -190,7 +251,8 @@ TEST(GdalUtils, WarpsRasterUsingLegacyOptions)
     const std::filesystem::path output = directory.Path() / "warped.tif";
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.GdalRasterWarp(input, output, {"-t_srs", "EPSG:3857", "-r", "bilinear"}))
+    ASSERT_TRUE(RunLegacyRasterWarp(
+        utils, input, output, {"-t_srs", "EPSG:3857", "-r", "bilinear"}))
         << utils.DetailedErrorMsg();
 
     GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_RASTER | GDAL_OF_READONLY);
@@ -209,7 +271,8 @@ TEST(GdalUtils, TranslatesVectorAndPreservesFeatures)
     const std::filesystem::path output = directory.Path() / "converted.geojson";
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.GdalVectorTranslate(input, output, {"-f", "GeoJSON", "-nln", "converted"}))
+    ASSERT_TRUE(RunLegacyVectorTranslate(
+        utils, input, output, {"-f", "GeoJSON", "-nln", "converted"}))
         << utils.DetailedErrorMsg();
 
     GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_VECTOR | GDAL_OF_READONLY);
@@ -231,9 +294,9 @@ TEST(GdalUtils, ReprojectsWgs84ShapefileToEpsg28992)
     const std::filesystem::path output = directory.Path() / "projected.gpkg";
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.GdalVectorReproject(input, output, 4326, 28992))
+    ASSERT_TRUE(RunLegacyVectorReproject(utils, input, output, 4326, 28992))
         << utils.DetailedErrorMsg();
-    ASSERT_TRUE(utils.GdalVectorReproject(input, output, 4326, 28992))
+    ASSERT_TRUE(RunLegacyVectorReproject(utils, input, output, 4326, 28992))
         << utils.DetailedErrorMsg();
 
     GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_VECTOR | GDAL_OF_READONLY);
@@ -254,7 +317,7 @@ TEST(GdalUtils, BuildsRasterOverviewsForSelectedBands)
     const std::filesystem::path input = test::MakeRaster(directory.Path());
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.GdalBuildOverviews(input, "NEAREST", {2, 4}, {1}))
+    ASSERT_TRUE(RunLegacyBuildOverviews(utils, input, "NEAREST", {2, 4}, {1}))
         << utils.DetailedErrorMsg();
 
     GdalDatasetPtr dataset = OpenDataset(input, GDAL_OF_RASTER | GDAL_OF_READONLY);
@@ -277,7 +340,7 @@ TEST(GdalUtils, BuildsAutomaticOverviewsWhenTheOverviewListIsEmpty)
     created.reset();
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.GdalBuildOverviews(input, "NEAREST", {}, {1}))
+    ASSERT_TRUE(RunLegacyBuildOverviews(utils, input, "NEAREST", {}, {1}))
         << utils.DetailedErrorMsg();
 
     GdalDatasetPtr dataset = OpenDataset(input, GDAL_OF_RASTER | GDAL_OF_READONLY);
@@ -310,7 +373,7 @@ TEST(GdalUtils, BuildsExternalOverviewsForReadOnlyPngRasters)
     ASSERT_EQ(GDALClose(pngRaster.release()), CE_None);
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.GdalBuildOverviews(input, "NEAREST", {2}, {1}))
+    ASSERT_TRUE(RunLegacyBuildOverviews(utils, input, "NEAREST", {2}, {1}))
         << utils.DetailedErrorMsg();
     EXPECT_TRUE(std::filesystem::exists(input.string() + ".ovr"));
 }
@@ -325,7 +388,7 @@ TEST(GdalUtils, RestoresDuplicateConfigurationOptionsInReverseOrder)
     ScopedGdalConfigOption initialValue(kConfigName, "original");
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.GdalBuildOverviews(
+    ASSERT_TRUE(RunLegacyBuildOverviews(utils,
         input, "NEAREST", {2}, {1},
         {{kConfigName, "first"}, {kConfigName, "second"}}))
         << utils.DetailedErrorMsg();
@@ -351,7 +414,8 @@ TEST(GdalUtils, ReportsInvalidOverviewConfigurationThroughTheDocumentedContracts
         {
             return withProgress
                 ? utils.GdalBuildOverviews(input, resampling, {2}, {1}, config, {})
-                : utils.GdalBuildOverviews(input, resampling, {2}, {1}, config);
+                : RunLegacyBuildOverviews(
+                    utils, input, resampling, {2}, {1}, config);
         };
 
         EXPECT_THROW((void)build("NEAREST", {{kConfigName, "temporary"}, {"", "value"}}),
@@ -387,7 +451,7 @@ TEST(GdalUtils, ClipsVectorFeaturesWithAnOverlayDataset)
     const std::filesystem::path output = directory.Path() / "clipped.gpkg";
 
     GdalUtils utils;
-    ASSERT_TRUE(utils.ClipVectorWithVector(input, overlay, output))
+    ASSERT_TRUE(RunLegacyClipVectorWithVector(utils, input, overlay, output))
         << utils.DetailedErrorMsg();
 
     GdalDatasetPtr dataset = OpenDataset(output, GDAL_OF_VECTOR | GDAL_OF_READONLY);
@@ -405,16 +469,16 @@ TEST(GdalUtils, MapsFailureDiagnosticsToLegacyErrorProperties)
     test::TempDirectory directory;
     GdalUtils utils;
 
-    EXPECT_FALSE(utils.GdalRasterTranslate(
-        directory.Path() / "missing.tif", directory.Path() / "missing-output.tif", {}));
+    EXPECT_FALSE(RunLegacyRasterTranslate(
+        utils, directory.Path() / "missing.tif", directory.Path() / "missing-output.tif", {}));
     EXPECT_NE(utils.LastErrorCode(), 0);
     EXPECT_FALSE(utils.ErrorMsg(utils.LastErrorCode()).empty());
     EXPECT_FALSE(utils.DetailedErrorMsg().empty());
     EXPECT_FALSE(utils.Errors().empty());
 
     const std::filesystem::path input = test::MakeRaster(directory.Path());
-    EXPECT_TRUE(utils.GdalRasterTranslate(
-        input, directory.Path() / "valid-output.tif", {}))
+    EXPECT_TRUE(RunLegacyRasterTranslate(
+        utils, input, directory.Path() / "valid-output.tif", {}))
         << utils.DetailedErrorMsg();
     EXPECT_EQ(utils.LastErrorCode(), 0);
 }
@@ -429,7 +493,8 @@ TEST(GdalUtils, PreservesClipDiagnosticsWhenLoggerThrows)
         throw std::runtime_error("logger failure");
     });
 
-    EXPECT_THROW((void)utils.ClipVectorWithVector(
+    EXPECT_THROW((void)RunLegacyClipVectorWithVector(
+        utils,
         directory.Path() / "missing-subject.gpkg",
         directory.Path() / "missing-overlay.gpkg",
         directory.Path() / "clipped.gpkg"), std::runtime_error);
@@ -448,7 +513,8 @@ TEST(GdalUtils, RejectsOptionStringsContainingNullBytes)
     invalidOption.push_back('\0');
     invalidOption += "truncated";
 
-    EXPECT_FALSE(utils.GdalRasterTranslate("input.tif", "output.tif", {invalidOption}));
+    EXPECT_FALSE(RunLegacyRasterTranslate(
+        utils, "input.tif", "output.tif", {invalidOption}));
     EXPECT_NE(utils.LastErrorCode(), 0);
     EXPECT_NE(utils.DetailedErrorMsg().find("null bytes"), std::string::npos);
 }
@@ -538,5 +604,3 @@ TEST(GdalUtils, PropagatesCancellationThroughVectorAndOverviewOperations)
     EXPECT_FALSE(std::filesystem::exists(directory.Path() / "reprojected.gpkg"));
     EXPECT_FALSE(std::filesystem::exists(directory.Path() / "clipped.gpkg"));
 }
-
-#pragma warning(pop)

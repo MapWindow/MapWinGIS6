@@ -6,9 +6,11 @@
   <Folder Name="/src/">
     <Project Path="src/MapWinGIS.Core/MapWinGIS.Core.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c01" />
     <Project Path="src/MapWinGIS.ActiveX/MapWinGIS.ActiveX.vcxproj" Id="731d2046-e5de-4079-8044-790245634856" />
+    <Project Path="src/MapWinGIS.ActiveX/MapWinGIS.ActiveX.Impl.vcxproj" Id="9d1cdd38-30b1-42b0-8d75-9c217bfdb5a8" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MapWinGIS.Core.Tests/MapWinGIS.Core.Tests.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c02" />
+    <Project Path="tests/MapWinGIS.ActiveX.Tests/MapWinGIS.ActiveX.Tests.vcxproj" Id="67bb3e1c-8382-48d5-8a19-10a73f8d3a64" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Cpp/Translate.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c03" />
