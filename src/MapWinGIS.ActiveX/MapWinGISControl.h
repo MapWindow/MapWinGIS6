@@ -18,6 +18,11 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <deque>
+#include <filesystem>
+#include <memory>
+#include <utility>
+#include <vector>
 
 #include <atlctl.h>
 
@@ -94,6 +99,7 @@ public:
     END_PROP_MAP()
 
     BEGIN_MSG_MAP(CMapWinGISControl)
+        MESSAGE_HANDLER(WM_CREATE, OnCreate)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
         MESSAGE_HANDLER(WM_KEYDOWN, OnKeyDown)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
@@ -186,10 +192,12 @@ public:
         POINTL point,
         DWORD* effect) override;
     STDMETHOD(Close)(DWORD saveOption) override;
+    STDMETHOD(InPlaceDeactivate)() override;
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnKeyDown(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnCreate(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseWheel(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonDown(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseMove(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -229,9 +237,16 @@ private:
         mwg::ScreenPoint position{};
         bool active = false;
     };
+    void RevokeWindowDropTarget() noexcept;
+    void CloseDropQueue() noexcept;
+    static void DispatchDroppedFiles(void* control) noexcept;
+    HRESULT LoadDroppedFile(const std::filesystem::path& path) noexcept;
+    void LoadDroppedFiles(const std::vector<std::filesystem::path>& paths) noexcept;
+    void FireDropEvent(DISPID eventId, ATL::CComVariant* arguments, UINT count) noexcept;
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
+    std::vector<std::pair<mwg::LayerId, LONGLONG>> _layerFeatureCounts;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
     mwg::ScreenPoint _lastPanPosition{};
@@ -242,6 +257,11 @@ private:
     bool _isPanning = false;
     bool _isTouchNavigating = false;
     bool _dropAcceptsFiles = false;
+    HWND _dropTargetWindow = nullptr;
+    std::shared_ptr<mwg::activex::GdalDispatchWindow> _dropDispatchWindow;
+    std::deque<std::vector<std::filesystem::path>> _pendingDrops;
+    bool _dispatchingDrop = false;
+    bool _dropQueueClosed = false;
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

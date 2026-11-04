@@ -59,14 +59,33 @@ management and basic zoom methods, `IMapWinGISControl5` adds raster loading,
 adds layer reordering and XYZ tile loading.
 Loads add layers, including duplicate loads of one dataset. Call `ClearLayers`
 before switching or refreshing datasets. It releases all layers and resets
-the cached feature total while keeping the viewport.
-The windowless control accepts Explorer file drops through its OLE drop-target
-hook. Dropped supported vector and raster datasets append as layers, then the
-control fits the combined visible extent once. Unsupported, missing, or
-invalid paths are skipped without discarding other files that loaded
-successfully. A partial drop returns `S_FALSE` with a copy effect; a drop with
-no successful files returns a failing HRESULT and no effect. Failed paths and
-HRESULTs are written to the debugger output.
+the cached feature total and view. Removing the last layer also resets the view.
+The next loaded layer fits the view.
+
+The control accepts OLE file drops in both windowed and windowless hosts.
+Windowed controls register their HWND with OLE and revoke registration before
+destruction or close. Windowless hosts use the `GetDropTarget` hook.
+Only `CF_HDROP` data with a copy effect is accepted. `Drop` copies the paths,
+queues work on the owning thread, and returns `S_OK` with a copy effect.
+This result means that the batch was queued, not that any file loaded.
+Loading remains on the UI thread, but runs outside the `Drop` call.
+Dropped supported vector and raster datasets append as layers.
+The control then fits the combined visible extent once.
+Unsupported, missing, or invalid paths do not
+discard other files that loaded successfully.
+
+The existing source event interface adds `DropFileCompleted(path, errorCode)`
+at DISPID 3 and `DropCompleted(loadedCount, failedCount, errorCode)` at DISPID 4.
+Each file event carries its path and load HRESULT. The batch HRESULT is the
+first failure recorded during loading, event-data allocation, or fitting.
+An all-successful batch reports `S_OK`. Hosts must subscribe to these events
+to report load failures to users. The C# host does this.
+Close cancels pending drops and stops further drop notifications, including
+when a host closes the control from an event callback.
+
+Feature counts and layer IDs keep their 64-bit IDL `hyper` types to match
+the Core ranges. VB6 and VBScript-style clients cannot use these members
+directly. The control does not provide a narrowed 32-bit compatibility API.
 New members belong on a new derived interface; do not change a published
 interface IID or silently add vtable members to it.
 
@@ -84,7 +103,7 @@ CPU fallback.
 
 ## Map and viewport behavior
 
-Core `Map` owns layers in insertion order. Each layer has a stable ID that is
+Core `Map` owns an ordered list of layers. Each layer has a stable ID that is
 independent of its display name and current list index. `MapView` owns the
 viewport and the visible extent shared by every rendered layer. Map X increases
 right and map Y increases up; screen X increases right and screen Y increases

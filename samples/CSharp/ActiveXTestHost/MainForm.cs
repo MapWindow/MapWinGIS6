@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -27,6 +28,7 @@ internal sealed class MainForm : Form
     private readonly HostOptions _options;
     private readonly Panel _surfacePanel;
     private readonly ToolStripStatusLabel _statusLabel;
+    private readonly ListBox _dropEventLog;
     private readonly List<CheckResult> _results = [];
     private readonly object _resultsLock = new();
     private readonly object _reportLock = new();
@@ -38,6 +40,7 @@ internal sealed class MainForm : Form
     private string TestRasterPath => Path.Combine(_testDatasetDirectory, "sample.asc");
     private string TestRasterOutputPath => Path.Combine(_testDatasetDirectory, "sample.tif");
     private ActiveXHostControl? _host;
+    private DropEventSink? _dropEventSink;
     private Exception? _reportWriteError;
 
     public MainForm(HostOptions options)
@@ -74,7 +77,17 @@ internal sealed class MainForm : Form
         _statusLabel = new ToolStripStatusLabel("Starting...");
         statusStrip.Items.Add(_statusLabel);
 
+        _dropEventLog = new ListBox
+        {
+            Dock = DockStyle.Bottom,
+            Height = 72,
+            HorizontalScrollbar = true,
+            IntegralHeight = false
+        };
+        _dropEventLog.Items.Add("Drop supported files onto the map; failed paths and batch results appear here.");
+
         Controls.Add(_surfacePanel);
+        Controls.Add(_dropEventLog);
         Controls.Add(toolbar);
         Controls.Add(statusStrip);
         Shown += OnShown;
@@ -147,6 +160,7 @@ internal sealed class MainForm : Form
         {
             RecordCheck("Prerequisites", VerifyPrerequisites);
             RecordCheck("Activation and creation", CreateHostedControl);
+            RecordCheck("Drop event sink registration", VerifyDropEventSink);
             RecordCheck("Automation contract", () =>
             {
                 bool initialized = ReadCoreInitialized();
@@ -367,14 +381,103 @@ internal sealed class MainForm : Form
                 "AxHost did not create a window and automation object for the ActiveX control.");
         }
 
+        _dropEventSink = new DropEventSink(
+            host.AutomationObject,
+            SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext());
+        _dropEventSink.FileCompleted += OnDropFileCompleted;
+        _dropEventSink.Completed += OnDropCompleted;
         Application.DoEvents();
+    }
+
+    private void VerifyDropEventSink()
+    {
+        if (_dropEventSink?.IsConnected != true)
+        {
+            throw new InvalidOperationException("The ActiveX drop event sink is not connected.");
+        }
+    }
+
+    private void OnDropFileCompleted(string path, int errorCode)
+    {
+        if (errorCode != 0)
+        {
+            AddDropEventLogEntry($"Failed to load '{path}' (error {errorCode}).");
+        }
+    }
+
+    private void OnDropCompleted(int loadedCount, int failedCount, int errorCode)
+    {
+        string summary =
+            $"Drop complete: loaded {loadedCount}, failed {failedCount}, error {errorCode}.";
+        AddDropEventLogEntry(summary);
+        _statusLabel.Text = summary;
+    }
+
+    private void AddDropEventLogEntry(string message)
+    {
+        _dropEventLog.Items.Add(message);
+        _dropEventLog.TopIndex = _dropEventLog.Items.Count - 1;
     }
 
     private async Task WaitForRepaintAsync()
     {
         RepaintHost();
-        await Task.Delay(150);
-        Application.DoEvents();
+        var timeout = System.Diagnostics.Stopwatch.StartNew();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        Bitmap previous = CaptureWindowContent();
+        try
+        {
+            int stableFrames = 0;
+            while (timeout.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                try
+                {
+                    await WaitForApplicationIdleAsync(cancellation.Token);
+                }
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                Bitmap current = CaptureWindowContent();
+                bool unchanged = MapImagesEqual(previous, current);
+                previous.Dispose();
+                previous = current;
+                stableFrames = unchanged ? stableFrames + 1 : 0;
+                if (stableFrames >= 3)
+                {
+                    return;
+                }
+            }
+            throw new TimeoutException("The rendered map did not stabilize within five seconds.");
+        }
+        finally
+        {
+            previous.Dispose();
+        }
+    }
+
+    private async Task WaitForApplicationIdleAsync(CancellationToken cancellationToken)
+    {
+        var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnIdle(object? sender, EventArgs eventArgs)
+        {
+            Application.Idle -= OnIdle;
+            idle.TrySetResult();
+        }
+
+        Application.Idle += OnIdle;
+        using CancellationTokenRegistration registration = cancellationToken.Register(
+            () => idle.TrySetCanceled(cancellationToken));
+        try
+        {
+            BeginInvoke((Action)(() => { }));
+            await idle.Task;
+        }
+        finally
+        {
+            Application.Idle -= OnIdle;
+        }
     }
 
     private void SendMouseWheel(Point clientPosition, short delta)
@@ -407,29 +510,137 @@ internal sealed class MainForm : Form
             PackPosition(clientPosition.X, clientPosition.Y));
     }
 
-    private static void VerifyImagesDiffer(Bitmap before, Bitmap after, string operation)
+    private void VerifyImagesDiffer(Bitmap before, Bitmap after, string operation)
     {
-        if (before.Width != after.Width || before.Height != after.Height)
+        if (MapImagesEqual(before, after))
         {
-            throw new InvalidOperationException($"The host image size changed during {operation}.");
+            throw new InvalidOperationException(
+                $"The {operation} did not change the rendered map from its fitted test view.");
+        }
+    }
+
+    private Rectangle FindPolygonBounds(Bitmap image)
+    {
+        if (_host is null)
+        {
+            throw new InvalidOperationException("The ActiveX control has not been created.");
         }
 
-        int changedPixels = 0;
-        for (int y = 0; y < before.Height; y++)
+        int[] pixels = ReadArgbPixels(image);
+        var origin = (Point)image.Tag!;
+        Point topLeft = _host.PointToScreen(Point.Empty);
+        int left = _host.Width;
+        int top = _host.Height;
+        int right = -1;
+        int bottom = -1;
+        for (int y = 0; y < _host.Height; y++)
         {
-            for (int x = 0; x < before.Width; x++)
+            for (int x = 0; x < _host.Width; x++)
             {
-                if (before.GetPixel(x, y).ToArgb() != after.GetPixel(x, y).ToArgb())
+                int imageX = topLeft.X - origin.X + x;
+                int imageY = topLeft.Y - origin.Y + y;
+                if (pixels[imageY * image.Width + imageX] == MapFillColor.ToArgb())
                 {
-                    changedPixels++;
+                    left = Math.Min(left, x);
+                    top = Math.Min(top, y);
+                    right = Math.Max(right, x);
+                    bottom = Math.Max(bottom, y);
                 }
             }
         }
-        if (changedPixels < 100)
+        if (right < left)
         {
-            throw new InvalidOperationException(
-                $"The {operation} did not change the rendered map enough to verify navigation.");
+            throw new InvalidOperationException("The rendered map contains no polygon fill pixels.");
         }
+        return Rectangle.FromLTRB(left, top, right + 1, bottom + 1);
+    }
+
+    private int FindPolygonLeftEdgeAtY(Bitmap image, int y)
+    {
+        if (_host is null)
+        {
+            throw new InvalidOperationException("The ActiveX control has not been created.");
+        }
+
+        int[] pixels = ReadArgbPixels(image);
+        var origin = (Point)image.Tag!;
+        Point topLeft = _host.PointToScreen(Point.Empty);
+        int imageY = topLeft.Y - origin.Y + y;
+        int imageX = topLeft.X - origin.X;
+        for (int x = 0; x < _host.Width; x++)
+        {
+            if (pixels[imageY * image.Width + imageX + x] == MapFillColor.ToArgb())
+            {
+                return x;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "The rendered map contains no polygon fill at the wheel cursor's vertical position.");
+    }
+
+    private void VerifyMapImagesEqual(Bitmap before, Bitmap after, string operation)
+    {
+        if (!MapImagesEqual(before, after))
+        {
+            throw new InvalidOperationException($"The rendered map changed during {operation}.");
+        }
+    }
+
+    private bool MapImagesEqual(Bitmap before, Bitmap after)
+    {
+        if (_host is null)
+        {
+            throw new InvalidOperationException("The ActiveX control has not been created.");
+        }
+
+        var beforeOrigin = (Point)before.Tag!;
+        var afterOrigin = (Point)after.Tag!;
+        Point topLeft = _host.PointToScreen(Point.Empty);
+        int[] beforePixels = ReadArgbPixels(before);
+        int[] afterPixels = ReadArgbPixels(after);
+        for (int y = 0; y < _host.Height; y++)
+        {
+            for (int x = 0; x < _host.Width; x++)
+            {
+                int beforeIndex =
+                    (topLeft.Y - beforeOrigin.Y + y) * before.Width + topLeft.X - beforeOrigin.X + x;
+                int afterIndex =
+                    (topLeft.Y - afterOrigin.Y + y) * after.Width + topLeft.X - afterOrigin.X + x;
+                if (beforePixels[beforeIndex] != afterPixels[afterIndex])
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static int[] ReadArgbPixels(Bitmap image)
+    {
+        var pixels = new int[image.Width * image.Height];
+        var bounds = new Rectangle(0, 0, image.Width, image.Height);
+        BitmapData data = image.LockBits(
+            bounds,
+            ImageLockMode.ReadOnly,
+            PixelFormat.Format32bppArgb);
+        try
+        {
+            for (int y = 0; y < image.Height; y++)
+            {
+                Marshal.Copy(
+                    IntPtr.Add(data.Scan0, y * data.Stride),
+                    pixels,
+                    y * image.Width,
+                    image.Width);
+            }
+        }
+        finally
+        {
+            image.UnlockBits(data);
+        }
+
+        return pixels;
     }
 
     private bool ReadCoreInitialized()
@@ -518,7 +729,18 @@ internal sealed class MainForm : Form
             throw new InvalidOperationException("The control did not clear its layer collection.");
         }
 
+        automation.LoadVectorDataset(TestSecondDatasetPath);
+        RepaintHost();
+        VerifyMapPixels();
+        long reloadedLayerId = (long)automation.GetLayerId(0);
+        if (!(bool)automation.RemoveLayer(reloadedLayerId) ||
+            (long)automation.FeatureCount != 0)
+        {
+            throw new InvalidOperationException("The control did not remove its final layer.");
+        }
         automation.LoadVectorDataset(TestDatasetPath);
+        RepaintHost();
+        VerifyMapPixels();
         automation.LoadVectorDataset(TestSecondDatasetPath);
         if ((int)automation.LayerCount != 2 || !(bool)automation.ZoomToMap())
         {
@@ -545,10 +767,19 @@ internal sealed class MainForm : Form
         RepaintHost();
         using (Bitmap beforeWheel = CaptureWindowContent())
         {
-            SendMouseWheel(new Point(_host.Width / 5, _host.Height / 2), 240);
+            Point anchor = new(
+                FindPolygonLeftEdgeAtY(beforeWheel, _host.Height / 2),
+                _host.Height / 2);
+            SendMouseWheel(anchor, 240);
             await WaitForRepaintAsync();
             using Bitmap afterWheel = CaptureWindowContent();
-            VerifyImagesDiffer(beforeWheel, afterWheel, "centered mouse-wheel zoom");
+            VerifyImagesDiffer(beforeWheel, afterWheel, "cursor-anchored mouse-wheel zoom");
+            int afterEdgeX = FindPolygonLeftEdgeAtY(afterWheel, anchor.Y);
+            if (Math.Abs(afterEdgeX - anchor.X) > 2)
+            {
+                throw new InvalidOperationException(
+                    $"Mouse-wheel zoom moved the polygon edge under the cursor from x={anchor.X} to x={afterEdgeX}.");
+            }
         }
 
         automation.ZoomToMap();
@@ -565,26 +796,60 @@ internal sealed class MainForm : Form
             VerifyImagesDiffer(beforeEdgeWheel, afterEdgeWheel, "near-edge mouse-wheel zoom");
         }
 
+        automation.ZoomToLayer(firstLayerId);
+        automation.ZoomIn();
+        RepaintHost();
+        using (Bitmap expectedCenterZoom = CaptureWindowContent())
+        {
+            automation.ZoomToLayer(firstLayerId);
+            SendMouseWheel(new Point(-8, -8), 120);
+            await WaitForRepaintAsync();
+            using Bitmap outsideWheel = CaptureWindowContent();
+            VerifyMapImagesEqual(expectedCenterZoom, outsideWheel, "off-control wheel zoom");
+        }
+
         automation.ZoomToMap();
         if (!(bool)automation.ZoomToLayer(firstLayerId))
         {
             throw new InvalidOperationException("Could not reset the view before testing drag-to-pan.");
         }
         RepaintHost();
-        int dragDistance = Math.Max(40, _host.Width / 8);
+        using Bitmap beforePan = CaptureWindowContent();
+        Rectangle beforePanBounds = FindPolygonBounds(beforePan);
+        int dragX = Math.Max(40, _host.Width / 8);
+        int dragY = Math.Max(30, _host.Height / 8);
         Point start = new(_host.Width / 2, _host.Height / 2);
-        Point end = new(start.X + dragDistance, start.Y);
+        Point end = new(start.X + dragX, start.Y + dragY);
         SendMouseMessage(LeftButtonDown, 1, start);
         SendMouseMessage(MouseMoveMessage, 1, end);
         SendMouseMessage(LeftButtonUp, 0, new Point(-8, -8));
         await WaitForRepaintAsync();
 
         using Bitmap afterPan = CaptureWindowContent();
-        VerifyPaintPixel(
-            afterPan,
-            _host.PointToScreen(new Point(_host.Width / 5 + dragDistance, _host.Height / 2)),
-            ColorToColorRef(MapFillColor),
-            "panned polygon");
+        Rectangle afterPanBounds = FindPolygonBounds(afterPan);
+        if (Math.Abs(afterPanBounds.Left - beforePanBounds.Left - dragX) > 2 ||
+            Math.Abs(afterPanBounds.Top - beforePanBounds.Top - dragY) > 2)
+        {
+            throw new InvalidOperationException("The polygon did not follow the diagonal drag.");
+        }
+        SendMouseMessage(MouseMoveMessage, 0, start);
+        await WaitForRepaintAsync();
+        using (Bitmap afterHover = CaptureWindowContent())
+        {
+            VerifyMapImagesEqual(afterPan, afterHover, "hover after button-up outside the control");
+        }
+
+        SendMouseMessage(LeftButtonDown, 1, start);
+        SendMouseMessage(MouseMoveMessage, 1, end);
+        await WaitForRepaintAsync();
+        using (Bitmap beforeLostButton = CaptureWindowContent())
+        {
+            SendMouseMessage(MouseMoveMessage, 0, start);
+            SendMouseMessage(MouseMoveMessage, 0, end);
+            await WaitForRepaintAsync();
+            using Bitmap afterLostButton = CaptureWindowContent();
+            VerifyMapImagesEqual(beforeLostButton, afterLostButton, "hover after a missed button-up");
+        }
         if (!(bool)automation.ZoomToLayer(firstLayerId))
         {
             throw new InvalidOperationException("Could not restore the view after testing drag-to-pan.");
@@ -674,7 +939,6 @@ internal sealed class MainForm : Form
     {
         _host?.Invalidate(true);
         _host?.Update();
-        Application.DoEvents();
     }
 
     private void VerifyResize()
@@ -706,12 +970,9 @@ internal sealed class MainForm : Form
             throw new InvalidOperationException("The ActiveX control has not been created.");
         }
 
-        _host.Invalidate(true);
         _surfacePanel.Invalidate();
-        _host.Update();
         _surfacePanel.Update();
-        await Task.Delay(150);
-        Application.DoEvents();
+        await WaitForRepaintAsync();
         VerifyMapPixels();
     }
 
@@ -724,18 +985,22 @@ internal sealed class MainForm : Form
 
         uint background = GetSysColor(ColorWindow);
         using Bitmap windowImage = CaptureWindowContent();
+        int[] pixels = ReadArgbPixels(windowImage);
         VerifyPaintPixel(
             windowImage,
+            pixels,
             _host.PointToScreen(new Point(_host.Width / 5, _host.Height / 2)),
             ColorToColorRef(MapFillColor),
             "first polygon");
         VerifyPaintPixel(
             windowImage,
+            pixels,
             _host.PointToScreen(new Point(_host.Width / 2, _host.Height / 2)),
             background,
             "empty space between polygons");
         VerifyPaintPixel(
             windowImage,
+            pixels,
             _host.PointToScreen(new Point(_host.Width * 4 / 5, _host.Height / 2)),
             ColorToColorRef(MapFillColor),
             "second polygon");
@@ -754,7 +1019,8 @@ internal sealed class MainForm : Form
 
         var image = new Bitmap(
             windowRect.Right - windowRect.Left,
-            windowRect.Bottom - windowRect.Top);
+            windowRect.Bottom - windowRect.Top,
+            PixelFormat.Format32bppArgb);
         try
         {
             using (Graphics graphics = Graphics.FromImage(image))
@@ -786,6 +1052,7 @@ internal sealed class MainForm : Form
 
     private static void VerifyPaintPixel(
         Bitmap windowImage,
+        int[] pixels,
         Point screenPoint,
         uint expected,
         string location)
@@ -799,13 +1066,16 @@ internal sealed class MainForm : Form
                 $"The {location} sample point lies outside the captured host window.");
         }
 
-        uint actual = ColorToColorRef(windowImage.GetPixel(x, y));
+        uint actual = ColorRefFromArgb(pixels[y * windowImage.Width + x]);
         if (actual != expected)
         {
             throw new InvalidOperationException(
                 $"Expected color 0x{expected:x6} at the {location} of the control, got 0x{actual:x6}.");
         }
     }
+
+    private static uint ColorRefFromArgb(int argb) =>
+        (uint)(((argb >> 16) & 0xff) | (argb & 0xff00) | ((argb & 0xff) << 16));
 
     private void VerifyDispose()
     {
@@ -818,6 +1088,15 @@ internal sealed class MainForm : Form
 
     private void DisposeHostedControl()
     {
+        DropEventSink? sink = _dropEventSink;
+        _dropEventSink = null;
+        if (sink is not null)
+        {
+            sink.FileCompleted -= OnDropFileCompleted;
+            sink.Completed -= OnDropCompleted;
+            sink.Dispose();
+        }
+
         if (_host is null)
         {
             return;

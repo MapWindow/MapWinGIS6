@@ -292,6 +292,11 @@ namespace mwg
         (void)EndNavigationGesture();
         _impl->_transition.reset();
         _impl->_sceneStale = true;
+        if (_impl->_map.LayerCount() == 0)
+        {
+            _impl->_viewport.ClearView();
+            _impl->_pendingFit.reset();
+        }
         return true;
     }
 
@@ -304,6 +309,8 @@ namespace mwg
         (void)EndNavigationGesture();
         _impl->_map.Clear();
         _impl->_transition.reset();
+        _impl->_viewport.ClearView();
+        _impl->_pendingFit.reset();
         _impl->_sceneStale = true;
         return true;
     }

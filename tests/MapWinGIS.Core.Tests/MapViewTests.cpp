@@ -304,17 +304,74 @@ TEST_F(MapViewTest, RasterSceneTracksTheViewAndUsesViewportPixelDimensions)
     EXPECT_LT(zoomed.extent.Height(), first.extent.Height());
 }
 
-TEST_F(MapViewTest, ClearingLayersKeepsTheView)
+TEST_F(MapViewTest, ClearingLayersResetsTheViewAndFitsTheNextLayer)
 {
     ASSERT_TRUE(_view.Resize(200, 100));
     _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
-    const MapPoint center = *_view.GetViewport().Center();
+    ASSERT_TRUE(_view.ZoomIn());
+    ASSERT_TRUE(_view.Pan(100.0, 100.0));
 
     ASSERT_TRUE(_view.ClearLayers());
 
-    ASSERT_TRUE(_view.GetViewport().HasView());
-    EXPECT_DOUBLE_EQ(_view.GetViewport().Center()->x, center.x);
+    EXPECT_FALSE(_view.GetViewport().HasView());
+    EXPECT_EQ(_view.GetViewport().Width(), 200);
+    EXPECT_EQ(_view.GetViewport().Height(), 100);
     EXPECT_FALSE(_view.FitToMap());
+
+    const Extent distant{1000.0, 500.0, 1020.0, 510.0};
+    _view.AddLayer(OpenRectangles({distant}));
+    ASSERT_TRUE(_view.GetViewport().IsValid());
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), distant));
+    EXPECT_NEAR(_view.GetViewport().Center()->x, 1010.0, kTolerance);
+    EXPECT_NEAR(_view.GetViewport().Center()->y, 505.0, kTolerance);
+}
+
+TEST_F(MapViewTest, RemovingOnlyTheLastLayerResetsTheView)
+{
+    ASSERT_TRUE(_view.Resize(200, 100));
+    const LayerId first = _view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+    const Extent distant{1000.0, 500.0, 1020.0, 510.0};
+    const LayerId second = _view.AddLayer(OpenRectangles({distant}));
+    const MapPoint center = *_view.GetViewport().Center();
+    const double resolution = *_view.GetViewport().Resolution();
+
+    ASSERT_TRUE(_view.RemoveLayer(first));
+    EXPECT_DOUBLE_EQ(_view.GetViewport().Center()->x, center.x);
+    EXPECT_DOUBLE_EQ(_view.GetViewport().Center()->y, center.y);
+    EXPECT_DOUBLE_EQ(*_view.GetViewport().Resolution(), resolution);
+    ASSERT_TRUE(_view.RemoveLayer(second));
+    EXPECT_FALSE(_view.GetViewport().HasView());
+
+    _view.AddLayer(OpenRectangles({distant}));
+    ASSERT_TRUE(_view.GetViewport().IsValid());
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), distant));
+}
+
+TEST_F(MapViewTest, EmptyingTheMapCancelsAPendingLayerFit)
+{
+    for (const bool clear : {false, true})
+    {
+        MapView view;
+        view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 5.0}}));
+        const LayerId target = view.AddLayer(OpenRectangles({{50.0, 50.0, 51.0, 51.0}}));
+        EXPECT_FALSE(view.ZoomToLayer(target));
+        if (clear)
+        {
+            ASSERT_TRUE(view.ClearLayers());
+        }
+        else
+        {
+            ASSERT_TRUE(view.RemoveLayer(view.GetMap().Layer(0).Id()));
+            ASSERT_TRUE(view.RemoveLayer(target));
+        }
+        ASSERT_TRUE(view.Resize(200, 100));
+        EXPECT_FALSE(view.GetViewport().HasView());
+        const Extent distant{1000.0, 500.0, 1020.0, 510.0};
+        view.AddLayer(OpenRectangles({distant}));
+        ASSERT_TRUE(view.GetViewport().IsValid());
+        EXPECT_TRUE(IsVisible(view.GetViewport(), distant));
+        EXPECT_FALSE(view.Resize(200, 100));
+    }
 }
 
 TEST_F(MapViewTest, ZoomToMapWithOneLayerCentersAndFitsIt)

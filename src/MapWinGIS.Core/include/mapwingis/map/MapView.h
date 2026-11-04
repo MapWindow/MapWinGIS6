@@ -77,11 +77,13 @@ namespace mwg
         /// \throws InvalidArgument as Map::AddRasterLayer does.
         LayerId AddRasterLayer(std::shared_ptr<RasterDataset> dataset);
 
-        /// Removes a layer; see Map::RemoveLayer. The view is kept.
+        /// Removes a layer; see Map::RemoveLayer. Removing the last layer
+        /// clears the view and any pending fit, but keeps the viewport size.
         bool RemoveLayer(LayerId id) noexcept;
 
-        /// Removes all layers and returns true when there were any. The view
-        /// is kept.
+        /// Removes all layers and returns true when there were any. Clears
+        /// the view and any pending fit, but keeps the viewport size, so the
+        /// next layer gets an initial fit.
         bool ClearLayers() noexcept;
 
         /// Shows or hides a layer and returns true when its visibility

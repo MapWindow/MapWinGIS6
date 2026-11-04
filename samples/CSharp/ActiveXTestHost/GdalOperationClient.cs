@@ -168,3 +168,77 @@ internal static class GdalOperationClient
         }
     }
 }
+
+internal sealed class DropEventSink : IDisposable
+{
+    private static readonly Guid EventsInterfaceId =
+        new("3EC7E255-3045-4A32-A9DA-12FA310FD3F0");
+
+    private delegate void DropFileCompletedEvent(
+        [MarshalAs(UnmanagedType.BStr)] string path,
+        int errorCode);
+
+    private delegate void DropCompletedEvent(int loadedCount, int failedCount, int errorCode);
+
+    private readonly SynchronizationContext _synchronizationContext;
+    private readonly DropFileCompletedEvent _onFileCompleted;
+    private readonly DropCompletedEvent _onCompleted;
+    private object? _automationObject;
+
+    public DropEventSink(object automationObject, SynchronizationContext synchronizationContext)
+    {
+        _automationObject = automationObject;
+        _synchronizationContext = synchronizationContext;
+        _onFileCompleted = HandleFileCompleted;
+        _onCompleted = HandleCompleted;
+
+        ComEventsHelper.Combine(automationObject, EventsInterfaceId, 3, _onFileCompleted);
+        try
+        {
+            ComEventsHelper.Combine(automationObject, EventsInterfaceId, 4, _onCompleted);
+        }
+        catch
+        {
+            ComEventsHelper.Remove(automationObject, EventsInterfaceId, 3, _onFileCompleted);
+            _automationObject = null;
+            throw;
+        }
+    }
+
+    public event Action<string, int>? FileCompleted;
+    public event Action<int, int, int>? Completed;
+
+    public bool IsConnected => _automationObject is not null;
+
+    private void HandleFileCompleted(string path, int errorCode)
+    {
+        _synchronizationContext.Post(
+            _ => FileCompleted?.Invoke(path, errorCode),
+            null);
+    }
+
+    private void HandleCompleted(int loadedCount, int failedCount, int errorCode)
+    {
+        _synchronizationContext.Post(
+            _ => Completed?.Invoke(loadedCount, failedCount, errorCode),
+            null);
+    }
+
+    public void Dispose()
+    {
+        object? automationObject = Interlocked.Exchange(ref _automationObject, null);
+        if (automationObject is null)
+        {
+            return;
+        }
+
+        try
+        {
+            ComEventsHelper.Remove(automationObject, EventsInterfaceId, 4, _onCompleted);
+        }
+        finally
+        {
+            ComEventsHelper.Remove(automationObject, EventsInterfaceId, 3, _onFileCompleted);
+        }
+    }
+}

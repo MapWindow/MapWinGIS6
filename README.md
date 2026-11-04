@@ -39,14 +39,22 @@ these operations, configurable zoom factors, mouse-wheel zoom, drag-to-pan,
 arrow-key navigation, and touch pan/pinch gestures. ActiveX animation runs on
 the control's owner-thread timer.
 
-Vector loads add layers rather than replace them. The first layer fits the
-initial view; later loads preserve it. Call `ZoomToMap` to include new layers
-in the visible extent, `MoveLayer` to change drawing order, or `ClearLayers`
-to release loaded datasets before switching or refreshing them.
+Vector and raster loads add layers rather than replace them. The first layer
+fits the initial view, including after the map becomes empty. Later loads preserve it.
+Call `ZoomToMap` to include new layers in the visible extent or `MoveLayer`
+to change drawing order. Call `ClearLayers` to release loaded datasets before
+switching or refreshing them. Clearing the map or removing its last layer
+resets the view.
 
-Dropped vector and raster files append as layers and the control fits the
-combined visible extent after processing the batch. Unsupported or invalid
-files are skipped; valid files in the same drop are still loaded.
+Dropped files work in windowed hosts, including WinForms `AxHost`, and
+windowless hosts that forward OLE drops. The control copies the paths and
+queues loading on its owning thread after `IDropTarget::Drop` returns.
+Large datasets can still block the control's UI while they load.
+Vector and raster files append as layers.
+The control then fits the combined visible extent.
+Unsupported or invalid files do not prevent valid files from loading.
+`DropFileCompleted` reports each path and HRESULT. `DropCompleted` reports
+the loaded count, failed count, and batch HRESULT. The C# host displays failures.
 
 ## Build and test
 

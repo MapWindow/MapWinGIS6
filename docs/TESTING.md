@@ -51,12 +51,33 @@ run exceeded 30 seconds); rerun it before treating a timeout as a hang. These
 integration checks require Windows and an interactive desktop session; they
 are not currently part of CI.
 
-The native ActiveX integration tests also exercise the control's windowless
-OLE drop target with `CF_HDROP` data. They verify that multiple supported
-datasets append as layers and fit to their combined extent, and that an
-unsupported file does not prevent other files in the same drop from loading.
+The native ActiveX integration tests exercise the OLE drop target with
+`CF_HDROP` data and force windowed activation without COM registration.
+They make sure that the child window registers its drop target and releases
+it on deactivation. Drop tests cover `DragOver`, `DragLeave`, rejected formats,
+and MOVE-only effects. Queued batches leave the map unchanged until dispatch.
+Supported vector and raster datasets append as layers and fit their combined extent.
+Mixed-drop tests check per-file results and cached feature counts after removal.
+Unsupported files do not prevent valid files from loading. Tests read each
+failed path and HRESULT from events, rather than assuming a failure order.
+Closing the control cancels queued batches without loading them.
 Dragging files from Explorer onto the visible C# host remains a manual desktop
-check.
+check. Include a valid dataset, an unsupported file, and a missing dataset
+when exercising the drop target directly. The host displays failed paths and
+the final loaded and failed counts.
+
+The navigation checks make sure that a polygon edge stays under the wheel
+cursor and that off-control wheel input zooms around the viewport center.
+A diagonal drag checks both axes. Hover checks cover button-up outside the
+control and a missed button-up. Reload checks sample pixels before an explicit
+zoom, both after `ClearLayers` and after removal of the last layer.
+Repaint waits compare only the map client area after application-idle events.
+They require three unchanged comparisons, with a five-second timeout and no
+fixed delay between samples. Bitmap comparisons use `LockBits` rather than
+per-pixel `GetPixel` calls. The UI message loop runs normally between samples.
+Wheel checks start from a fitted fixture view, far from the
+resolution limits, and compare map pixels without a minimum changed-pixel
+count. Window borders and status text do not affect these comparisons.
 
 The host executable accepts `--automated`, `--results <path>`, and
 `--timeout-seconds <5-300>`. The PowerShell launcher supplies these options

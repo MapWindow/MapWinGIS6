@@ -194,7 +194,7 @@ has no extent or transform of its own.
   (`mapwingis/rendering/MapRenderScene.h`) copies the drawable geometry of
   every visible layer into an owned `MapRenderScene`, bottom layer first. Each
   layer is converted on its own: hidden layers, layers without drawable
-  geometry, and layers that fail (for example, non-polygon layers) are listed
+  geometry, and layers that fail (for example, unsupported geometry collections) are listed
   in `skippedLayers` with a reason and do not stop the other layers.
   This includes `std::exception` errors except `std::bad_alloc`, which propagates.
   Exceptions outside that hierarchy also propagate. The scene
@@ -208,13 +208,15 @@ has no extent or transform of its own.
   geometry is moved through the per-layer scene cache when layer visibility,
   order, or membership changes. `InvalidateScene` discards that cache after
   source geometry edits.
-- **Redraws.** Map changes go through `MapView` (`AddLayer`, `RemoveLayer`,
+- **Redraws.** Map changes go through `MapView` (`AddLayer`, `AddRasterLayer`, `RemoveLayer`,
   `MoveLayer`, `ClearLayers`, `SetLayerVisible`), which marks the scene stale; `Scene()`
   rebuilds it on the next call. Every mutator returns whether the frame may
   have changed, and the host requests a redraw when it does. Edits to source
   geometry are not observed; call `InvalidateScene` after them.
 - **Initial view and resizing.** While the viewport has no view, adding a
-  layer fits the view to the visible map extent. `Resize` keeps the center
+  layer fits the view to the visible map extent. Clearing the map or removing
+  its last layer clears the view and any pending fit, but keeps the viewport
+  size. The next layer gets an initial fit. `Resize` keeps the center
   and resolution, so resizing neither moves nor rescales the map. A fit
   requested while the viewport has no size, for example before the host
   window exists or while it is minimized, is done by the first `Resize` that
@@ -356,24 +358,49 @@ Workers never retain COM references or wait for event handlers.
 map. Earlier layers stay loaded, so calling it again shows several layers.
 This includes repeated loads of the same dataset. Call `ClearLayers` before
 switching or refreshing datasets to avoid duplicate layers. It releases all
-loaded datasets and clears the feature total, but keeps the view.
+loaded datasets and clears the feature total and view.
 Supported point, line, and polygon layers are validated before adding them,
 so a rejected load cannot change the live viewport or schedule a fit.
 `LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
-the cached total over all loaded layers. The control updates the total after a
-successful load or removal and resets it on `ClearLayers`; property reads do
-not scan datasets or rebuild the scene. The first layer fits the initial view;
-later loads preserve the current view, and callers can use `ZoomToMap` to
-include new layers in the visible extent. `IMapWinGISControl4` exposes layer count and stable layer IDs, removal,
+the cached total over all loaded vector layers.
+Raster and XYZ layers contribute zero.
+The control saves each layer's contribution at load time and subtracts that
+same count on removal. `ClearLayers` resets the total. Property reads and
+removal do not scan datasets or rebuild the scene.
+The first layer fits the initial view, including after clearing the map or
+removing its last layer. Later loads preserve the current view.
+Callers can use `ZoomToMap` to include new layers in the visible extent.
+`IMapWinGISControl4` exposes layer count and stable layer IDs, removal,
 visibility, `ZoomToMap`, `ZoomToLayer`, `ZoomIn`, and `ZoomOut`; it inherits
 `ClearLayers` from `IMapWinGISControl3`. `IMapWinGISControl5` adds raster
 loading. `IMapWinGISControl6` adds direct pan, anchored zoom, configurable
 zoom factors, back/forward history, and animated map/layer fits.
-`IMapWinGISControl7` adds `MoveLayer` and XYZ tile loading. Mouse-wheel zoom
-is anchored at the cursor; left-button dragging pans, keyboard arrows pan, and
-touch pointers support one-finger pan and two-finger pinch zoom. Animated fits
+`IMapWinGISControl7` adds `MoveLayer` and XYZ tile loading.
+Keyboard arrows pan, and touch pointers support one-finger pan and two-finger
+pinch zoom. Animated fits
 use a 16 ms owner-thread timer and are canceled when the control closes or its
 host window is destroyed.
+Mouse-wheel zoom is anchored at the cursor when it is inside the control.
+Otherwise, zoom uses the viewport center. Left-button dragging pans the
+view, with windowless mouse capture released on button-up, capture loss,
+cancellation, close, or in-place deactivation. A mouse move without the left
+button pressed also ends a drag, even if the host misses button-up.
+Mouse navigation errors use a shared debug trace and leave the input message
+unhandled so the host can process it. A failed pan also releases capture.
+Mouse messages do not provide the HRESULT and `IErrorInfo` error contract of
+automation calls.
+
+File drops use `CF_HDROP` with a copy effect. A windowed control registers
+its HWND through `RegisterDragDrop` and revokes it on destruction or close.
+Windowless hosts forward drops through `GetDropTarget`.
+`Drop` copies file paths into a queue and posts to a message-only window
+on the owning COM thread. It returns before loading datasets. Loading still
+uses the UI thread, so a large dataset can delay other UI work.
+The control keeps itself alive during dispatch and ignores nested dispatch.
+Close cancels queued batches and stops delivery, including during callbacks.
+Each file produces `DropFileCompleted(path, errorCode)`. Each completed batch
+produces `DropCompleted(loadedCount, failedCount, errorCode)` after fitting
+the combined visible extent. Hosts use these events to report failures.
 
 Core retains the visible scene in memory. Per-layer vector scenes are reused
 across layer membership, visibility, and ordering changes; source geometry

@@ -2,10 +2,11 @@
 
 /**
  * @file GdalDispatchWindow.h
- * @brief Declares the owner-thread window for GDAL notifications and navigation timers.
+ * @brief Declares a message-only window for queued control work.
  *
- * The window is created on the control's owning COM thread. It accepts
- * worker wake-up messages and timer messages for navigation animation.
+ * Runs callbacks on the control's owning COM thread, with retry wakeups and
+ * safe destruction during callbacks. Used for GDAL notifications, file drops,
+ * and navigation animation timers.
  */
 #pragma once
 
