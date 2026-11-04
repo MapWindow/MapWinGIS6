@@ -37,9 +37,14 @@ Call `ZoomToMap` to include new layers in the visible extent, or `ClearLayers`
 to release loaded datasets before switching or refreshing them. Clearing the
 map or removing its last layer resets the view.
 
-Dropped files append as layers and the control fits the combined visible
-extent after processing the batch. Unsupported or invalid files are skipped;
-valid files in the same drop are still loaded.
+Dropped files work in windowed hosts, including WinForms `AxHost`, and
+windowless hosts that forward OLE drops. The control copies the paths and
+queues loading on its owning thread after `IDropTarget::Drop` returns.
+Large datasets can still block the control's UI while they load.
+Files append as layers, then the control fits the combined visible extent.
+Unsupported or invalid files do not prevent valid files from loading.
+`DropFileCompleted` reports each path and HRESULT. `DropCompleted` reports
+the loaded count, failed count, and batch HRESULT. The C# host displays failures.
 
 ## Build and test
 

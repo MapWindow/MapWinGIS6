@@ -15,6 +15,9 @@
 #include "resource.h"
 
 #include <cstdint>
+#include <deque>
+#include <filesystem>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -90,6 +93,7 @@ public:
     END_PROP_MAP()
 
     BEGIN_MSG_MAP(CMapWinGISControl)
+        MESSAGE_HANDLER(WM_CREATE, OnCreate)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
@@ -156,6 +160,7 @@ public:
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnCreate(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseWheel(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonDown(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseMove(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -181,6 +186,12 @@ private:
     HRESULT SetPointerCapture(bool capture) noexcept;
     /// Ends a drag and optionally releases capture still owned by this control.
     void EndPan(bool releaseCapture) noexcept;
+    void RevokeWindowDropTarget() noexcept;
+    void CloseDropQueue() noexcept;
+    static void DispatchDroppedFiles(void* control) noexcept;
+    HRESULT LoadDroppedFile(const std::filesystem::path& path) noexcept;
+    void LoadDroppedFiles(const std::vector<std::filesystem::path>& paths) noexcept;
+    void FireDropEvent(DISPID eventId, ATL::CComVariant* arguments, UINT count) noexcept;
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
@@ -190,6 +201,11 @@ private:
     mwg::ScreenPoint _lastPanPosition{};
     bool _isPanning = false;
     bool _dropAcceptsFiles = false;
+    HWND _dropTargetWindow = nullptr;
+    std::shared_ptr<mwg::activex::GdalDispatchWindow> _dropDispatchWindow;
+    std::deque<std::vector<std::filesystem::path>> _pendingDrops;
+    bool _dispatchingDrop = false;
+    bool _dropQueueClosed = false;
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

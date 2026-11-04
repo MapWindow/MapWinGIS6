@@ -371,6 +371,19 @@ Mouse navigation errors use a shared debug trace and leave the input message
 unhandled so the host can process it. A failed pan also releases capture.
 Mouse messages do not provide the HRESULT and `IErrorInfo` error contract of
 automation calls.
+
+File drops use `CF_HDROP` with a copy effect. A windowed control registers
+its HWND through `RegisterDragDrop` and revokes it on destruction or close.
+Windowless hosts forward drops through `GetDropTarget`.
+`Drop` copies file paths into a queue and posts to a message-only window
+on the owning COM thread. It returns before loading datasets. Loading still
+uses the UI thread, so a large dataset can delay other UI work.
+The control keeps itself alive during dispatch and ignores nested dispatch.
+Close cancels queued batches and stops delivery, including during callbacks.
+Each file produces `DropFileCompleted(path, errorCode)`. Each completed batch
+produces `DropCompleted(loadedCount, failedCount, errorCode)` after fitting
+the combined visible extent. Hosts use these events to report failures.
+
 Raster layers and other geometry types
 are not rendered. There is no reprojection, so coordinates remain in the
 source coordinate system and layers are assumed to share one.

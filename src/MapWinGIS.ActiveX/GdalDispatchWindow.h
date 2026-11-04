@@ -2,10 +2,10 @@
 
 /**
  * @file GdalDispatchWindow.h
- * @brief Declares the message-only window used to dispatch GDAL notifications.
+ * @brief Declares a message-only window for queued control work.
  *
- * The window is created on the control's owning COM thread and accepts only
- * posted wake-up messages from native workers.
+ * Runs callbacks on the control's owning COM thread, with retry wakeups and
+ * safe destruction during callbacks. Used for GDAL notifications and file drops.
  */
 #pragma once
 
