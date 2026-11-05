@@ -433,3 +433,9 @@ vcpkg_installed/
 
 # C++ language server compilation database
 .mscppls/
+
+# used by Pi.dev
+APPEND_SYSTEM.md
+
+# Git worktrees
+.worktrees/
