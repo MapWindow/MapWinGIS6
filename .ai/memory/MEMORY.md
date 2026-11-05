@@ -41,6 +41,11 @@ testing for test setup and fixtures; and lessons when working on related
 failure modes. Read tool knowledge only when such a file exists and applies.
 Do not load every file by default.
 
+## Maintaining memory
+
+See the [memory lifecycle rules](README.md#memory-lifecycle) and the
+[substantial-PR review checklist](README.md#review-checklist).
+
 ## Keeping this index current
 
 List each category's purpose here. When knowledge files are added, renamed, or

@@ -111,6 +111,9 @@ every small implementation detail.
    added, renamed, or removed.
 4. Include relevant memory changes in the implementation PR.
 
+For substantial PRs, use the
+[memory review checklist](.ai/memory/README.md#review-checklist).
+
 ### Memory quality
 
 - Never store guesses as established facts. Distinguish verified facts from
