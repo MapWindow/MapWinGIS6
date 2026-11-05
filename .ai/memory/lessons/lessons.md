@@ -10,10 +10,12 @@ driver's feature ID.
 count may itself scan the layer. A failed scan must not publish a partial
 index or count as complete.
 
-**Resolution:** The current Core implementation avoids forcing a count before
-its ID scan, reads sequentially with failure detection, resets reading through
-RAII, and marks the cache valid only after the scan finishes. Tests cover
-unknown counts and retry after a mid-scan failure.
+**Resolution:** The indexed-lookup ID scan uses `GetFeatureCount(FALSE)`, so it
+does not force a preliminary count. `FeatureCount()` first requests a forced
+count and uses the ID scan only as a fallback. The scan reads sequentially with
+failure detection, resets reading through RAII, and marks the cache valid only
+after it finishes. Tests cover unknown counts and retry after a mid-scan
+failure.
 
 **Limitations:** The scan is still O(n), and Core dataset access is not
 thread-safe. See [VectorDataset.cpp](../../../src/MapWinGIS.Core/src/vector/VectorDataset.cpp),
