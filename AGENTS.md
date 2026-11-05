@@ -10,6 +10,7 @@ in this repository.
 - [Build, test, validate](#build-test-validate)
 - [Ground rules](#ground-rules)
 - [Detailed guidance](#detailed-guidance)
+- [AI Memory Management](#ai-memory-management)
 
 ## Mission
 
@@ -78,3 +79,51 @@ and switches: [docs/BUILDING.md](docs/BUILDING.md).
 | Coding style and API conventions | [docs/CODING-STANDARDS.md](docs/CODING-STANDARDS.md) |
 | Porting behavior from MapWinGIS 5 | [docs/PORTING.md](docs/PORTING.md) |
 | Writing and running tests | [docs/TESTING.md](docs/TESTING.md) |
+
+## AI Memory Management
+
+The shared, provider-independent project memory is in `.ai/memory/`. It
+complements this file and the authoritative project documentation; it does not
+replace them.
+
+### At the beginning of a session
+
+1. Read `AGENTS.md`.
+2. Read `.ai/memory/MEMORY.md`.
+3. Select only the memory files relevant to the task.
+4. Read those files before making architectural or implementation decisions.
+5. Verify important assumptions against the current repository.
+
+### During development
+
+Identify knowledge that could help future work, such as a verified technical
+limitation, a solution to a difficult build problem, an architectural decision,
+a tooling requirement, or a lesson from a failed implementation. Do not record
+every small implementation detail.
+
+### At the end of a task
+
+1. Review whether reusable knowledge was discovered and check whether it already
+   exists.
+2. Verify it against source code, documentation, successful experiments, or
+   established architectural decisions.
+3. Update the appropriate memory file and update `MEMORY.md` when files are
+   added, renamed, or removed.
+4. Include relevant memory changes in the implementation PR.
+
+### Memory quality
+
+- Never store guesses as established facts. Distinguish verified facts from
+  assumptions and proposals.
+- Include references to relevant source files, documentation, or PRs where
+  useful.
+- Prefer concise explanations over long transcripts, and avoid duplicating
+  authoritative documentation.
+- Remove obsolete information when it is no longer relevant.
+- Never store credentials, secrets, access tokens, or personal information.
+- Do not record temporary implementation status as permanent knowledge.
+- Do not turn an unsuccessful experiment into an architectural rule.
+
+Memory is maintained through agent instructions and normal pull requests. Do
+not add agent-specific memory systems, hooks, automatic memory injection, or
+background processes.
