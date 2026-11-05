@@ -335,10 +335,13 @@ and does not claim MapWinGIS 5 `IGdalUtils` binary compatibility.
 At most sixteen operations may be active or awaiting result cleanup. Call
 `EndGdalOperation` after completion to release an operation slot. The control
 delivers events on its owning apartment thread. Destroying the in-place window
-pauses notification delivery without cancelling operations; a subsequent
-`WM_SIZE` reconnects delivery. Calling `Close` or releasing the control's final
-COM reference cancels outstanding work and drops queued notifications.
-Workers never retain COM references or wait for event handlers.
+suspends notification delivery without cancelling operations; a subsequent
+`WM_SIZE` resumes delivery. Calling `Close` or destroying the control after
+the client's final COM reference is released cancels outstanding work and
+discards queued notifications. An in-progress event dispatch holds a temporary
+COM reference, so releasing the client's reference inside an event does not
+destroy the control until dispatch returns. Workers never retain COM references
+or wait for event handlers.
 
 `LoadVectorDataset` adds the first vector layer of a dataset on top of the
 map. Earlier layers stay loaded, so calling it again shows several layers.

@@ -48,6 +48,12 @@ choose deliberately whether it belongs in v6 and document important departures.
 
 ## Current ActiveX compatibility boundary
 
+Use a derived interface with a new IID to add members to an existing
+automation contract. This preserves the published interface while allowing
+clients to query the newer version. Use a separate `IDispatch` interface for
+an independent capability that is not an extension of that contract. Keep
+events in a separate dispinterface.
+
 The initial `MapWinGIS.ocx` exposes a deliberately small v6 automation
 contract. `IMapWinGISControl` reports Core initialization, loads a vector
 dataset, and reports whether a layer is loaded and its feature count.
@@ -56,8 +62,10 @@ dataset, and reports whether a layer is loaded and its feature count.
 Loads add layers, including duplicate loads of one dataset. Call `ClearLayers`
 before switching or refreshing datasets. It releases all layers and resets
 the cached feature total while keeping the viewport.
-New members belong on a new derived interface; do not change a published
-interface IID or silently add vtable members to it.
+`IMapWinGISControlGdal` is a separate interface for the independent GDAL
+operation capability, and `IMapWinGISControlEvents` is a separate dispinterface
+for notifications. Do not change a published interface IID or silently add
+vtable members to it.
 
 These are new interfaces, not the MapWinGIS 5 type-library interfaces, and the
 control does not claim binary or API compatibility with existing v5 clients.
