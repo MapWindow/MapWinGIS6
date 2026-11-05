@@ -46,7 +46,7 @@ Copy this checklist and track progress:
 
 **2. Select the step.** Read the plan. Pick the first unchecked item in its checklist. If all items are checked, report that and stop.
 
-Repository-local plans must already be committed on `development`, so the plan is present in the new worktree. If the supplied plan is untracked, uncommitted, or on another branch, treat it as an out-of-repository plan: read and update it at its supplied original path, and leave it uncommitted.
+Record the supplied plan's path and contents before creating the worktree. For a repository-local plan, record its repository-relative path. If its supplied version is untracked, uncommitted, or differs from the version on `development`, copy that version to the same path in the worktree before switching directories. The worktree copy is the plan used and updated in step 8. For a plan outside the repository, keep using and updating its supplied original path, and leave it uncommitted.
 
 **3. Create worktree.**
 
@@ -56,6 +56,8 @@ git worktree add -b <branch> .worktrees/<branch> origin/development
 ```
 
 `<branch>`: short kebab-case name derived from the step. Work only inside the worktree from here on.
+
+Before switching directories, ensure the supplied repository-local plan is present at its recorded repository-relative path in the worktree. Copy the supplied version there if the worktree does not contain that version.
 
 **4. Read relevant project memory.** Follow the memory workflow in `AGENTS.md#ai-memory-management`, starting with `.ai/memory/MEMORY.md`. Load only relevant category files, and verify important claims against current source and authoritative documentation.
 
@@ -70,7 +72,7 @@ Compare warnings with the latest known `Debug | x64` baseline for the same toolc
 **8. Update the plan**:
 - Check off the implemented step.
 - Add remaining limitations or follow-up items under that step so they stay visible.
-- If the plan is repository-local and committed on `development`, update its copy in the worktree. Otherwise update the supplied original path and leave it uncommitted; do not copy it into the repository.
+- If the plan is repository-local, update its worktree copy. If it is outside the repository, update the supplied original path and leave it uncommitted.
 
 **9. Commit.** Before committing, check that `README.md` and the Markdown files in `docs/` are up to date for the selected step; update directly related documentation as needed. Make one commit containing code, tests, relevant documentation and memory changes, and the plan update if the plan is repository-local. Follow [`.github/commit-conventions.instructions.md`](../../commit-conventions.instructions.md), including its gitmoji, conventional type and scope, and description-list format. Example subject: `✨ feat(core): add memory store serialization`.
 

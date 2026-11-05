@@ -125,7 +125,7 @@ Limit the workflow to three push cycles total, counting pushes in every phase. I
 
 - All PR checks are green.
 - Every eligible review comment is handled; skipped comments are reported with the reason.
-- The Copilot review has completed, with no new review activity since the last push.
+- The Copilot review has completed, and a final refresh confirms that no eligible unhandled review comments remain.
 - The PR branch is synced with the latest base branch using the repository's branch-update convention.
 
 ## Final summary
