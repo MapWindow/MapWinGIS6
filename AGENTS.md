@@ -10,6 +10,7 @@ in this repository.
 - [Build, test, validate](#build-test-validate)
 - [Ground rules](#ground-rules)
 - [Detailed guidance](#detailed-guidance)
+- [Agent skills](#agent-skills)
 - [AI Memory Management](#ai-memory-management)
 
 ## Mission
@@ -79,6 +80,14 @@ and switches: [docs/BUILDING.md](docs/BUILDING.md).
 | Coding style and API conventions | [docs/CODING-STANDARDS.md](docs/CODING-STANDARDS.md) |
 | Porting behavior from MapWinGIS 5 | [docs/PORTING.md](docs/PORTING.md) |
 | Writing and running tests | [docs/TESTING.md](docs/TESTING.md) |
+
+## Agent skills
+
+The task-specific files under `.github/skills/` are GitHub Copilot skills, such
+as `implementing-plan-steps` and `resolving-pr-comments`. They supplement this
+file for Copilot clients that support repository skills. `AGENTS.md` remains
+the shared guidance; do not assume other agents discover `.github/skills/`
+without explicit configuration.
 
 ## AI Memory Management
 

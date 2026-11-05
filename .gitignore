@@ -435,7 +435,7 @@ vcpkg_installed/
 .mscppls/
 
 # used by Pi.dev
-APPEND_SYSTEM.md
+/APPEND_SYSTEM.md
 
 # Git worktrees
 .worktrees/
