@@ -6,3 +6,6 @@ correctly.
 
 Record unsuccessful experiments only when their verified outcome helps prevent
 repeated work; do not turn one failure into a general architectural rule.
+
+- [lessons.md](lessons.md) — verified feature-scan, vcpkg, and host-pixel
+  testing lessons.
