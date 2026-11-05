@@ -5,6 +5,10 @@
 Follow [AGENTS.md](../AGENTS.md) and the detailed standards linked there.
 They take precedence over the general guidance below.
 
+Use the shared project memory by following the
+[AI Memory Management workflow in `AGENTS.md`](../AGENTS.md#ai-memory-management),
+starting with `.ai/memory/MEMORY.md`.
+
 `MapWinGIS.Core` is a C++20 DLL. It must not use COM, ATL, or MFC.
 The ActiveX wrapper has an initial implementation. COM/ActiveX guidance below
 applies to the implemented subset and any future compatibility work.
