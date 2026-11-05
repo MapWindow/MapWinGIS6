@@ -33,8 +33,9 @@ library MapWinGISActiveXLib
         HRESULT FeatureCount([out, retval] hyper* count);
     };
 
-    // Published interfaces are immutable; new members go on a derived
-    // interface with its own IID so clients never call missing vtable slots.
+    // Extend this automation contract only through a derived interface with a
+    // new IID. Independent capabilities use separate IDispatch interfaces;
+    // event notifications use a dispinterface.
     [
         object,
         dual,
@@ -70,6 +71,8 @@ library MapWinGISActiveXLib
         HRESULT ClearLayers();
     };
 
+    // GDAL operations are an independent capability, not a version of the
+    // control's core automation contract.
     [
         object,
         dual,
@@ -101,6 +104,8 @@ library MapWinGISActiveXLib
             [out] SAFEARRAY(BSTR)* warnings);
     };
 
+    // Keep event notifications separate from the control's automation
+    // interfaces.
     [
         uuid(3EC7E255-3045-4A32-A9DA-12FA310FD3F0)
     ]
