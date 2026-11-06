@@ -2,7 +2,8 @@
 
 /**
  * @file MapWinGISControl.cpp
- * @brief Implements vector loading, ActiveX state reporting, and host drawing.
+ * @brief Implements vector loading, map navigation, ActiveX state reporting,
+ * and host drawing.
  *
  * Redraws: every map or view change made through the control goes through
  * its MapView; the control calls FireViewChange when the MapView reports
@@ -46,6 +47,49 @@ namespace
             wideMessage,
             IID_IMapWinGISControlGdal,
             errorCode);
+    }
+
+    [[nodiscard]] HRESULT SetControlComErrorInfo(
+        const std::string& message,
+        REFIID sourceIid,
+        const HRESULT errorCode)
+    {
+        const CA2W wideMessage(message.c_str(), CP_UTF8);
+        return AtlReportError(
+            CLSID_MapWinGISControl,
+            wideMessage,
+            sourceIid,
+            errorCode);
+    }
+
+    template <typename Operation>
+    [[nodiscard]] HRESULT RunViewOperation(
+        Operation&& operation,
+        bool& changed)
+    {
+        try
+        {
+            changed = std::forward<Operation>(operation)();
+            return S_OK;
+        }
+        catch (const std::bad_alloc&)
+        {
+            return E_OUTOFMEMORY;
+        }
+        catch (const mwg::InvalidArgument& exception)
+        {
+            return SetControlComErrorInfo(
+                exception.what(),
+                IID_IMapWinGISControl4,
+                E_INVALIDARG);
+        }
+        catch (const std::exception& exception)
+        {
+            return SetControlComErrorInfo(
+                exception.what(),
+                IID_IMapWinGISControl4,
+                E_FAIL);
+        }
     }
 
     [[nodiscard]] const wchar_t* BackendName(
@@ -294,6 +338,26 @@ STDMETHODIMP CMapWinGISControl::get_CoreInitialized(VARIANT_BOOL* initialized)
 
 STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
 {
+    return LoadVectorDatasetImpl(path, nullptr, IID_IMapWinGISControl);
+}
+
+STDMETHODIMP CMapWinGISControl::LoadVectorDatasetEx(
+    BSTR path,
+    LONGLONG* layerId)
+{
+    if (layerId == nullptr)
+    {
+        return E_POINTER;
+    }
+    *layerId = 0;
+    return LoadVectorDatasetImpl(path, layerId, IID_IMapWinGISControl4);
+}
+
+HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
+    BSTR path,
+    LONGLONG* layerId,
+    REFIID sourceIid)
+{
     if (path == nullptr)
     {
         return E_INVALIDARG;
@@ -350,8 +414,7 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
         const mwg::LayerId id = _view.AddLayer(std::move(dataset), std::move(preparedScene));
         try
         {
-            // Until the control exposes navigation, every load shows the
-            // whole map so that each loaded layer is visible.
+            // Fit the combined extent so the newly added layer is visible.
             (void)_view.FitToMap();
         }
         catch (...)
@@ -361,6 +424,10 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
         }
 
         _featureCount += count;
+        if (layerId != nullptr)
+        {
+            *layerId = static_cast<LONGLONG>(id.value);
+        }
         FireViewChange();
         return S_OK;
     }
@@ -370,12 +437,7 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDataset(BSTR path)
     }
     catch (const std::exception& exception)
     {
-        const CA2W message(exception.what(), CP_UTF8);
-        return AtlReportError(
-            CLSID_MapWinGISControl,
-            message,
-            IID_IMapWinGISControl,
-            E_FAIL);
+        return SetControlComErrorInfo(exception.what(), sourceIid, E_FAIL);
     }
 }
 
@@ -463,6 +525,137 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
     }
 
     FireViewChange();
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::FitToMap()
+{
+    bool changed = false;
+    const HRESULT result = RunViewOperation(
+        [this]() { return _view.FitToMap(); },
+        changed);
+    if (SUCCEEDED(result) && changed)
+    {
+        FireViewChange();
+    }
+    return result;
+}
+
+STDMETHODIMP CMapWinGISControl::ZoomIn(const DOUBLE factor)
+{
+    bool changed = false;
+    const HRESULT result = RunViewOperation(
+        [this, factor]() { return _view.ZoomIn(factor); },
+        changed);
+    if (SUCCEEDED(result) && changed)
+    {
+        FireViewChange();
+    }
+    return result;
+}
+
+STDMETHODIMP CMapWinGISControl::ZoomOut(const DOUBLE factor)
+{
+    bool changed = false;
+    const HRESULT result = RunViewOperation(
+        [this, factor]() { return _view.ZoomOut(factor); },
+        changed);
+    if (SUCCEEDED(result) && changed)
+    {
+        FireViewChange();
+    }
+    return result;
+}
+
+STDMETHODIMP CMapWinGISControl::Pan(
+    const DOUBLE deltaX,
+    const DOUBLE deltaY)
+{
+    bool changed = false;
+    const HRESULT result = RunViewOperation(
+        [this, deltaX, deltaY]() { return _view.Pan(deltaX, deltaY); },
+        changed);
+    if (SUCCEEDED(result) && changed)
+    {
+        FireViewChange();
+    }
+    return result;
+}
+
+STDMETHODIMP CMapWinGISControl::ZoomAt(
+    const DOUBLE x,
+    const DOUBLE y,
+    const DOUBLE factor)
+{
+    bool changed = false;
+    const HRESULT result = RunViewOperation(
+        [this, x, y, factor]()
+        {
+            return _view.ZoomAt({x, y}, factor);
+        },
+        changed);
+    if (SUCCEEDED(result) && changed)
+    {
+        FireViewChange();
+    }
+    return result;
+}
+
+STDMETHODIMP CMapWinGISControl::ZoomToLayer(const LONGLONG layerId)
+{
+    if (layerId <= 0)
+    {
+        return E_INVALIDARG;
+    }
+    const mwg::LayerId id{static_cast<std::uint64_t>(layerId)};
+    if (_view.GetMap().FindLayer(id) == nullptr)
+    {
+        return E_INVALIDARG;
+    }
+
+    bool changed = false;
+    const HRESULT result = RunViewOperation(
+        [this, id]() { return _view.ZoomToLayer(id); },
+        changed);
+    if (SUCCEEDED(result) && changed)
+    {
+        FireViewChange();
+    }
+    return result;
+}
+
+STDMETHODIMP CMapWinGISControl::get_LayerCount(LONG* count)
+{
+    if (count == nullptr)
+    {
+        return E_POINTER;
+    }
+    *count = _view.GetMap().LayerCount();
+    return S_OK;
+}
+
+STDMETHODIMP CMapWinGISControl::GetLayerId(
+    const LONG index,
+    LONGLONG* layerId)
+{
+    if (layerId == nullptr)
+    {
+        return E_POINTER;
+    }
+    *layerId = 0;
+    const mwg::Map& map = _view.GetMap();
+    if (index < 0 || index >= map.LayerCount())
+    {
+        return E_INVALIDARG;
+    }
+
+    const std::uint64_t value = map.Layer(index).Id().value;
+    if (value > static_cast<std::uint64_t>(
+            std::numeric_limits<LONGLONG>::max()))
+    {
+        return E_UNEXPECTED;
+    }
+    *layerId = static_cast<LONGLONG>(value);
     return S_OK;
 }
 

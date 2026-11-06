@@ -58,10 +58,13 @@ The initial `MapWinGIS.ocx` exposes a deliberately small v6 automation
 contract. `IMapWinGISControl` reports Core initialization, loads a vector
 dataset, and reports whether a layer is loaded and its feature count.
 `IMapWinGISControl2` adds renderer preference, active backend, and status.
-`IMapWinGISControl3` adds `ClearLayers` and is the default automation interface.
-Loads add layers, including duplicate loads of one dataset. Call `ClearLayers`
-before switching or refreshing datasets. It releases all layers and resets
-the cached feature total while keeping the viewport.
+`IMapWinGISControl3` adds `ClearLayers`. `IMapWinGISControl4` derives from it
+and is the default automation interface; it adds view navigation, layer count,
+`LoadVectorDatasetEx`, and stable layer-ID lookup by 0-based position. Loads
+add layers, including duplicate loads of one dataset. Each successful load
+fits the view to the combined map extent. Call `ClearLayers` before switching
+or refreshing datasets. It releases all layers and resets the cached feature
+total while keeping the viewport.
 `IMapWinGISControlGdal` is a separate interface for the independent GDAL
 operation capability, and `IMapWinGISControlEvents` is a separate dispinterface
 for notifications. Do not change a published interface IID or silently add

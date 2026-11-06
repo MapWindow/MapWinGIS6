@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -629,6 +630,25 @@ namespace
         HGDIOBJ _previous{};
     };
 
+    [[nodiscard]] bool HasDifferentPixel(
+        const HDC first,
+        const HDC second,
+        const int width,
+        const int height) noexcept
+    {
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                if (GetPixel(first, x, y) != GetPixel(second, x, y))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     class TestHostWindow final
     {
     public:
@@ -849,6 +869,87 @@ TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
     ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}}), S_OK);
     ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
     EXPECT_EQ(count, 1);
+}
+
+TEST_F(ActiveXMapTest, ExposesStableLayerIdsAndMapNavigation)
+{
+    constexpr int width = 120;
+    constexpr int height = 100;
+    ASSERT_EQ(Resize(width, height), S_OK);
+
+    ComPtr<IMapWinGISControl4> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+
+    LONG layerCount = -1;
+    EXPECT_EQ(control->get_LayerCount(nullptr), E_POINTER);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+
+    const std::vector<mwg::Extent> firstRectangle{{0, 0, 10, 10}};
+    const auto firstPath = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "navigation-first.gpkg",
+        firstRectangle);
+    LONGLONG firstLayerId = -1;
+    ASSERT_EQ(
+        control->LoadVectorDatasetEx(
+            ATL::CComBSTR(firstPath.c_str()),
+            &firstLayerId),
+        S_OK);
+    EXPECT_GT(firstLayerId, 0);
+
+    LONGLONG indexedLayerId = 0;
+    ASSERT_EQ(control->GetLayerId(0, &indexedLayerId), S_OK);
+    EXPECT_EQ(indexedLayerId, firstLayerId);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+
+    ASSERT_EQ(LoadRectangles({{20, 0, 30, 10}}), S_OK);
+    LONGLONG secondLayerId = 0;
+    ASSERT_EQ(control->GetLayerId(1, &secondLayerId), S_OK);
+    EXPECT_GT(secondLayerId, firstLayerId);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 2);
+
+    EXPECT_EQ(control->GetLayerId(-1, &indexedLayerId), E_INVALIDARG);
+    EXPECT_EQ(control->GetLayerId(2, &indexedLayerId), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomToLayer(0), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomToLayer(secondLayerId + 100), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomIn(1.0), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomOut(1.0), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomIn(std::numeric_limits<double>::quiet_NaN()), E_INVALIDARG);
+    EXPECT_EQ(
+        control->Pan(std::numeric_limits<double>::infinity(), 0.0),
+        E_INVALIDARG);
+    EXPECT_EQ(control->ZoomAt(0.0, 0.0, 0.0), E_INVALIDARG);
+
+    BitmapSurface fitted(width, height);
+    BitmapSurface zoomed(width, height);
+    ASSERT_TRUE(fitted.IsValid());
+    ASSERT_TRUE(zoomed.IsValid());
+    ASSERT_EQ(control->FitToMap(), S_OK);
+    ASSERT_EQ(Draw(fitted.Get(), width, height), S_OK);
+    ASSERT_EQ(control->ZoomIn(2.0), S_OK);
+    ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
+    EXPECT_TRUE(HasDifferentPixel(fitted.Get(), zoomed.Get(), width, height));
+
+    ASSERT_EQ(control->ZoomOut(2.0), S_OK);
+    ASSERT_EQ(control->Pan(2.0, -1.0), S_OK);
+    ASSERT_EQ(control->ZoomAt(60.0, 50.0, 1.5), S_OK);
+    ASSERT_EQ(control->ZoomToLayer(firstLayerId), S_OK);
+    ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
+    EXPECT_TRUE(HasDifferentPixel(fitted.Get(), zoomed.Get(), width, height));
+
+    ASSERT_EQ(control->ClearLayers(), S_OK);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+    LONGLONG reloadedLayerId = 0;
+    ASSERT_EQ(
+        control->LoadVectorDatasetEx(
+            ATL::CComBSTR(firstPath.c_str()),
+            &reloadedLayerId),
+        S_OK);
+    EXPECT_GT(reloadedLayerId, secondLayerId);
 }
 
 TEST_F(ActiveXMapTest, RejectedLoadsLeaveTheMapAndRenderingUnchanged)

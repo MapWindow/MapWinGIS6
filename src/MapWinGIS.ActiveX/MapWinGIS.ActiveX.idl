@@ -71,6 +71,43 @@ library MapWinGISActiveXLib
         HRESULT ClearLayers();
     };
 
+    [
+        object,
+        dual,
+        oleautomation,
+        uuid(7CBB8D66-3933-4AB3-A3A7-6BEB687B2D04),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl4 : IMapWinGISControl3
+    {
+        [id(9)]
+        HRESULT FitToMap();
+
+        [id(10)]
+        HRESULT ZoomIn([in] double factor);
+
+        [id(11)]
+        HRESULT ZoomOut([in] double factor);
+
+        [id(12)]
+        HRESULT Pan([in] double deltaX, [in] double deltaY);
+
+        [id(13)]
+        HRESULT ZoomAt([in] double x, [in] double y, [in] double factor);
+
+        [id(14)]
+        HRESULT ZoomToLayer([in] hyper layerId);
+
+        [propget, id(15)]
+        HRESULT LayerCount([out, retval] LONG* count);
+
+        [id(16)]
+        HRESULT LoadVectorDatasetEx([in] BSTR path, [out, retval] hyper* layerId);
+
+        [id(17)]
+        HRESULT GetLayerId([in] LONG index, [out, retval] hyper* layerId);
+    };
+
     // GDAL operations are an independent capability, not a version of the
     // control's core automation contract.
     [
@@ -129,7 +166,7 @@ library MapWinGISActiveXLib
     ]
     coclass MapWinGISControl
     {
-        [default] interface IMapWinGISControl3;
+        [default] interface IMapWinGISControl4;
         interface IMapWinGISControlGdal;
         [default, source] dispinterface IMapWinGISControlEvents;
     };

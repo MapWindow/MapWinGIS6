@@ -295,9 +295,11 @@ backend first and fall back to GDI when the scene, hardware, allocation, or
 drawing operation is unsupported. The control reports the active backend and
 the reason for a fallback through `RenderingBackend` and `RenderingStatus`.
 These rendering properties are on `IMapWinGISControl2`, which derives from
-`IMapWinGISControl`. The coclass default interface is now `IMapWinGISControl3`,
-which derives from `IMapWinGISControl2` and adds `ClearLayers` at DISPID 8.
-The earlier interfaces and their IIDs remain unchanged.
+`IMapWinGISControl`. `IMapWinGISControl3` adds `ClearLayers` at DISPID 8.
+The coclass default is `IMapWinGISControl4`, which derives from
+`IMapWinGISControl3`. It adds map navigation, layer count, and stable layer IDs
+at DISPIDs 9-17. The earlier interfaces, their DISPIDs, and their IIDs remain
+unchanged.
 OpenGL capability detection checks framebuffer-object entry points, the
 maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
@@ -345,9 +347,11 @@ or wait for event handlers.
 
 `LoadVectorDataset` adds the first vector layer of a dataset on top of the
 map. Earlier layers stay loaded, so calling it again shows several layers.
-This includes repeated loads of the same dataset. Call `ClearLayers` before
-switching or refreshing datasets to avoid duplicate layers. It releases all
-loaded datasets and clears the feature total, but keeps the view.
+This includes repeated loads of the same dataset. `LoadVectorDatasetEx`
+returns the stable ID of the new layer, and `GetLayerId` returns a layer ID by
+its current 0-based position. Call `ClearLayers` before switching or refreshing
+datasets to avoid duplicate layers. It releases all loaded datasets and clears
+the feature total, but keeps the view.
 The layer must be polygon-compatible: a dataset whose first layer has another
 geometry type fails to load and is not added, even if a later layer is
 polygonal. An empty polygon layer loads but draws nothing. The control reads
@@ -355,18 +359,21 @@ and validates the candidate layer before adding it, so a rejected load cannot
 change the live viewport or schedule a fit. The control transfers the validated
 scene into `MapView`. Loading another layer and drawing the first frame reuse
 the prepared geometry of existing layers.
-`LayerLoaded` reports whether the map has any layer, and `FeatureCount` is
-the cached total over all loaded layers. The control updates the total after
-a successful load and resets it on `ClearLayers`. Scene preparation counts
+`LayerLoaded` reports whether the map has any layer, `LayerCount` reports its
+current layer total, and `FeatureCount` is the cached total over all loaded
+layers. The control updates the total after a successful load and resets it on
+`ClearLayers`. Scene preparation counts
 all source features, including null and empty geometries, during its geometry
 traversal. Drivers that report an unknown count can still load. The native
 `VectorLayer::FeatureCount` also returns an exact count. If the driver cannot
 provide one, it builds the feature ID index and reports read failures.
-COM property reads do not scan
-datasets or rebuild the scene. Until the control exposes navigation, every load
-fits the view to the whole map. Raster layers and other geometry types are
-not rendered. There is no reprojection, so coordinates remain in the source
-coordinate system and layers are assumed to share one.
+COM property reads do not scan datasets or rebuild the scene. `FitToMap`,
+`ZoomToLayer`, `ZoomIn`, `ZoomOut`, `ZoomAt`, and `Pan` forward navigation to
+the control's one `MapView` and request a redraw only when its view changes.
+Each successful load still fits the view to the combined map extent. Raster
+layers and other geometry types are not rendered. There is no reprojection, so
+coordinates remain in the source coordinate system and layers are assumed to
+share one.
 
 Core prepares and retains the complete supported polygon scene in memory,
 reading feature geometries sequentially without WKT serialization and
