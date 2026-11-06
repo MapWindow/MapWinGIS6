@@ -60,14 +60,18 @@ pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration
 The launcher makes no COM registration changes. Automated mode creates a
 visible window and runs the UI message loop, checks the `CoreInitialized`
 automation property, loads a generated two-polygon GeoJSON dataset through the
-control, resizes the host, samples rendered polygon and background pixels for
-both the GDI preference and the default (OpenGL-first) path, recreates the
-control, and reloads the layer. It calls the original `LoadVectorDataset`
+control, resizes the host, and samples rendered polygon and background pixels
+for GDI and a requested OpenGL path. The OpenGL request can use GDI when
+OpenGL is unavailable or the scene is unsupported. The host recreates the
+control and reloads the layer. It calls the original `LoadVectorDataset`
 method and reads `LayerLoaded` and the absolute `FeatureCount` on each fresh
-control. It also loads two layers through `LoadVectorDatasetEx`, checks
-their IDs and feature-count deltas, zooms to each, pans, and clears them.
-It makes sure that navigation preserves the counts and that clearing removes
-the layers from the control and the list. It writes individual outcomes to
+control. It also checks failed dataset loads, loads two layers through
+`LoadVectorDatasetEx`, and checks their IDs, counts, and feature-count deltas.
+It exercises map fitting, per-layer fitting, zoom in and out, pan, cursor
+anchored zoom, navigation after resizing, invalid layer IDs, and navigation
+with no layers. It clears and reloads layers and makes sure that failed loads
+and navigation do not change layer or feature counts. The host writes
+individual outcomes to
 `bin\Debug\x64\ActiveXTestHost-results.json`. Pixels are sampled from the host
 window's own composed content (`PrintWindow` with `PW_RENDERFULLCONTENT`), not
 from the screen, so another window on top or a lost foreground race does not
@@ -81,6 +85,8 @@ are not currently part of CI.
 The host executable accepts `--automated`, `--results <path>`, and
 `--timeout-seconds <5-300>`. The PowerShell launcher supplies these options
 and starts the host without changing COM registration.
+For build and manual-use instructions, see the
+[ActiveX Test Host README](../samples/CSharp/ActiveXTestHost/README.md).
 
 ## Rendering performance baseline
 

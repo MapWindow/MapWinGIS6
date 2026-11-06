@@ -19,6 +19,11 @@ ActiveX host checks require Windows and an interactive desktop; they are not
 currently part of CI. The rendering performance baseline is opt-in and should
 be run in Release when collecting meaningful timings.
 
+The C# host calls ActiveX methods late-bound. An invalid layer ID surfaces as
+`.NET ArgumentException` with the COM error text and `E_INVALIDARG` HRESULT.
+The host assertion accepts this mapping as well as `COMException`; see
+`samples/CSharp/ActiveXTestHost/MainForm.cs`.
+
 ## References
 
 - [Testing guide](../../../docs/TESTING.md)
