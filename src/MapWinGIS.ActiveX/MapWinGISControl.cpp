@@ -11,6 +11,14 @@
  * its viewport into an offscreen frame buffer and presents the finished
  * frame with a single blit, so every layer uses the same transformation and
  * the visible surface never shows a partially drawn frame.
+ *
+ * Pan caching: the last fully rendered layer frame is kept in a second
+ * offscreen buffer. While the user drags the map (WM_LBUTTONDOWN through
+ * WM_LBUTTONUP), OnDraw paints the background and blits the cached frame at
+ * the accumulated pixel offset instead of re-rasterizing every layer on
+ * each WM_MOUSEMOVE; the button-up handler invalidates the cache so the new
+ * view is rasterized once. The cache is invalidated on layer add/remove/
+ * clear, zoom, resize, and backend-preference changes.
  */
 #include "MapWinGISControl.h"
 
@@ -470,6 +478,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
         {
             *layerId = convertedId;
         }
+        InvalidateLayerCache();
         FireViewChange();
         return S_OK;
     }
@@ -492,6 +501,7 @@ STDMETHODIMP CMapWinGISControl::ClearLayers()
     if (_view.ClearLayers())
     {
         _featureCount = 0;
+        InvalidateLayerCache();
         FireViewChange();
     }
     return S_OK;
@@ -526,6 +536,7 @@ STDMETHODIMP CMapWinGISControl::get_RenderingBackend(BSTR* backend)
 
 STDMETHODIMP CMapWinGISControl::get_RenderingStatus(BSTR* status)
 {
+    return CopyToBstr(_renderer.GetDiagnostic(), backend_or_status(status));
     return CopyToBstr(_renderer.GetDiagnostic(), status);
 }
 
@@ -570,6 +581,7 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
         return E_INVALIDARG;
     }
 
+    InvalidateLayerCache();
     FireViewChange();
     return S_OK;
 }
@@ -582,6 +594,7 @@ STDMETHODIMP CMapWinGISControl::FitToMap()
         changed);
     if (SUCCEEDED(result) && changed)
     {
+        InvalidateLayerCache();
         FireViewChange();
     }
     return result;
@@ -595,6 +608,7 @@ STDMETHODIMP CMapWinGISControl::ZoomIn(const DOUBLE factor)
         changed);
     if (SUCCEEDED(result) && changed)
     {
+        InvalidateLayerCache();
         FireViewChange();
     }
     return result;
@@ -608,6 +622,7 @@ STDMETHODIMP CMapWinGISControl::ZoomOut(const DOUBLE factor)
         changed);
     if (SUCCEEDED(result) && changed)
     {
+        InvalidateLayerCache();
         FireViewChange();
     }
     return result;
@@ -623,6 +638,7 @@ STDMETHODIMP CMapWinGISControl::Pan(
         changed);
     if (SUCCEEDED(result) && changed)
     {
+        InvalidateLayerCache();
         FireViewChange();
     }
     return result;
@@ -642,6 +658,7 @@ STDMETHODIMP CMapWinGISControl::ZoomAt(
         changed);
     if (SUCCEEDED(result) && changed)
     {
+        InvalidateLayerCache();
         FireViewChange();
     }
     return result;
@@ -665,6 +682,7 @@ STDMETHODIMP CMapWinGISControl::ZoomToLayer(const LONGLONG layerId)
         changed);
     if (SUCCEEDED(result) && changed)
     {
+        InvalidateLayerCache();
         FireViewChange();
     }
     return result;
@@ -849,6 +867,8 @@ LRESULT CMapWinGISControl::OnMouseMove(
         return 0;
     }
 
+    // The drag pan changes only the view center, so OnDraw can serve the
+    // frame from the layer cache; the cache is dropped on button-up.
     bool changed = false;
     const HRESULT result = RunViewOperation(
         [this, pixelDeltaX, pixelDeltaY, resolution]()
@@ -880,6 +900,11 @@ LRESULT CMapWinGISControl::OnLButtonUp(
     }
 
     CancelMousePan();
+    // The drag ended: rasterize the layers once at the final view so the
+    // cached frame matches the new center exactly (a clamped pan can leave
+    // the blitted frame up to half a pixel off).
+    InvalidateLayerCache();
+    FireViewChange();
     handled = TRUE;
     return 0;
 }
@@ -917,6 +942,7 @@ LRESULT CMapWinGISControl::OnMouseWheel(
         changed);
     if (SUCCEEDED(result) && changed)
     {
+        InvalidateLayerCache();
         FireViewChange();
     }
 
@@ -955,6 +981,7 @@ LRESULT CMapWinGISControl::OnSize(
     _gdalEvents.OnSize();
     if (ResizeView(LOWORD(lParam), HIWORD(lParam)))
     {
+        InvalidateLayerCache();
         FireViewChange();
     }
     handled = TRUE;
@@ -1024,10 +1051,145 @@ STDMETHODIMP CMapWinGISControl::SetObjectRects(LPCRECT position, LPCRECT clip)
                 static_cast<LONG>(std::clamp<LONGLONG>(width, 0, mwg::Viewport::kMaxDimension)),
                 static_cast<LONG>(std::clamp<LONGLONG>(height, 0, mwg::Viewport::kMaxDimension))))
         {
+            InvalidateLayerCache();
             FireViewChange();
         }
     }
     return result;
+}
+
+void CMapWinGISControl::InvalidateLayerCache() noexcept
+{
+    _layerCacheValid = false;
+}
+
+bool CMapWinGISControl::TryBlitCachedLayers(
+    HDC frameDc,
+    const mwg::Viewport& viewport) noexcept
+{
+    if (!_layerCacheValid ||
+        !_layerCache.IsValid() ||
+        _layerCache.Width() != viewport.Width() ||
+        _layerCache.Height() != viewport.Height())
+    {
+        return false;
+    }
+
+    const std::optional<double> resolution = viewport.Resolution();
+    const std::optional<double> cacheResolution = _layerCacheViewport.Resolution();
+    const std::optional<mwg::MapPoint> center = viewport.Center();
+    const std::optional<mwg::MapPoint> cacheCenter = _layerCacheViewport.Center();
+    if (!resolution.has_value() ||
+        !cacheResolution.has_value() ||
+        !center.has_value() ||
+        !cacheCenter.has_value() ||
+        *resolution != *cacheResolution)
+    {
+        // A resolution change (or a missing view) needs a re-render.
+        return false;
+    }
+
+    // Screen position of a fixed map point shifts by the center difference
+    // divided by the resolution, with the Y axis pointing down.
+    const double offsetX = (cacheCenter->x - center->x) / *resolution;
+    const double offsetY = (center->y - cacheCenter->y) / *resolution;
+    const LONG shiftX = static_cast<LONG>(std::lround(offsetX));
+    const LONG shiftY = static_cast<LONG>(std::lround(offsetY));
+    if (std::abs(offsetX - static_cast<double>(shiftX)) > 1e-6 ||
+        std::abs(offsetY - static_cast<double>(shiftY)) > 1e-6)
+    {
+        // Only a clamped pan leaves a sub-pixel offset; re-render so the
+        // frame does not jitter between a shifted blit and a true render.
+        return false;
+    }
+
+    const LONG width = static_cast<LONG>(viewport.Width());
+    const LONG height = static_cast<LONG>(viewport.Height());
+
+    // Destination (x, y) shows cache pixel (x - shiftX, y - shiftY); blit the
+    // rectangle where that source position is inside the cached frame. The
+    // rest of the destination keeps the background already painted.
+    const LONG destLeft = std::max<LONG>(0, shiftX);
+    const LONG destTop = std::max<LONG>(0, shiftY);
+    const LONG destRight = std::min<LONG>(width, width + shiftX);
+    const LONG destBottom = std::min<LONG>(height, height + shiftY);
+    if (destRight <= destLeft || destBottom <= destTop)
+    {
+        // The cached content is entirely outside the frame.
+        return true;
+    }
+
+    return ::BitBlt(
+               frameDc,
+               destLeft,
+               destTop,
+               destRight - destLeft,
+               destBottom - destTop,
+               _layerCache.Get(),
+               destLeft - shiftX,
+               destTop - shiftY,
+               SRCCOPY) != 0;
+}
+
+HRESULT CMapWinGISControl::DrawLayersAndUpdateCache(
+    HDC frameDc,
+    const RECT& frameBounds,
+    const mwg::rendering::MapRenderScene& scene,
+    const mwg::Viewport& viewport,
+    const bool useCache)
+{
+    if (!useCache)
+    {
+        return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+    }
+
+    const int width = viewport.Width();
+    const int height = viewport.Height();
+    if (!_layerCache.Resize(width, height))
+    {
+        // Without a cache the layers are drawn straight into the frame; the
+        // next draw retries the allocation.
+        return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+    }
+
+    HDC cacheDc = _layerCache.Get();
+    const RECT cacheBounds{0, 0, width, height};
+    if (::FillRect(
+            cacheDc,
+            &cacheBounds,
+            ::GetSysColorBrush(COLOR_WINDOW)) == 0)
+    {
+        return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+    }
+
+    const HRESULT result = _renderer.Draw(cacheDc, cacheBounds, scene, viewport);
+    if (FAILED(result))
+    {
+        _layerCacheValid = false;
+        return result;
+    }
+
+    _layerCacheViewport = viewport;
+    _layerCacheValid = true;
+
+    if (::BitBlt(
+            frameDc,
+            frameBounds.left,
+            frameBounds.top,
+            width,
+            height,
+            cacheDc,
+            0,
+            0,
+            SRCCOPY) != 0)
+    {
+        return result;
+    }
+
+    // A blit between different devices (printer or metafile targets) can
+    // fail; present the layers by drawing straight to the target.
+    _layerCacheValid = false;
+    return _renderer.Draw(frameDc, frameBounds, scene, viewport);
 }
 
 HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
@@ -1088,7 +1250,16 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
             }
             if (!scene.layers.empty() && viewport.IsValid())
             {
-                return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+                if (buffered && TryBlitCachedLayers(frameDc, viewport))
+                {
+                    return S_OK;
+                }
+                return DrawLayersAndUpdateCache(
+                    frameDc,
+                    frameBounds,
+                    scene,
+                    viewport,
+                    buffered);
             }
             return S_OK;
         }
