@@ -13,6 +13,7 @@
 #include <cctype>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include <cpl_conv.h>
@@ -46,6 +47,7 @@ namespace mwg
         {
             CPLErrorReset();
             OGRFeatureUniquePtr feature{layer.GetNextFeature()};
+            GdalEnvironment::RethrowLogException();
             if (feature == nullptr && CPLGetLastErrorType() >= CE_Failure)
             {
                 std::string message = "Failed to read vector layer features";
@@ -141,8 +143,8 @@ namespace mwg
     class VectorLayer::Impl
     {
     public:
-        Impl(OGRLayer* layer, const bool writable)
-            : _layer(layer), _writable(writable)
+        Impl(GDALDataset& dataset, OGRLayer* layer, const bool writable)
+            : _dataset(dataset), _layer(layer), _writable(writable)
         {
             if (const OGRFeatureDefn* defn = _layer->GetLayerDefn())
             {
@@ -189,16 +191,66 @@ namespace mwg
             return GetFeature(index);
         }
 
-        void Save(OGRFeature* feature) const
+        void Save(OGRFeature* feature, const bool geometryChanged = false) const
         {
-            if (_layer->SetFeature(feature) != OGRERR_NONE)
+            GdalEnvironment::ClearLastError();
+            const OGRErr result = _layer->SetFeature(feature);
+            if (geometryChanged)
             {
-                std::string message = "Cannot write feature " + std::to_string(feature->GetFID());
+                _extent.reset();
+                _extentNeedsExactRecalculation = true;
+            }
+            if (result != OGRERR_NONE)
+            {
+                const GIntBig featureId = feature->GetFID();
+                _cachedFeature.reset();
+                _cachedIndex = -1;
+                _featureIds.clear();
+                _featureIdsValid = false;
+                _featureCount.reset();
+                GdalEnvironment::RethrowLogException();
+                std::string message = "Cannot write feature " + std::to_string(featureId);
                 if (const std::string detail = GdalEnvironment::LastErrorMessage(); !detail.empty())
                     message += " (" + detail + ")";
                 throw CoreError(message);
             }
-            _extent.reset();
+            if (geometryChanged)
+                _storedExtentDirty = true;
+            GdalEnvironment::RethrowLogException();
+        }
+
+        void FlushStoredExtent() const
+        {
+            if (!_storedExtentDirty)
+                return;
+            const GDALDriver* const driver = _dataset.GetDriver();
+            const char* const driverName = driver != nullptr ? driver->GetDescription() : nullptr;
+            if (driverName != nullptr &&
+                (std::string_view(driverName) == "ESRI Shapefile" ||
+                 std::string_view(driverName) == "GPKG"))
+            {
+                const char* const layerName = _layer->GetName();
+                if (layerName == nullptr || layerName[0] == '\0')
+                    throw CoreError("Cannot recompute stored extent for an unnamed layer");
+
+                const std::string sql = "RECOMPUTE EXTENT ON " + std::string(layerName);
+                const auto releaseResult = [this](OGRLayer* result)
+                {
+                    if (result != nullptr)
+                        _dataset.ReleaseResultSet(result);
+                };
+                GdalEnvironment::ClearLastError();
+                const std::unique_ptr<OGRLayer, decltype(releaseResult)> result{
+                    _dataset.ExecuteSQL(sql.c_str(), nullptr, nullptr), releaseResult};
+                const CPLErr errorType = CPLGetLastErrorType();
+                GdalEnvironment::RethrowLogException();
+                if (errorType >= CE_Failure)
+                {
+                    throw CoreError("Geometry was written, but cannot recompute stored "
+                                    "vector layer extent: " + GdalEnvironment::LastErrorMessage());
+                }
+            }
+            _storedExtentDirty = false;
         }
 
         [[nodiscard]] std::int64_t FeatureCount() const
@@ -228,14 +280,40 @@ namespace mwg
         {
             if (!_extent)
             {
-                OGREnvelope envelope;
-                _extent = _layer->GetExtent(&envelope, TRUE) == OGRERR_NONE
-                              ? Extent{envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY}
-                              : Extent{};
+                if (_extentNeedsExactRecalculation)
+                {
+                    _extent = ComputeExactExtent();
+                    _extentNeedsExactRecalculation = false;
+                }
+                else
+                {
+                    GdalEnvironment::ClearLastError();
+                    OGREnvelope envelope;
+                    const OGRErr result = _layer->GetExtent(&envelope, TRUE);
+                    GdalEnvironment::RethrowLogException();
+                    if (result == OGRERR_NONE)
+                    {
+                        _extent = Extent{envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY};
+                    }
+                    else
+                    {
+                        const std::string detail = GdalEnvironment::LastErrorMessage();
+                        const CPLErr errorType = CPLGetLastErrorType();
+                        if (errorType >= CE_Failure)
+                        {
+                            std::string message = "Cannot determine vector layer extent";
+                            if (!detail.empty())
+                                message += ": " + detail;
+                            throw CoreError(message);
+                        }
+                        _extent = ComputeExactExtent();
+                    }
+                }
             }
             return *_extent;
         }
 
+        GDALDataset& _dataset;
         OGRLayer* _layer;
         bool _writable;
         std::vector<FieldInfo> _fields;
@@ -255,7 +333,7 @@ namespace mwg
             // Keep expected diagnostics suppressed for the entire scan, not
             // just while SetIgnoredFields is configured.
             const GdalEnvironment::QuietScope quiet;
-            const IgnoreAllButIds ignoreScope(*_layer, _fields);
+            const IgnoredFields ignoreScope(*_layer, _fields, true);
 
             _featureIds.clear();
 
@@ -285,30 +363,54 @@ namespace mwg
             _featureIdsValid = true;
         }
 
-        /// Tells the driver to skip attributes and geometry for the duration of
-        /// the id scan, and restores the layer afterwards.
-        class IgnoreAllButIds
+        [[nodiscard]] Extent ComputeExactExtent() const
+        {
+            OGRLayer& layer = *_layer;
+            const IgnoredFields ignoreScope(layer, _fields, false);
+            layer.ResetReading();
+            const ReadingReset readingReset{layer};
+
+            std::optional<Extent> extent;
+            while (const OGRFeatureUniquePtr feature{ReadNextFeature(layer)})
+            {
+                const OGRGeometry* geometry = feature->GetGeometryRef();
+                if (geometry == nullptr || geometry->IsEmpty())
+                    continue;
+
+                OGREnvelope envelope;
+                geometry->getEnvelope(&envelope);
+                const Extent featureExtent{
+                    envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY};
+                extent = extent ? extent->Union(featureExtent) : featureExtent;
+            }
+            return extent.value_or(Extent{});
+        }
+
+        /// Skips attributes and optionally geometry, then restores the layer.
+        class IgnoredFields
         {
         public:
-            IgnoreAllButIds(OGRLayer& layer, const std::vector<FieldInfo>& fields)
+            IgnoredFields(OGRLayer& layer, const std::vector<FieldInfo>& fields,
+                          const bool ignoreGeometry)
                 : _layer(layer)
             {
                 std::vector<const char*> ignored;
                 ignored.reserve(fields.size() + 2);
                 for (const FieldInfo& field : fields) ignored.push_back(field.name.c_str());
-                ignored.push_back("OGR_GEOMETRY");
+                if (ignoreGeometry)
+                    ignored.push_back("OGR_GEOMETRY");
                 ignored.push_back(nullptr);
 
                 _applied = _layer.SetIgnoredFields(ignored.data()) == OGRERR_NONE;
             }
 
-            ~IgnoreAllButIds()
+            ~IgnoredFields()
             {
                 if (_applied) _layer.SetIgnoredFields(nullptr);
             }
 
-            IgnoreAllButIds(const IgnoreAllButIds&) = delete;
-            IgnoreAllButIds& operator=(const IgnoreAllButIds&) = delete;
+            IgnoredFields(const IgnoredFields&) = delete;
+            IgnoredFields& operator=(const IgnoredFields&) = delete;
 
         private:
             OGRLayer& _layer;
@@ -321,6 +423,8 @@ namespace mwg
         mutable std::int64_t _cachedIndex = -1;
         mutable std::optional<std::int64_t> _featureCount;
         mutable std::optional<Extent> _extent;
+        mutable bool _extentNeedsExactRecalculation = false;
+        mutable bool _storedExtentDirty = false;
     };
 
     std::int64_t detail::VectorLayerAccess::ForEachGeometry(
@@ -545,7 +649,7 @@ namespace mwg
         if (feature->SetGeometryDirectly(parsed) != OGRERR_NONE)
             throw CoreError("Cannot assign geometry to feature");
 
-        _impl->Save(feature);
+        _impl->Save(feature, true);
     }
 
     // -------------------------------------------------------------- Dataset
@@ -562,7 +666,7 @@ namespace mwg
             {
                 OGRLayer* layer = _dataset->GetLayer(i);
                 _layers.push_back(std::unique_ptr<VectorLayer>(
-                    new VectorLayer(std::make_unique<VectorLayer::Impl>(layer, writable))));
+                    new VectorLayer(std::make_unique<VectorLayer::Impl>(*_dataset, layer, writable))));
             }
         }
 
@@ -615,12 +719,16 @@ namespace mwg
 
     void VectorDataset::Flush()
     {
+        for (const auto& layer : _impl->_layers)
+            layer->_impl->FlushStoredExtent();
         GdalEnvironment::ClearLastError();
-        if (_impl->_dataset->FlushCache(false) != CE_None)
+        const CPLErr result = _impl->_dataset->FlushCache(false);
+        GdalEnvironment::RethrowLogException();
+        if (result != CE_None)
         {
             std::string message = "Cannot flush vector data source: " + ToUtf8(_impl->_path);
-            if (const char* detail = CPLGetLastErrorMsg(); detail != nullptr && *detail != '\0')
-                message += " (" + std::string(detail) + ")";
+            if (const std::string detail = GdalEnvironment::LastErrorMessage(); !detail.empty())
+                message += " (" + detail + ")";
             throw CoreError(message);
         }
     }

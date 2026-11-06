@@ -91,8 +91,9 @@ expect.
   `SetLogHandler()`. Never write to stderr and never show message boxes from
   the core.
 - Algorithm runners, compatibility utilities, and pipelines share an execution
-  lock. Their callbacks run on the calling thread and cannot re-enter these
-  operations. Direct dataset access still needs caller synchronization.
+  lock. GDAL can report progress on worker threads. The shared progress adapter
+  serializes callbacks, which cannot re-enter these operations.
+  Direct dataset access still needs caller synchronization.
   See [operation results and threading](gdal-modern-capabilities.md#operation-results-logging-and-cancellation)
   for result, cancellation, and callback lifetime contracts.
 - The supported GDAL version and dependency pin are documented in
@@ -137,6 +138,19 @@ state; hosts and renderers read from it.
 - **Coordinates.** Layers are assumed to share compatible source coordinates.
   The map does not reproject; layers in different coordinate reference
   systems do not align until coordinate transformations are implemented.
+
+Vector layer extent queries cache successful results. Read failures throw
+without caching an empty result. If a driver cannot provide an extent and
+reports no failure diagnostic, Core scans the geometries with read-error checks.
+The scan asks the driver to ignore attributes.
+Attribute edits keep the cached extent. After geometry edits, the next extent
+query scans once and caches the result.
+
+Call `VectorDataset::Flush()` before closing after geometry edits to persist
+exact Shapefile and GeoPackage bounds. The flush runs one O(n) stored-extent
+scan per dirty layer, rather than one per edit. A recomputation failure throws
+without rolling back geometry writes and leaves the layer dirty for retry.
+Other formats retain their driver's stored-extent behavior.
 
 ## Viewport
 
@@ -387,7 +401,9 @@ reading feature geometries sequentially without WKT serialization and
 reparsing. Adding a prepared layer retains the existing scene. Other layer
 changes and explicit invalidation rebuild the scene for all visible layers.
 There is no tiling, paging, or clipping to the visible extent. GDI skips a
-layer whose device coordinates exceed its range. The opt-in
+layer whose device coordinates exceed its range. It clips drawing to the
+requested target rectangle and the host's existing clip region, then restores
+the device context. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation and backend frame costs. OpenGL only supports convex
 single-ring polygons and copies each frame through CPU memory. Its reusable CPU

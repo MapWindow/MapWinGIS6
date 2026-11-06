@@ -24,6 +24,19 @@ bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresul
 Also runnable from Visual Studio Test Explorer (GoogleTest adapter picks it
 up automatically).
 
+Run the build configuration tests from a Visual Studio developer shell:
+
+```powershell
+pwsh -File build\scripts\Test-BuildConfiguration.ps1
+```
+
+These tests pass `tests%3Bfull-drivers` on the MSBuild command line in a path
+with spaces and inspect the resulting dependency arguments.
+They also make sure that only Core deploys GDAL and PROJ data to the shared
+output folder. CI runs them before the solution build. Builds with
+`full-drivers` also test the release driver set in `GdalEnvironment` tests.
+Pull requests run both Debug and full-driver Release tests for x64.
+
 ## ActiveX host integration checks
 
 The native `MapWinGIS.ActiveX.Tests` project covers COM activation, registered

@@ -18,8 +18,8 @@ create a raster directly with GDAL, but this is test fixture code rather than
 a core raster API. GDAL must be initialized through `GdalEnvironment`.
 
 The build already defines Debug and Release for Win32 and x64 and uses vcpkg
-for GDAL, GEOS, and GoogleTest. Pull requests build and test Debug x64; pushes
-to `main` also cover Debug and Release for Win32 and x64.
+for GDAL, GEOS, and GoogleTest. Pull requests build and test Debug and full-driver
+Release for x64. Pushes to `main` also cover Win32.
 
 ## MapWinGIS 5 reference
 

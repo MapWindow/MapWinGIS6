@@ -42,10 +42,14 @@ namespace mwg::test
         public:
             explicit VectorReadTestLayer(VectorReadTestDriver& state)
                 : _state(state),
-                  _definition(OGRFeatureDefn::CreateFeatureDefn("features"))
+                  _definition(OGRFeatureDefn::CreateFeatureDefn(state.layerName.c_str()))
             {
                 _definition->Reference();
                 _definition->SetGeomType(wkbPolygon);
+                OGRFieldDefn nameField("NAME", OFTString);
+                _definition->AddFieldDefn(&nameField);
+                OGRFieldDefn valueField("VALUE", OFTInteger);
+                _definition->AddFieldDefn(&valueField);
             }
 
             ~VectorReadTestLayer() override
@@ -67,7 +71,7 @@ namespace mwg::test
                              "Simulated feature read failure");
                     return nullptr;
                 }
-                if (_state.nextFeature == 3)
+                if (_state.emptyLayer || _state.nextFeature == 3)
                 {
                     return nullptr;
                 }
@@ -78,10 +82,12 @@ namespace mwg::test
             {
                 OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(_definition));
                 feature->SetFID(id);
-                if (!_state.ignoredFields && id != 1)
+                feature->SetField(0, _state.storedName.c_str());
+                feature->SetField(1, _state.storedValue);
+                if (!_state.ignoredGeometry && id != 1)
                 {
                     OGRPolygon polygon;
-                    if (id == 0)
+                    if (id == 0 && !_state.onlyEmptyGeometries)
                     {
                         OGRLinearRing ring;
                         ring.addPoint(0.0, 0.0);
@@ -102,12 +108,18 @@ namespace mwg::test
             GIntBig GetFeatureCount(int) override
             {
                 ++_state.countCalls;
-                return _state.unknownCount ? -1 : 3;
+                return _state.unknownCount ? -1 : (_state.emptyLayer ? 0 : 3);
             }
 
             OGRErr SetIgnoredFields(CSLConstList fields) override
             {
                 _state.ignoredFields = fields != nullptr;
+                _state.ignoredGeometry = false;
+                for (const char* const* field = fields; field != nullptr && *field != nullptr; ++field)
+                {
+                    if (std::string_view(*field) == "OGR_GEOMETRY")
+                        _state.ignoredGeometry = true;
+                }
                 return OGRERR_NONE;
             }
 
@@ -116,14 +128,45 @@ namespace mwg::test
                 return _definition;
             }
 
-            int TestCapability(const char*) const override
+            int TestCapability(const char* capability) const override
             {
-                return FALSE;
+                return capability != nullptr &&
+                               std::string_view(capability) == OLCRandomWrite
+                           ? TRUE
+                           : FALSE;
             }
 
         protected:
+            OGRErr ISetFeature(OGRFeature* feature) override
+            {
+                if (_state.failSetFeature)
+                {
+                    CPLError(CE_Failure, CPLE_AppDefined,
+                             "Simulated feature write failure");
+                    return OGRERR_FAILURE;
+                }
+                _state.storedName = feature->GetFieldAsString(0);
+                _state.storedValue = feature->GetFieldAsInteger(1);
+                return OGRERR_NONE;
+            }
+
             OGRErr IGetExtent(int, OGREnvelope* extent, bool) override
             {
+                ++_state.extentCalls;
+                if (_state.failExtent)
+                {
+                    CPLError(CE_Failure, CPLE_AppDefined,
+                             "Simulated extent failure");
+                    return OGRERR_FAILURE;
+                }
+                if (_state.warningExtentFailure)
+                {
+                    CPLError(CE_Warning, CPLE_NotSupported, "Simulated unavailable extent");
+                    return OGRERR_FAILURE;
+                }
+                if (_state.silentExtentFailure || _state.emptyLayer ||
+                    _state.onlyEmptyGeometries)
+                    return OGRERR_FAILURE;
                 extent->MinX = 0.0;
                 extent->MinY = 0.0;
                 extent->MaxX = 1.0;
@@ -140,8 +183,10 @@ namespace mwg::test
         {
         public:
             explicit VectorReadTestDataset(VectorReadTestDriver& state)
-                : _layer(state)
+                : _state(state), _layer(state)
             {
+                if (state.simulateShapefile)
+                    poDriver = GetGDALDriverManager()->GetDriverByName("ESRI Shapefile");
             }
 
             int GetLayerCount() const override
@@ -154,7 +199,19 @@ namespace mwg::test
                 return index == 0 ? &_layer : nullptr;
             }
 
+            OGRLayer* ExecuteSQL(const char* statement, OGRGeometry*, const char*) override
+            {
+                _state.recomputeExtentStatement = statement;
+                if (!std::string_view(statement).starts_with("RECOMPUTE EXTENT ON "))
+                    throw std::runtime_error("Unexpected test SQL statement");
+                ++_state.recomputeExtentCalls;
+                if (_state.failRecomputeExtent)
+                    CPLError(CE_Failure, CPLE_AppDefined, "Simulated extent recompute failure");
+                return nullptr;
+            }
+
         private:
+            VectorReadTestDriver& _state;
             VectorReadTestLayer _layer;
         };
     }
@@ -166,6 +223,7 @@ namespace mwg::test
         _driver->SetDescription("MWGVectorReadTest");
         _driver->SetMetadataItem(GDAL_DCAP_VECTOR, "YES");
         _driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
+        _driver->SetMetadataItem(GDAL_DCAP_UPDATE, "YES");
         _driver->pDriverData = this;
         _driver->pfnIdentify = [](GDALOpenInfo* info)
         {

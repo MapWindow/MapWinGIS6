@@ -10,9 +10,11 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -259,6 +261,32 @@ TEST(GdalUtils, WarpsRasterUsingLegacyOptions)
     ASSERT_NE(dataset, nullptr);
     ASSERT_NE(dataset->GetSpatialRef(), nullptr);
     EXPECT_STREQ(dataset->GetSpatialRef()->GetAuthorityCode(nullptr), "3857");
+}
+
+TEST(GdalUtils, SupportsThreadedWarpOptionsWithProgress)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+    GdalUtils utils;
+    for (const auto& options : {
+             std::vector<std::string>{"-multi"},
+             std::vector<std::string>{"-wo", "NUM_THREADS=2"},
+             std::vector<std::string>{"-multi", "-wo", "NUM_THREADS=2"}})
+    {
+        const auto output = directory.Path() / "threaded.tif";
+        std::atomic_int callbackCount{0};
+        EXPECT_TRUE(utils.GdalRasterWarp(input, output, options,
+            [&](double, std::string_view)
+            {
+                ++callbackCount;
+                return true;
+            })) << utils.DetailedErrorMsg();
+        EXPECT_GT(callbackCount.load(), 0);
+        EXPECT_TRUE(std::filesystem::exists(output));
+        std::filesystem::remove(output);
+    }
 }
 
 TEST(GdalUtils, TranslatesVectorAndPreservesFeatures)

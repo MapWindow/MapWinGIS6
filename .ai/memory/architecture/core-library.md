@@ -26,6 +26,15 @@ GDAL/PROJ runtime data deployed beside the Core DLL. Do not rely on
 remain Core responsibilities; COM callbacks and host dispatch stay in
 ActiveX.
 
+Algorithm outputs need different completion rules. Runner-owned persistent
+outputs pass a checked close before success. After successful finalization,
+the runner tries all readers with the original access mode, then read-only.
+An unavailable reader produces a warning and no returned dataset, not a failed
+write. Anonymous
+outputs retain their references for pipelines. Caller-supplied outputs remain
+caller-owned, so the runner can check their flush but not their final close.
+See `GdalAlgorithmRunner` and its output-failure and ownership tests.
+
 Core render scenes are owned, backend-neutral snapshots. They are distinct
 from viewport state and are rebuilt when relevant map data changes. Source
 geometry edits made outside the map are not automatically observed; callers

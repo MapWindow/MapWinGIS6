@@ -11,9 +11,10 @@ automated UI and pixel checks.
 
 ## CI scope
 
-`.github/workflows/build.yml` runs Debug x64 build and native tests for pull
-requests. Pushes to `main` additionally build and test Debug and Release for
-both `x64` and `Win32`. The runner overrides the default SDK with `10.0`
+`.github/workflows/build.yml` runs Debug and full-driver Release x64 builds
+and native tests for pull requests and pushes to `development`.
+Each job has a 180-minute timeout. Pushes to `main` additionally build and test
+both configurations for `Win32`. The runner overrides the default SDK with `10.0`
 because the `windows-2025` image does not include the repository's pinned SDK.
 The C# host checks require an interactive desktop and are not part of this CI
 workflow.

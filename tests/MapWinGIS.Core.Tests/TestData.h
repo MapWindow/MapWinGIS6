@@ -22,7 +22,8 @@ class GDALDriver;
 namespace mwg::test
 {
     /// Registers a synthetic polygon driver. Destroy opened datasets before
-    /// this helper. Its three features have polygon, null, and empty geometry.
+    /// this helper. Its three features have polygon, null, and empty geometry;
+    /// it can also simulate extent and feature-write failures.
     class VectorReadTestDriver
     {
     public:
@@ -34,11 +35,26 @@ namespace mwg::test
 
         static constexpr const char* kPath = "MWG_VECTOR_READ_TEST:features";
         bool failOnSecondRead = false;
+        bool failExtent = false;
+        bool silentExtentFailure = false;
+        bool warningExtentFailure = false;
+        bool failSetFeature = false;
+        bool simulateShapefile = false;
+        bool failRecomputeExtent = false;
+        bool emptyLayer = false;
+        bool onlyEmptyGeometries = false;
         bool unknownCount = false;
         bool ignoredFields = false;
+        bool ignoredGeometry = false;
+        std::string layerName = "features";
+        std::string storedName = "Original";
+        int storedValue = 0;
         int nextFeature = 0;
         int readCalls = 0;
         int countCalls = 0;
+        int extentCalls = 0;
+        int recomputeExtentCalls = 0;
+        std::string recomputeExtentStatement;
 
     private:
         std::unique_ptr<GDALDriver> _driver;

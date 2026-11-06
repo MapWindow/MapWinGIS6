@@ -447,7 +447,6 @@ namespace mwg
         _impl->cancelled = false;
         if (HasNullByte(options))
             return RecordFailure(_impl->errors, "GDAL utility options must not contain null bytes.");
-
         return _impl->succeeded = RunUtilityOperation(
             _impl->errors, _impl->cancelled, std::move(progress), cancellationToken,
             [&](GdalProgressAdapter& adapter)

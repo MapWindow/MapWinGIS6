@@ -80,6 +80,15 @@ Release configuration, build with `-p:Configuration=Release` and run
 For additional configurations, dependency features, and troubleshooting, see
 [docs/BUILDING.md](docs/BUILDING.md).
 
+CI Release artifacts use the `full-drivers` feature. Their tests require
+HDF5, NetCDF, KML, SpatiaLite, and PostgreSQL support.
+Pull requests build and test both Debug and full-driver Release for x64.
+Each CI build has a 180-minute timeout.
+
+After vector geometry edits, call `VectorDataset::Flush()` before closing to
+persist exact Shapefile and GeoPackage bounds. The flush batches stored-extent
+scans across multiple edits.
+
 ## Layout
 
 | Path | Contents |

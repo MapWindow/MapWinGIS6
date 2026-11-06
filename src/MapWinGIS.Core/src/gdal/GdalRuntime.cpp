@@ -15,6 +15,7 @@
 #include "internal/GdalProgressAdapterAccess.h"
 
 #include <exception>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -218,7 +219,8 @@ namespace mwg
 
         Callback callback;
         const GdalCancellationToken* cancellationToken;
-        bool cancelled = false;
+        std::atomic_bool cancelled{false};
+        mutable std::mutex callbackMutex;
         std::exception_ptr callbackException;
     };
 
@@ -237,6 +239,7 @@ namespace mwg
 
     void GdalProgressAdapter::RethrowCallbackException() const
     {
+        const std::lock_guard lock(_impl->callbackMutex);
         if (_impl->callbackException)
             std::rethrow_exception(_impl->callbackException);
     }
@@ -258,6 +261,7 @@ namespace mwg
             return 0;
 
         auto& impl = *static_cast<GdalProgressAdapter::Impl*>(userData);
+        const std::lock_guard lock(impl.callbackMutex);
         if (impl.cancelled)
             return 0;
         if (impl.cancellationToken != nullptr && impl.cancellationToken->IsCancellationRequested())
