@@ -37,6 +37,19 @@ manifest. It has a visible manual mode and an `--automated` mode that uses the
 same host, resize, repaint, and dispose paths, with no COM registry changes.
 The automated checks also run a GDAL raster conversion and check progress and
 completion events, including operation IDs and progress arguments.
+
+In manual mode, use `Open` or drag files onto the host to add vector
+datasets. The layer list shows names, feature counts, stable IDs, and file
+path tooltips. Each dataset contributes only its first layer.
+The file formats available depend on the GDAL build.
+
+Use `Clear` to remove all layers, `Zoom +` and `Zoom -` to change zoom,
+`Map` to fit all layers, and `Layer` to fit the selected layer.
+The arrow buttons pan by the `Pan units` value in dataset coordinates.
+The status strip shows core initialization, layer and feature totals,
+the rendering backend, and rendering status or operation errors.
+`Recreate` restores the startup layer, and `Repaint` requests a redraw.
+
 From an interactive Windows desktop session, run:
 
 ```powershell
@@ -48,7 +61,12 @@ visible window and runs the UI message loop, checks the `CoreInitialized`
 automation property, loads a generated two-polygon GeoJSON dataset through the
 control, resizes the host, samples rendered polygon and background pixels for
 both the GDI preference and the default (OpenGL-first) path, recreates the
-control, reloads the layer, and writes individual outcomes to
+control, and reloads the layer. It calls the original `LoadVectorDataset`
+method and reads `LayerLoaded` and the absolute `FeatureCount` on each fresh
+control. It also loads two layers through `LoadVectorDatasetEx`, checks
+their IDs and feature-count deltas, zooms to each, pans, and clears them.
+It makes sure that navigation preserves the counts and that clearing removes
+the layers from the control and the list. It writes individual outcomes to
 `bin\Debug\x64\ActiveXTestHost-results.json`. Pixels are sampled from the host
 window's own composed content (`PrintWindow` with `PW_RENDERFULLCONTENT`), not
 from the screen, so another window on top or a lost foreground race does not
