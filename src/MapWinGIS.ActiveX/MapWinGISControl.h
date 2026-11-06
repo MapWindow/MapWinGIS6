@@ -19,6 +19,7 @@
 #include <atlctl.h>
 
 #include "mapwingis/map/MapView.h"
+#include "FrameBuffer.h"
 #include "GdalEventSource.h"
 #include "VectorLayerRenderer.h"
 
@@ -98,6 +99,7 @@ public:
         MESSAGE_HANDLER(WM_CANCELMODE, OnCancelMode)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+        MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBkgnd)
         CHAIN_MSG_MAP(ATL::CComControl<CMapWinGISControl>)
     END_MSG_MAP()
 
@@ -149,6 +151,7 @@ public:
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnGdalDispatch(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnEraseBkgnd(UINT, WPARAM, LPARAM, BOOL& handled);
     static void DispatchGdalNotifications(void* control) noexcept;
     HRESULT OnDraw(ATL_DRAWINFO& drawInfo);
     ~CMapWinGISControl();
@@ -166,6 +169,7 @@ private:
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
+    mwg::activex::FrameBuffer _frameBuffer;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
     POINT _lastPanPoint{};
