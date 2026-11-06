@@ -61,6 +61,19 @@ host beside the native files; the manifest activates that OCX for the host
 process only. The launcher does not read, add, overwrite, or remove COM
 registration.
 
+Manual mode starts with a generated two-polygon layer. Use `Open` to select
+vector datasets, or drag files onto the host. Each load adds an entry to the
+layer list with its name, feature count, stable ID, and file path tooltip.
+Only the first layer of each dataset is loaded. Available formats depend on
+the GDAL drivers in the build.
+
+Use `Clear` to remove all layers. `Zoom +` and `Zoom -` change the zoom,
+`Map` fits all layers, and `Layer` fits the selected layer. The arrow
+buttons pan by the `Pan units` value in dataset coordinates.
+The status strip shows core initialization, total layer and feature counts,
+the rendering backend, and rendering status or operation errors.
+`Recreate` restores the startup layer, and `Repaint` requests a redraw.
+
 ```powershell
 # Visible manual host. Close the window to release the control.
 pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration Debug -Platform x64
@@ -73,7 +86,9 @@ For Win32, use `-Platform Win32` after building the matching native binaries.
 Automated checks need Windows and an interactive desktop session. The host
 creates a temporary two-polygon GeoJSON dataset, loads it through the control,
 and verifies visible polygon fills and the background gap after repaint and
-control recreation. It can activate the OCX without a registration. The
+control recreation. It also loads two layers, checks their IDs and feature
+counts, zooms to each layer, pans, and clears the layers.
+It can activate the OCX without a registration. The
 separate native activation script above retains its own temporary
 registration-based test.
 
