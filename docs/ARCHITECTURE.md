@@ -138,6 +138,14 @@ state; hosts and renderers read from it.
   The map does not reproject; layers in different coordinate reference
   systems do not align until coordinate transformations are implemented.
 
+Vector layer extent queries cache successful results. Read failures throw
+without caching an empty result. If a driver cannot provide an extent and
+reports no error, Core scans the geometries with read-error checks.
+Attribute edits keep the cached extent. Shapefile geometry edits immediately
+recompute stored bounds with an O(n) scan, so smaller bounds survive reopening.
+If that recomputation fails, the edit throws after writing the geometry.
+For other drivers, the next extent query scans once after a geometry edit.
+
 ## Viewport
 
 `mwg::Viewport` (`mapwingis/map/Viewport.h`) is the view of map coordinates on
@@ -387,7 +395,9 @@ reading feature geometries sequentially without WKT serialization and
 reparsing. Adding a prepared layer retains the existing scene. Other layer
 changes and explicit invalidation rebuild the scene for all visible layers.
 There is no tiling, paging, or clipping to the visible extent. GDI skips a
-layer whose device coordinates exceed its range. The opt-in
+layer whose device coordinates exceed its range. It clips drawing to the
+requested target rectangle and the host's existing clip region, then restores
+the device context. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation and backend frame costs. OpenGL only supports convex
 single-ring polygons and copies each frame through CPU memory. Its reusable CPU

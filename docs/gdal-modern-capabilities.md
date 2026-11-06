@@ -55,6 +55,12 @@ multidimensional API.
 `TakeOutputDataset()` remains the runner's ownership-transfer method.
 Snapshots keep their diagnostics when a later compatibility operation changes the object's state.
 
+Persistent outputs that the runner owns pass a checked close before success.
+The runner reopens them read-only for `TakeOutputDataset()`.
+Anonymous outputs remain open so in-memory pipelines retain their sources.
+Caller-supplied output datasets remain caller-owned. The runner checks their
+flush, but the caller controls their final close.
+
 `Succeeded()` is true only after execution and finalization succeed.
 `LastErrorCode()` and `ErrorMsg()` select the last failure or fatal diagnostic.
 They return zero and an empty string when the diagnostics contain only warnings.
@@ -88,6 +94,8 @@ Callers must still serialize access to shared datasets and process-wide configur
 
 Progress and logging callbacks run synchronously on the thread that executes the operation.
 Callbacks must not start another GDAL operation or wait for a thread that needs the execution lock.
+The legacy warp utility rejects `-multi` with a progress callback to keep
+this thread contract.
 The native operation APIs reject same-thread callback re-entry with `CoreError`.
 A callback must remain valid until the operation returns.
 Removing a logger does not stop a callback that already holds a copy of that logger.

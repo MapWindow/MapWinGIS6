@@ -46,14 +46,20 @@ jobs:
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v3
 
+      - name: Check build configuration
+        shell: pwsh
+        run: ./build/scripts/Test-BuildConfiguration.ps1
+
       - name: Build
         shell: pwsh
         run: |
+          $features = if ('${{ matrix.configuration }}' -eq 'Release') { 'tests%3Bfull-drivers' } else { 'tests' }
           msbuild MapWinGIS6.slnx `
             -restore `
             -p:Configuration=${{ matrix.configuration }} `
             -p:Platform=${{ matrix.platform }} `
             -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
+            "-p:MwgVcpkgFeatures=$features" `
             -m -v:m
 
       - name: Test

@@ -10,9 +10,11 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -259,6 +261,37 @@ TEST(GdalUtils, WarpsRasterUsingLegacyOptions)
     ASSERT_NE(dataset, nullptr);
     ASSERT_NE(dataset->GetSpatialRef(), nullptr);
     EXPECT_STREQ(dataset->GetSpatialRef()->GetAuthorityCode(nullptr), "3857");
+}
+
+TEST(GdalUtils, RejectsMultiWarpWhenSynchronousProgressCallbackIsProvided)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path input = test::MakeRaster(directory.Path());
+    const std::filesystem::path rejectedOutput = directory.Path() / "rejected.tif";
+    const std::filesystem::path noCallbackOutput = directory.Path() / "multi.tif";
+    const std::thread::id callerThread = std::this_thread::get_id();
+    std::atomic_int callbackCount = 0;
+    std::atomic_bool callbackRanOffThread = false;
+    GdalUtils utils;
+
+    EXPECT_FALSE(utils.GdalRasterWarp(
+        input, rejectedOutput, {"-multi"},
+        [&](double, std::string_view)
+        {
+            ++callbackCount;
+            callbackRanOffThread.store(std::this_thread::get_id() != callerThread);
+            return true;
+        }));
+    EXPECT_EQ(callbackCount.load(), 0);
+    EXPECT_FALSE(callbackRanOffThread.load());
+    EXPECT_NE(utils.Result().ErrorMsg().find("'-multi'"), std::string::npos);
+    EXPECT_NE(utils.Result().ErrorMsg().find("synchronous"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(rejectedOutput));
+
+    EXPECT_TRUE(utils.GdalRasterWarp(input, noCallbackOutput, {"-multi"}, {}, nullptr))
+        << utils.DetailedErrorMsg();
 }
 
 TEST(GdalUtils, TranslatesVectorAndPreservesFeatures)

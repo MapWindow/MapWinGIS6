@@ -11,6 +11,8 @@ platform-specific tree because vcpkg can remove another triplet from a shared
 install directory.
 
 The build deploys GDAL and PROJ runtime data beside the output binaries.
+Only the Core project's target deploys this shared data. Consumer projects
+reference Core so parallel solution builds do not copy the same files at once.
 `GdalEnvironment` configures those paths; do not set `GDAL_DATA` or
 `PROJ_LIB` for the application.
 

@@ -112,6 +112,97 @@ TEST(VectorLayer, DoesNotCacheAnIncompleteFallbackFeatureCount)
     EXPECT_EQ(layer.FeatureCount(), 3);
 }
 
+TEST(VectorLayer, RetriesTheExtentAfterAReadFailure)
+{
+    VectorReadTestDriver driver;
+    driver.failExtent = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    const VectorLayer& layer = dataset->Layer(0);
+    const GdalEnvironment::QuietScope quiet;
+
+    try
+    {
+        (void)layer.GetExtent();
+        FAIL() << "Expected the extent query to report a read failure";
+    }
+    catch (const CoreError& error)
+    {
+        EXPECT_NE(std::string(error.what()).find("Simulated extent failure"),
+                  std::string::npos);
+    }
+
+    driver.failExtent = false;
+    const Extent extent = layer.GetExtent();
+    EXPECT_DOUBLE_EQ(extent.xMin, 0.0);
+    EXPECT_DOUBLE_EQ(extent.xMax, 1.0);
+    EXPECT_EQ(driver.extentCalls, 2);
+}
+
+TEST(VectorLayer, ReportsAnEmptyLayerExtent)
+{
+    const TempDirectory dir;
+    const std::array<Extent, 0> noRectangles{};
+    const auto path = MakeRectanglesDataset(dir.Path(), "empty.gpkg", noRectangles);
+    const auto dataset = VectorDataset::Open(path);
+
+    EXPECT_TRUE(dataset->Layer(0).GetExtent().IsEmpty());
+}
+
+TEST(VectorLayer, ReportsExtentFailuresEvenWhenTheLayerHasNoFeatures)
+{
+    VectorReadTestDriver driver;
+    driver.emptyLayer = true;
+    driver.failExtent = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    const VectorLayer& layer = dataset->Layer(0);
+    EXPECT_EQ(layer.FeatureCount(), 0);
+
+    const GdalEnvironment::QuietScope quiet;
+    try
+    {
+        (void)layer.GetExtent();
+        FAIL() << "Expected an operational extent failure on the empty layer";
+    }
+    catch (const CoreError& error)
+    {
+        EXPECT_NE(std::string(error.what()).find("Simulated extent failure"),
+                  std::string::npos);
+    }
+    driver.failExtent = false;
+    EXPECT_TRUE(layer.GetExtent().IsEmpty());
+    EXPECT_EQ(driver.extentCalls, 2);
+}
+
+TEST(VectorLayer, ReportsAnEmptyExtentForNullAndEmptyGeometries)
+{
+    VectorReadTestDriver driver;
+    driver.onlyEmptyGeometries = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    const VectorLayer& layer = dataset->Layer(0);
+
+    EXPECT_EQ(layer.FeatureCount(), 3);
+    EXPECT_TRUE(layer.GetExtent().IsEmpty());
+    EXPECT_TRUE(layer.GetExtent().IsEmpty());
+    EXPECT_EQ(driver.readCalls, 4);
+    EXPECT_EQ(driver.extentCalls, 1);
+}
+
+TEST(VectorLayer, RetriesTheFallbackExtentScanAfterAReadFailure)
+{
+    VectorReadTestDriver driver;
+    driver.silentExtentFailure = true;
+    driver.failOnSecondRead = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    const VectorLayer& layer = dataset->Layer(0);
+    const GdalEnvironment::QuietScope quiet;
+
+    EXPECT_THROW((void)layer.GetExtent(), CoreError);
+    EXPECT_EQ(driver.nextFeature, 0);
+    driver.failOnSecondRead = false;
+    EXPECT_DOUBLE_EQ(layer.GetExtent().xMax, 1.0);
+    EXPECT_EQ(driver.extentCalls, 2);
+}
+
 TEST_P(VectorLayerTest, ReportsTheExtent)
 {
     const Extent extent = _layer->GetExtent();
@@ -408,6 +499,48 @@ TEST_P(VectorLayerEditTest, ReflectsEditsWithoutReopening)
     EXPECT_TRUE(layer.IsCellNull(area, 0));
 }
 
+TEST(VectorLayer, FailedFeatureWritesDoNotRemainInTheFeatureCache)
+{
+    VectorReadTestDriver driver;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath, OpenMode::Update);
+    VectorLayer& layer = dataset->Layer(0);
+    const int name = layer.FieldIndex("NAME");
+    ASSERT_TRUE(layer.IsWritable());
+    const GdalEnvironment::QuietScope quiet;
+
+    driver.failSetFeature = true;
+    try
+    {
+        layer.SetCellString(name, 0, "Rejected");
+        FAIL() << "Expected the feature write to fail";
+    }
+    catch (const CoreError& error)
+    {
+        EXPECT_NE(std::string(error.what()).find("Simulated feature write failure"),
+                  std::string::npos);
+    }
+
+    EXPECT_EQ(layer.CellString(name, 0), "Original");
+    driver.failSetFeature = false;
+    layer.SetCellInteger(layer.FieldIndex("VALUE"), 0, 42);
+    EXPECT_EQ(layer.CellString(name, 0), "Original");
+    EXPECT_EQ(driver.storedName, "Original");
+    EXPECT_EQ(driver.storedValue, 42);
+}
+
+TEST(VectorLayer, AttributeEditsDoNotInvalidateTheExtent)
+{
+    VectorReadTestDriver driver;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath, OpenMode::Update);
+    VectorLayer& layer = dataset->Layer(0);
+
+    (void)layer.GetExtent();
+    layer.SetCellString(layer.FieldIndex("NAME"), 0, "Changed");
+    (void)layer.GetExtent();
+
+    EXPECT_EQ(driver.extentCalls, 1);
+}
+
 TEST_P(VectorLayerEditTest, RecomputesTheExtentAfterAGeometryEdit)
 {
     static constexpr const char* kMoved =
@@ -415,11 +548,38 @@ TEST_P(VectorLayerEditTest, RecomputesTheExtentAfterAGeometryEdit)
 
     const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(_path, OpenMode::Update);
     VectorLayer& layer = dataset->Layer(0);
+    ASSERT_DOUBLE_EQ(layer.GetExtent().xMax, Provinces::kMaxX);
+    layer.SetGeometryWkt(0, kMoved);
+    EXPECT_DOUBLE_EQ(layer.GetExtent().xMax, 201000.0);
+}
+
+TEST_P(VectorLayerEditTest, ShrinksTheExtentAfterAGeometryEdit)
+{
+    static constexpr const char* kMoved =
+        "POLYGON ((100500 400000, 101500 400000, 101500 401000, 100500 401000, 100500 400000))";
+
+    const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(_path, OpenMode::Update);
+    VectorLayer& layer = dataset->Layer(0);
 
     ASSERT_DOUBLE_EQ(layer.GetExtent().xMax, Provinces::kMaxX);
 
-    layer.SetGeometryWkt(0, kMoved);
-    EXPECT_DOUBLE_EQ(layer.GetExtent().xMax, 201000.0);
+    layer.SetGeometryWkt(3, kMoved);
+    EXPECT_DOUBLE_EQ(layer.GetExtent().xMax, 103000.0);
+}
+
+TEST(VectorLayer, PersistsShrinkingShapefileBoundsWithoutAnExtentQuery)
+{
+    const TempDirectory dir;
+    const auto path = MakeProvincesDataset(dir.Path(), "provinces.shp");
+    {
+        const auto dataset = VectorDataset::Open(path, OpenMode::Update);
+        dataset->Layer(0).SetGeometryWkt(
+            3, "POLYGON ((100500 400000, 101500 400000, 101500 401000, "
+               "100500 401000, 100500 400000))");
+    }
+
+    const auto reopened = VectorDataset::Open(path);
+    EXPECT_DOUBLE_EQ(reopened->Layer(0).GetExtent().xMax, 103000.0);
 }
 
 TEST_P(VectorLayerEditTest, KeepsGeneratedFixturesIndependent)

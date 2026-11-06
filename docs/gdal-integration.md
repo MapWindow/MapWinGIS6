@@ -41,6 +41,15 @@ against GDAL's metadata and captures warnings and failures in `Errors()`.
 `Result()` returns a snapshot without transferring output datasets;
 `TakeOutputDataset()` transfers ownership of an output dataset.
 
+For persistent outputs that the runner owns, `Run()` checks the final close
+before reporting success. It reopens the output read-only for ownership
+transfer. Reopening failures also fail the operation. Anonymous outputs,
+including in-memory VRT datasets, remain open. If the caller supplies an
+output through `SetDatasetArgument()`, the runner checks its flush but cannot
+check its eventual close. The caller retains the original reference.
+Output discovery follows the selected algorithm when command-line arguments
+select a child of a group.
+
 For common operations, use a typed options structure. This example converts
 an input raster to GeoTIFF and reports captured diagnostics on failure:
 
@@ -88,6 +97,10 @@ GDAL algorithm reports progress, so cancellation may not interrupt those
 algorithms promptly. Cancellation can leave partial output files. Callbacks
 must not start another GDAL operation or wait on a thread that needs the GDAL
 execution lock; callback exceptions are returned as operation failures.
+
+The legacy `GdalUtils::GdalRasterWarp()` rejects `-multi` when a progress
+callback is supplied. GDAL can call that callback from a worker thread with
+this option. Calls without a progress callback can still use `-multi`.
 
 ## ActiveX operations
 

@@ -55,6 +55,8 @@ namespace mwg
         [[nodiscard]] bool SetArgument(std::string_view name, const std::vector<std::string>& value);
         /// Sets a dataset or dataset-list argument and retains a reference.
         /// Dataset lists receive one value. The dataset remains owned by the caller.
+        /// When used for "output", Run() checks a flush but does not explicitly
+        /// close the supplied dataset; GDAL reference ownership controls its close.
         [[nodiscard]] bool SetDatasetArgument(std::string_view name, const GdalDatasetPtr& value);
 
         /// Validates configured values using the instantiated GDAL algorithm's
@@ -78,8 +80,14 @@ namespace mwg
         /// automatically; a later call is harmless and returns the same result.
         [[nodiscard]] bool Finalize();
 
-        /// Transfers the output dataset to the caller, if the algorithm
-        /// produced one. The caller owns the returned dataset.
+        /// Transfers the runner's output reference to the caller, if the
+        /// algorithm produced one. Persistent outputs with a non-empty output
+        /// path or dataset description are checked and closed by Run(), then
+        /// reopened read-only; reopening failure makes Run() fail.
+        /// Anonymous outputs remain open to preserve driver dependencies.
+        /// For outputs supplied through SetDatasetArgument(), this is an
+        /// additional reference; the original remains caller-owned. Run()
+        /// checks its flush but cannot check its eventual close.
         [[nodiscard]] GdalDatasetPtr TakeOutputDataset();
 
         /// Returns all diagnostics captured since construction.

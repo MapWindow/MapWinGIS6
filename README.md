@@ -80,6 +80,9 @@ Release configuration, build with `-p:Configuration=Release` and run
 For additional configurations, dependency features, and troubleshooting, see
 [docs/BUILDING.md](docs/BUILDING.md).
 
+CI Release artifacts use the `full-drivers` feature. Their tests require
+HDF5, NetCDF, KML, SpatiaLite, and PostgreSQL support.
+
 ## Layout
 
 | Path | Contents |

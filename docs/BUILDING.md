@@ -131,6 +131,9 @@ Release with it again reinstalls the tree each time.
 3. `..\vcpkg` next to the repository
 4. the `VCPKG_ROOT` environment variable
 
+The build quotes the overlay-triplet path when it invokes vcpkg, so checkout
+paths can contain spaces.
+
 ## Configurations and platforms
 
 | | |
@@ -158,8 +161,13 @@ Manifest features:
 | `full-drivers` | Adds HDF5, NetCDF, KML, SpatiaLite and PostgreSQL to GDAL | Release packages. Much slower to build |
 
 ```powershell
-msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release -p:MwgVcpkgFeatures="tests;full-drivers"
+msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release "-p:MwgVcpkgFeatures=tests%3Bfull-drivers"
 ```
+
+`%3B` passes a literal semicolon through MSBuild's property parser.
+CI uses this feature set for Release artifacts. Core tests built with
+`full-drivers` require HDF5, NetCDF, LIBKML, PostgreSQL, and SpatiaLite support.
+The SpatiaLite test creates a spatial database without an external server.
 
 ### Runtime data
 
@@ -167,8 +175,10 @@ vcpkg installs `gdal-data` and `proj.db` under
 `vcpkg_installed\<Platform>\<triplet>\share`. Each platform has its own install
 tree because vcpkg removes other triplets from a shared tree, which would break
 alternating Win32 and x64 builds.
-A target in `Directory.Build.targets` copies them into the output folder as
-`gdal-data\` and `proj\`, and `GdalEnvironment` points GDAL and PROJ at them.
+The Core project's target in `Directory.Build.targets` copies them into the
+output folder as `gdal-data\` and `proj\`. Other projects reference Core and
+do not copy the shared data. This prevents competing writes during parallel
+solution builds. `GdalEnvironment` points GDAL and PROJ at these folders.
 No `GDAL_DATA` or `PROJ_LIB` environment variable is needed or set.
 
 ### Binary cache

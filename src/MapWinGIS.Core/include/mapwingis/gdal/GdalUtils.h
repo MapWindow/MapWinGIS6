@@ -93,6 +93,8 @@ namespace mwg
                             const std::vector<std::string>& options);
 
         /// Legacy warp with synchronous progress and cancellation.
+        /// @note The exact GDAL option "-multi" is rejected when a progress
+        /// callback is supplied because GDAL may invoke it from worker threads.
         [[nodiscard]] bool GdalRasterWarp(
                             const std::filesystem::path& sourceFilename,
                             const std::filesystem::path& destinationFilename,

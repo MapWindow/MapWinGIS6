@@ -50,3 +50,15 @@ integration test still requires an interactive Windows desktop.
 
 **References:** [Testing guide](../../../docs/TESTING.md#activex-host-integration-checks)
 and [PR #26](https://github.com/MapWindow/MapWinGIS6/pull/26).
+
+## Shapefile geometry edits do not shrink stored bounds
+
+OGR's Shapefile driver expands bounds during `SetFeature` but does not shrink
+them. Core runs `RECOMPUTE EXTENT ON` after each Shapefile geometry edit so
+the stored extent remains correct after reopening. This costs an O(n) scan
+per geometry edit. Attribute edits do not trigger it. A recomputation failure
+throws after the geometry write succeeds, so callers must not assume rollback.
+
+See [VectorDataset.cpp](../../../src/MapWinGIS.Core/src/vector/VectorDataset.cpp)
+and the shrinking and reopening cases in
+[VectorLayerTests.cpp](../../../tests/MapWinGIS.Core.Tests/VectorLayerTests.cpp).

@@ -553,6 +553,42 @@ TEST(VectorLayerRenderer, DrawsIntoBoundsWithAnOffsetOrigin)
     EXPECT_EQ(GetPixel(surface.Get(), 10, 10), GetSysColor(COLOR_WINDOW));
 }
 
+TEST(VectorLayerRenderer, GdiClipsCrossingPolygonsAndRestoresTheHostClip)
+{
+    for (const bool hasHostClip : {false, true})
+    {
+        SCOPED_TRACE(hasHostClip);
+        BitmapSurface surface(200, 160);
+        ASSERT_TRUE(surface.IsValid());
+        ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 200, 160, WHITENESS));
+        if (hasHostClip)
+        {
+            ASSERT_NE(IntersectClipRect(surface.Get(), 20, 20, 120, 150), ERROR);
+        }
+        RECT originalClip{};
+        ASSERT_NE(GetClipBox(surface.Get(), &originalClip), ERROR);
+
+        const RECT bounds{40, 30, 160, 130};
+        mwg::Viewport viewport(120, 100);
+        viewport.SetView({60.0, 50.0}, 1.0);
+        const auto scene = MakeMapScene({MakeRectangleLayer({-50.0, -50.0, 170.0, 150.0})});
+        mwg::activex::GdiVectorLayerRenderer gdi;
+        ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+
+        RECT restoredClip{};
+        ASSERT_NE(GetClipBox(surface.Get(), &restoredClip), ERROR);
+        EXPECT_TRUE(EqualRect(&originalClip, &restoredClip));
+        // Remove the host clip so samples can also inspect protected pixels.
+        ASSERT_NE(SelectClipRgn(surface.Get(), nullptr), ERROR);
+        EXPECT_EQ(GetPixel(surface.Get(), 60, 60), kFill);
+        EXPECT_EQ(GetPixel(surface.Get(), 39, 60), RGB(255, 255, 255));
+        EXPECT_EQ(GetPixel(surface.Get(), 160, 60), RGB(255, 255, 255));
+        EXPECT_EQ(GetPixel(surface.Get(), 60, 29), RGB(255, 255, 255));
+        EXPECT_EQ(GetPixel(surface.Get(), 60, 130), RGB(255, 255, 255));
+        EXPECT_EQ(GetPixel(surface.Get(), 125, 60), hasHostClip ? RGB(255, 255, 255) : kFill);
+    }
+}
+
 TEST(VectorLayerRenderer, GdiAndOpenGlAgreeAtFractionalRectangleEdges)
 {
     BitmapSurface gdiSurface(120, 100);

@@ -69,6 +69,12 @@ namespace mwg
         /// \throws CoreError when counting or reading features fails.
         [[nodiscard]] std::int64_t FeatureCount() const;
 
+        /// Layer extent, or empty when the layer has no non-empty geometries.
+        /// Explicit GDAL failures throw CoreError; an unavailable driver extent
+        /// without diagnostics falls back to a checked O(n) geometry scan.
+        /// After a geometry edit on drivers other than Shapefile, the next call
+        /// scans features; later calls use the cached result.
+        /// \throws CoreError when GDAL cannot determine the extent.
         [[nodiscard]] Extent GetExtent() const;
 
         [[nodiscard]] int FieldCount() const;
@@ -96,6 +102,11 @@ namespace mwg
 
         /// Attribute and geometry edits. Each writes the feature back
         /// immediately; the file is complete once the dataset is closed.
+        /// Attribute edits preserve the layer extent cache. Shapefile geometry
+        /// edits recompute stored bounds immediately with an O(n) driver scan,
+        /// so shrinking bounds survive reopening. Other drivers use a lazy O(n)
+        /// scan on the next GetExtent() call. A stored-bounds recomputation
+        /// failure throws CoreError even though the geometry was already written.
         /// \throws CoreError when the dataset is read-only or the index is invalid.
         void SetCellString(int fieldIndex, std::int64_t featureIndex, const std::string& value);
         void SetCellDouble(int fieldIndex, std::int64_t featureIndex, double value);

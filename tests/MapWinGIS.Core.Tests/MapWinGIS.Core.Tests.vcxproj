@@ -48,6 +48,12 @@
     </Link>
   </ItemDefinitionGroup>
 
+  <ItemDefinitionGroup Condition="$([System.String]::Copy(';$(MwgVcpkgFeatures);').Contains(';full-drivers;'))">
+    <ClCompile>
+      <PreprocessorDefinitions>MWG_TEST_FULL_DRIVERS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
   <ItemGroup>
     <ClInclude Include="TestData.h" />
   </ItemGroup>

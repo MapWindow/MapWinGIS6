@@ -447,6 +447,13 @@ namespace mwg
         _impl->cancelled = false;
         if (HasNullByte(options))
             return RecordFailure(_impl->errors, "GDAL utility options must not contain null bytes.");
+        if (progress &&
+            std::find(options.begin(), options.end(), "-multi") != options.end())
+        {
+            return RecordFailure(
+                _impl->errors,
+                "GDAL raster warp option '-multi' is incompatible with synchronous progress callbacks.");
+        }
 
         return _impl->succeeded = RunUtilityOperation(
             _impl->errors, _impl->cancelled, std::move(progress), cancellationToken,

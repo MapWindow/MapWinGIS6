@@ -233,6 +233,12 @@ namespace mwg::activex
             return E_FAIL;
         }
 
+        if (IntersectClipRect(
+                deviceContext, bounds.left, bounds.top, bounds.right, bounds.bottom) == ERROR)
+        {
+            return E_FAIL;
+        }
+
         const ScopedGdiObject brush(CreateSolidBrush(kFillColor));
         const ScopedGdiObject pen(CreatePen(PS_SOLID, 1, kOutlineColor));
         if (brush.Get() == nullptr || pen.Get() == nullptr)

@@ -51,7 +51,7 @@
 
     <!-- Manifest features. "full-drivers" is what release packages build. -->
     <MwgVcpkgFeatures Condition="'$(MwgVcpkgFeatures)' == ''">tests</MwgVcpkgFeatures>
-    <VcpkgAdditionalInstallOptions>--overlay-triplets=$(MwgRepoRoot)build\triplets --x-feature=$(MwgVcpkgFeatures.Replace(';',' --x-feature='))</VcpkgAdditionalInstallOptions>
+    <VcpkgAdditionalInstallOptions>--overlay-triplets=&quot;$(MwgRepoRoot)build\triplets&quot; --x-feature=$(MwgVcpkgFeatures.Replace(';',' --x-feature='))</VcpkgAdditionalInstallOptions>
   </PropertyGroup>
 
   <PropertyGroup Label="VcpkgPaths">
