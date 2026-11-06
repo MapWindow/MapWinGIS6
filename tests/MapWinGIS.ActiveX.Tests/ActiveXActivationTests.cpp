@@ -942,18 +942,45 @@ TEST_F(ActiveXMapTest, ExposesStableLayerIdsAndMapNavigation)
     BitmapSurface zoomed(width, height);
     ASSERT_TRUE(fitted.IsValid());
     ASSERT_TRUE(zoomed.IsValid());
+    mwg::Viewport expected(width, height);
+    ASSERT_TRUE(expected.FitExtent({0, 0, 30, 10}, 12.0));
+    const auto expectFeatureAt = [&](const mwg::MapPoint& point)
+    {
+        const auto screen = expected.MapToScreen(point);
+        ASSERT_TRUE(screen.has_value());
+        const auto pixel = mwg::ToPixel(*screen);
+        ASSERT_TRUE(pixel.has_value());
+        ASSERT_GE(pixel->x, 0);
+        ASSERT_LT(pixel->x, width);
+        ASSERT_GE(pixel->y, 0);
+        ASSERT_LT(pixel->y, height);
+        EXPECT_EQ(GetPixel(zoomed.Get(), pixel->x, pixel->y), RGB(61, 122, 169));
+    };
+
     ASSERT_EQ(control->FitToMap(), S_OK);
     ASSERT_EQ(Draw(fitted.Get(), width, height), S_OK);
     ASSERT_EQ(control->ZoomIn(2.0), S_OK);
+    ASSERT_TRUE(expected.Zoom(2.0));
     ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
     EXPECT_TRUE(HasDifferentPixel(fitted.Get(), zoomed.Get(), width, height));
+    expectFeatureAt({8, 5});
 
     ASSERT_EQ(control->ZoomOut(2.0), S_OK);
-    ASSERT_EQ(control->Pan(2.0, -1.0), S_OK);
-    ASSERT_EQ(control->ZoomAt(60.0, 50.0, 1.5), S_OK);
-    ASSERT_EQ(control->ZoomToLayer(firstLayerId), S_OK);
+    ASSERT_TRUE(expected.ZoomOut(2.0));
     ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
-    EXPECT_TRUE(HasDifferentPixel(fitted.Get(), zoomed.Get(), width, height));
+    expectFeatureAt({2, 5});
+
+    ASSERT_EQ(control->Pan(2.0, -1.0), S_OK);
+    ASSERT_TRUE(expected.Pan(2.0, -1.0));
+    ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
+    expectFeatureAt({2, 5});
+
+    ASSERT_EQ(control->ZoomAt(15.0, 47.0, 1.5), S_OK);
+    ASSERT_TRUE(expected.ZoomAt({15.0, 47.0}, 1.5));
+    ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
+    expectFeatureAt({8.5, 5});
+
+    ASSERT_EQ(control->ZoomToLayer(firstLayerId), S_OK);
 
     ASSERT_EQ(control->ClearLayers(), S_OK);
     EXPECT_EQ(control->ZoomToLayer(firstLayerId), E_INVALIDARG);
