@@ -233,10 +233,21 @@ namespace mwg::activex
             return E_FAIL;
         }
 
-        if (IntersectClipRect(
-                deviceContext, bounds.left, bounds.top, bounds.right, bounds.bottom) == ERROR)
+        const int clipResult = IntersectClipRect(
+            deviceContext, bounds.left, bounds.top, bounds.right, bounds.bottom);
+        if (clipResult == ERROR)
         {
             return E_FAIL;
+        }
+        RECT clipBounds{};
+        const int effectiveClip = GetClipBox(deviceContext, &clipBounds);
+        if (effectiveClip == ERROR)
+        {
+            return E_FAIL;
+        }
+        if (effectiveClip == NULLREGION)
+        {
+            return S_OK;
         }
 
         const ScopedGdiObject brush(CreateSolidBrush(kFillColor));

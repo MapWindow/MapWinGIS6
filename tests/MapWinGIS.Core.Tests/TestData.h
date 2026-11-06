@@ -37,17 +37,22 @@ namespace mwg::test
         bool failOnSecondRead = false;
         bool failExtent = false;
         bool silentExtentFailure = false;
+        bool warningExtentFailure = false;
         bool failSetFeature = false;
+        bool simulateShapefile = false;
+        bool failRecomputeExtent = false;
         bool emptyLayer = false;
         bool onlyEmptyGeometries = false;
         bool unknownCount = false;
         bool ignoredFields = false;
+        bool ignoredGeometry = false;
         std::string storedName = "Original";
         int storedValue = 0;
         int nextFeature = 0;
         int readCalls = 0;
         int countCalls = 0;
         int extentCalls = 0;
+        int recomputeExtentCalls = 0;
 
     private:
         std::unique_ptr<GDALDriver> _driver;

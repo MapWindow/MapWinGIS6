@@ -27,7 +27,10 @@ remain Core responsibilities; COM callbacks and host dispatch stay in
 ActiveX.
 
 Algorithm outputs need different completion rules. Runner-owned persistent
-outputs pass a checked close and reopen read-only before success. Anonymous
+outputs pass a checked close before success. After successful finalization,
+the runner tries all readers with the original access mode, then read-only.
+An unavailable reader produces a warning and no returned dataset, not a failed
+write. Anonymous
 outputs retain their references for pipelines. Caller-supplied outputs remain
 caller-owned, so the runner can check their flush but not their final close.
 See `GdalAlgorithmRunner` and its output-failure and ownership tests.

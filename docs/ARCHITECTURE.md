@@ -91,8 +91,9 @@ expect.
   `SetLogHandler()`. Never write to stderr and never show message boxes from
   the core.
 - Algorithm runners, compatibility utilities, and pipelines share an execution
-  lock. Their callbacks run on the calling thread and cannot re-enter these
-  operations. Direct dataset access still needs caller synchronization.
+  lock. GDAL can report progress on worker threads. The shared progress adapter
+  serializes callbacks, which cannot re-enter these operations.
+  Direct dataset access still needs caller synchronization.
   See [operation results and threading](gdal-modern-capabilities.md#operation-results-logging-and-cancellation)
   for result, cancellation, and callback lifetime contracts.
 - The supported GDAL version and dependency pin are documented in
@@ -140,11 +141,16 @@ state; hosts and renderers read from it.
 
 Vector layer extent queries cache successful results. Read failures throw
 without caching an empty result. If a driver cannot provide an extent and
-reports no error, Core scans the geometries with read-error checks.
-Attribute edits keep the cached extent. Shapefile geometry edits immediately
-recompute stored bounds with an O(n) scan, so smaller bounds survive reopening.
-If that recomputation fails, the edit throws after writing the geometry.
-For other drivers, the next extent query scans once after a geometry edit.
+reports no failure diagnostic, Core scans the geometries with read-error checks.
+The scan asks the driver to ignore attributes.
+Attribute edits keep the cached extent. After geometry edits, the next extent
+query scans once and caches the result.
+
+Call `VectorDataset::Flush()` before closing after geometry edits to persist
+exact Shapefile and GeoPackage bounds. The flush runs one O(n) stored-extent
+scan per dirty layer, rather than one per edit. A recomputation failure throws
+without rolling back geometry writes and leaves the layer dirty for retry.
+Other formats retain their driver's stored-extent behavior.
 
 ## Viewport
 

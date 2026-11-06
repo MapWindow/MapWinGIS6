@@ -589,6 +589,32 @@ TEST(VectorLayerRenderer, GdiClipsCrossingPolygonsAndRestoresTheHostClip)
     }
 }
 
+TEST(VectorLayerRenderer, GdiSkipsLayerTraversalWhenTheHostClipDoesNotIntersectBounds)
+{
+    BitmapSurface surface(160, 160);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_NE(IntersectClipRect(surface.Get(), 140, 140, 160, 160), ERROR);
+    RECT originalClip{};
+    ASSERT_NE(GetClipBox(surface.Get(), &originalClip), ERROR);
+    const RECT bounds{0, 0, 120, 100};
+    const mwg::Viewport viewport = FitViewport(bounds);
+    auto scene = MakeConvexPolygonScene();
+    FirstPolygon(scene).front().front().x = std::numeric_limits<double>::infinity();
+    const int saved = SaveDC(surface.Get());
+    ASSERT_NE(saved, 0);
+    ASSERT_NE(IntersectClipRect(surface.Get(), bounds.left, bounds.top, bounds.right, bounds.bottom),
+              ERROR);
+    RECT intersection{};
+    EXPECT_EQ(GetClipBox(surface.Get(), &intersection), NULLREGION);
+    ASSERT_TRUE(RestoreDC(surface.Get(), saved));
+    mwg::activex::GdiVectorLayerRenderer renderer;
+    EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_TRUE(renderer.GetFailedLayers().empty());
+    RECT restoredClip{};
+    ASSERT_NE(GetClipBox(surface.Get(), &restoredClip), ERROR);
+    EXPECT_TRUE(EqualRect(&originalClip, &restoredClip));
+}
+
 TEST(VectorLayerRenderer, GdiAndOpenGlAgreeAtFractionalRectangleEdges)
 {
     BitmapSurface gdiSurface(120, 100);

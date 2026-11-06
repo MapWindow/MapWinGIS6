@@ -263,35 +263,30 @@ TEST(GdalUtils, WarpsRasterUsingLegacyOptions)
     EXPECT_STREQ(dataset->GetSpatialRef()->GetAuthorityCode(nullptr), "3857");
 }
 
-TEST(GdalUtils, RejectsMultiWarpWhenSynchronousProgressCallbackIsProvided)
+TEST(GdalUtils, SupportsThreadedWarpOptionsWithProgress)
 {
     GdalEnvironment::Initialize();
     GdalEnvironment::QuietScope quiet;
     test::TempDirectory directory;
     const std::filesystem::path input = test::MakeRaster(directory.Path());
-    const std::filesystem::path rejectedOutput = directory.Path() / "rejected.tif";
-    const std::filesystem::path noCallbackOutput = directory.Path() / "multi.tif";
-    const std::thread::id callerThread = std::this_thread::get_id();
-    std::atomic_int callbackCount = 0;
-    std::atomic_bool callbackRanOffThread = false;
     GdalUtils utils;
-
-    EXPECT_FALSE(utils.GdalRasterWarp(
-        input, rejectedOutput, {"-multi"},
-        [&](double, std::string_view)
-        {
-            ++callbackCount;
-            callbackRanOffThread.store(std::this_thread::get_id() != callerThread);
-            return true;
-        }));
-    EXPECT_EQ(callbackCount.load(), 0);
-    EXPECT_FALSE(callbackRanOffThread.load());
-    EXPECT_NE(utils.Result().ErrorMsg().find("'-multi'"), std::string::npos);
-    EXPECT_NE(utils.Result().ErrorMsg().find("synchronous"), std::string::npos);
-    EXPECT_FALSE(std::filesystem::exists(rejectedOutput));
-
-    EXPECT_TRUE(utils.GdalRasterWarp(input, noCallbackOutput, {"-multi"}, {}, nullptr))
-        << utils.DetailedErrorMsg();
+    for (const auto& options : {
+             std::vector<std::string>{"-multi"},
+             std::vector<std::string>{"-wo", "NUM_THREADS=2"},
+             std::vector<std::string>{"-multi", "-wo", "NUM_THREADS=2"}})
+    {
+        const auto output = directory.Path() / "threaded.tif";
+        std::atomic_int callbackCount{0};
+        EXPECT_TRUE(utils.GdalRasterWarp(input, output, options,
+            [&](double, std::string_view)
+            {
+                ++callbackCount;
+                return true;
+            })) << utils.DetailedErrorMsg();
+        EXPECT_GT(callbackCount.load(), 0);
+        EXPECT_TRUE(std::filesystem::exists(output));
+        std::filesystem::remove(output);
+    }
 }
 
 TEST(GdalUtils, TranslatesVectorAndPreservesFeatures)

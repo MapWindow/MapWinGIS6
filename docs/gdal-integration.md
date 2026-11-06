@@ -42,8 +42,11 @@ against GDAL's metadata and captures warnings and failures in `Errors()`.
 `TakeOutputDataset()` transfers ownership of an output dataset.
 
 For persistent outputs that the runner owns, `Run()` checks the final close
-before reporting success. It reopens the output read-only for ownership
-transfer. Reopening failures also fail the operation. Anonymous outputs,
+before reporting success. After successful finalization, it tries all registered
+readers to reopen the output with its original access mode.
+If update access fails, it tries read-only access. If no reader can open the
+output, the write still succeeds with a warning and `TakeOutputDataset()` returns
+`nullptr`. This includes write-only targets such as `/vsistdout/`. Anonymous outputs,
 including in-memory VRT datasets, remain open. If the caller supplies an
 output through `SetDatasetArgument()`, the runner checks its flush but cannot
 check its eventual close. The caller retains the original reference.
@@ -77,7 +80,8 @@ copying an option list into application documentation.
 
 ## Progress and cancellation
 
-Progress callbacks execute synchronously on the thread running GDAL. Return
+GDAL can invoke progress callbacks on worker threads. The shared adapter
+serializes callbacks and protects cancellation and exception state. Return
 `false` to cancel. A cancellation token can also be cancelled from another
 thread and must remain alive until the operation returns:
 
@@ -98,9 +102,8 @@ algorithms promptly. Cancellation can leave partial output files. Callbacks
 must not start another GDAL operation or wait on a thread that needs the GDAL
 execution lock; callback exceptions are returned as operation failures.
 
-The legacy `GdalUtils::GdalRasterWarp()` rejects `-multi` when a progress
-callback is supplied. GDAL can call that callback from a worker thread with
-this option. Calls without a progress callback can still use `-multi`.
+The legacy `GdalUtils::GdalRasterWarp()` accepts `-multi` and threaded warp
+options such as `-wo NUM_THREADS=2`, with or without a progress callback.
 
 ## ActiveX operations
 
@@ -226,7 +229,8 @@ The solution builds the runnable C++ example
   direct GDAL calls are not covered by that lock. Synchronize access to shared
   datasets and process-wide configuration yourself.
 - Native Core objects are not thread-safe unless their API says otherwise.
-  Progress and logging callbacks run synchronously on the operation thread.
+  GDAL can report progress on worker threads. The adapter serializes progress
+  callbacks. Logging callbacks run on the thread that raises the diagnostic.
 - If initialization reports missing GDAL or PROJ data, rebuild with runtime
   data deployment enabled. The data directories are placed beside the DLL;
   do not set `GDAL_DATA` or `PROJ_LIB` as a workaround.

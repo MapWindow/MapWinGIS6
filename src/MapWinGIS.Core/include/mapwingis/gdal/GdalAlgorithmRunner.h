@@ -68,7 +68,8 @@ namespace mwg
 
         /// Runs and finalizes the configured algorithm, reporting progress and
         /// cancellation through the existing GDAL callback adapter.
-        /// Callbacks run on this thread and must not start GDAL operations or
+        /// Progress callbacks are serialized, but GDAL can invoke them on worker
+        /// threads. They must not start GDAL operations or
         /// wait for other threads that need GDAL. Callback exceptions become
         /// failure diagnostics, not user cancellation. Token/callback lifetimes
         /// must cover this call. Capture/logger exceptions propagate after
@@ -82,8 +83,11 @@ namespace mwg
 
         /// Transfers the runner's output reference to the caller, if the
         /// algorithm produced one. Persistent outputs with a non-empty output
-        /// path or dataset description are checked and closed by Run(), then
-        /// reopened read-only; reopening failure makes Run() fail.
+        /// path or dataset description are checked and closed by Run().
+        /// The runner then tries all registered readers to reopen the output
+        /// with its original access mode, falling back to read-only if needed.
+        /// If no reader can open it (including write-only streaming targets),
+        /// Run() still succeeds and records a warning, but this returns nullptr.
         /// Anonymous outputs remain open to preserve driver dependencies.
         /// For outputs supplied through SetDatasetArgument(), this is an
         /// additional reference; the original remains caller-owned. Run()

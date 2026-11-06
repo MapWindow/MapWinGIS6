@@ -168,6 +168,9 @@ msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release "-p:Mw
 CI uses this feature set for Release artifacts. Core tests built with
 `full-drivers` require HDF5, NetCDF, LIBKML, PostgreSQL, and SpatiaLite support.
 The SpatiaLite test creates a spatial database without an external server.
+Pull requests and pushes to `development` build and test Debug and full-driver
+Release for x64. Pushes to `main` also cover Win32. Each job has a
+180-minute timeout.
 
 ### Runtime data
 
@@ -216,7 +219,7 @@ bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresul
 | `MwgVcpkgRoot` | resolved (see above) | vcpkg location |
 | `MwgVcpkgFeatures` | `tests` | Semicolon-separated manifest features |
 | `MwgEnableAsan` | `false` | Adds `/fsanitize=address` |
-| `MwgDeployRuntimeData` | `true` | Copies `gdal-data` and `proj` to the output folder |
+| `MwgDeployRuntimeData` | `true` for Core, `false` otherwise | Copies `gdal-data` and `proj` to the output folder |
 
 ## Troubleshooting
 

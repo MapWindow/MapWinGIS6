@@ -11,12 +11,12 @@
   -->
 
   <PropertyGroup>
-    <MwgDeployRuntimeData Condition="'$(MwgDeployRuntimeData)' == ''">true</MwgDeployRuntimeData>
+    <MwgDeployRuntimeData Condition="'$(MwgDeployRuntimeData)' == ''">false</MwgDeployRuntimeData>
   </PropertyGroup>
 
   <Target Name="MwgDeployGdalRuntimeData"
           AfterTargets="Build"
-          Condition="'$(MwgDeployRuntimeData)' == 'true' And '$(MSBuildProjectName)' == 'MapWinGIS.Core'">
+          Condition="'$(MwgDeployRuntimeData)' == 'true'">
 
     <ItemGroup>
       <MwgGdalData Include="$(MwgVcpkgTripletDir)share\gdal\**\*" />

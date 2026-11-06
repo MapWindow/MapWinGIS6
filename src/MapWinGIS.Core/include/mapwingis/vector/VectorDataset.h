@@ -71,8 +71,8 @@ namespace mwg
 
         /// Layer extent, or empty when the layer has no non-empty geometries.
         /// Explicit GDAL failures throw CoreError; an unavailable driver extent
-        /// without diagnostics falls back to a checked O(n) geometry scan.
-        /// After a geometry edit on drivers other than Shapefile, the next call
+        /// without failure diagnostics falls back to a checked O(n) geometry scan.
+        /// After a geometry edit, the next call
         /// scans features; later calls use the cached result.
         /// \throws CoreError when GDAL cannot determine the extent.
         [[nodiscard]] Extent GetExtent() const;
@@ -101,12 +101,11 @@ namespace mwg
         [[nodiscard]] bool IsWritable() const;
 
         /// Attribute and geometry edits. Each writes the feature back
-        /// immediately; the file is complete once the dataset is closed.
-        /// Attribute edits preserve the layer extent cache. Shapefile geometry
-        /// edits recompute stored bounds immediately with an O(n) driver scan,
-        /// so shrinking bounds survive reopening. Other drivers use a lazy O(n)
-        /// scan on the next GetExtent() call. A stored-bounds recomputation
-        /// failure throws CoreError even though the geometry was already written.
+        /// immediately. Attribute edits preserve the layer extent cache.
+        /// Geometry edits use a lazy O(n) scan on the next GetExtent() call.
+        /// Call VectorDataset::Flush() before closing after geometry edits to
+        /// persist exact stored bounds for Shapefile and GeoPackage. It batches
+        /// those updates into one O(n) driver scan per dirty layer.
         /// \throws CoreError when the dataset is read-only or the index is invalid.
         void SetCellString(int fieldIndex, std::int64_t featureIndex, const std::string& value);
         void SetCellDouble(int fieldIndex, std::int64_t featureIndex, double value);
@@ -151,9 +150,13 @@ namespace mwg
         [[nodiscard]] std::filesystem::path Path() const;
         [[nodiscard]] bool IsWritable() const;
 
-        /// Writes pending changes to disk without closing. Closing the dataset
-        /// does this as well.
-        /// \throws CoreError when GDAL cannot flush pending changes.
+        /// Writes pending changes to disk without closing and recomputes stored
+        /// Shapefile and GeoPackage bounds after geometry edits.
+        /// Closing alone writes features but does not guarantee exact stored
+        /// bounds. Other formats retain their driver's persistence behavior.
+        /// \throws CoreError when flushing or stored-bounds recomputation fails.
+        /// A failure does not roll back geometry writes. Recompute failures
+        /// leave the layer dirty so a later Flush() can retry.
         void Flush();
 
         [[nodiscard]] int LayerCount() const;

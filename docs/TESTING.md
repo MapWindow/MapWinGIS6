@@ -30,10 +30,12 @@ Run the build configuration tests from a Visual Studio developer shell:
 pwsh -File build\scripts\Test-BuildConfiguration.ps1
 ```
 
-These tests pass dependency arguments through MSBuild in a path with spaces.
+These tests pass `tests%3Bfull-drivers` on the MSBuild command line in a path
+with spaces and inspect the resulting dependency arguments.
 They also make sure that only Core deploys GDAL and PROJ data to the shared
 output folder. CI runs them before the solution build. Builds with
 `full-drivers` also test the release driver set in `GdalEnvironment` tests.
+Pull requests run both Debug and full-driver Release tests for x64.
 
 ## ActiveX host integration checks
 

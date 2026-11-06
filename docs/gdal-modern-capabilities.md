@@ -56,7 +56,10 @@ multidimensional API.
 Snapshots keep their diagnostics when a later compatibility operation changes the object's state.
 
 Persistent outputs that the runner owns pass a checked close before success.
-The runner reopens them read-only for `TakeOutputDataset()`.
+After successful finalization, the runner tries all registered readers to
+reopen them with their original access mode, then read-only if needed.
+If no reader can open an output, the write still succeeds with a warning.
+`TakeOutputDataset()` then returns `nullptr`.
 Anonymous outputs remain open so in-memory pipelines retain their sources.
 Caller-supplied output datasets remain caller-owned. The runner checks their
 flush, but the caller controls their final close.
@@ -92,11 +95,12 @@ Their diagnostic lists remain separate.
 This lock does not cover direct GDAL calls, returned datasets, or the vector dataset API.
 Callers must still serialize access to shared datasets and process-wide configuration.
 
-Progress and logging callbacks run synchronously on the thread that executes the operation.
+GDAL can report progress on worker threads. The progress adapter serializes
+callbacks and protects cancellation and exception state across threads.
+Logging callbacks run on the thread that raises the diagnostic.
 Callbacks must not start another GDAL operation or wait for a thread that needs the execution lock.
-The legacy warp utility rejects `-multi` with a progress callback to keep
-this thread contract.
-The native operation APIs reject same-thread callback re-entry with `CoreError`.
+Threaded warp options remain supported with progress callbacks.
+The native operation APIs reject callback re-entry with `CoreError` on every thread.
 A callback must remain valid until the operation returns.
 Removing a logger does not stop a callback that already holds a copy of that logger.
 Use owned state or shared ownership for captures that other threads can access.

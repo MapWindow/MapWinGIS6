@@ -54,10 +54,12 @@ and [PR #26](https://github.com/MapWindow/MapWinGIS6/pull/26).
 ## Shapefile geometry edits do not shrink stored bounds
 
 OGR's Shapefile driver expands bounds during `SetFeature` but does not shrink
-them. Core runs `RECOMPUTE EXTENT ON` after each Shapefile geometry edit so
-the stored extent remains correct after reopening. This costs an O(n) scan
-per geometry edit. Attribute edits do not trigger it. A recomputation failure
-throws after the geometry write succeeds, so callers must not assume rollback.
+them. Core runs `RECOMPUTE EXTENT ON` during an explicit `VectorDataset::Flush()`
+for dirty Shapefile and GeoPackage layers. Call it before closing after geometry
+edits to preserve exact stored bounds. This costs one O(n) scan per dirty layer,
+not per edit. Attribute edits do not trigger it. A recomputation failure throws
+after geometry writes and leaves the layer dirty for retry. It does not roll
+back the writes. Other formats retain their driver's stored-extent behavior.
 
 See [VectorDataset.cpp](../../../src/MapWinGIS.Core/src/vector/VectorDataset.cpp)
 and the shrinking and reopening cases in

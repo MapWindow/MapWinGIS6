@@ -84,7 +84,7 @@ namespace mwg::test
                 feature->SetFID(id);
                 feature->SetField(0, _state.storedName.c_str());
                 feature->SetField(1, _state.storedValue);
-                if (!_state.ignoredFields && id != 1)
+                if (!_state.ignoredGeometry && id != 1)
                 {
                     OGRPolygon polygon;
                     if (id == 0 && !_state.onlyEmptyGeometries)
@@ -114,6 +114,12 @@ namespace mwg::test
             OGRErr SetIgnoredFields(CSLConstList fields) override
             {
                 _state.ignoredFields = fields != nullptr;
+                _state.ignoredGeometry = false;
+                for (const char* const* field = fields; field != nullptr && *field != nullptr; ++field)
+                {
+                    if (std::string_view(*field) == "OGR_GEOMETRY")
+                        _state.ignoredGeometry = true;
+                }
                 return OGRERR_NONE;
             }
 
@@ -153,6 +159,11 @@ namespace mwg::test
                              "Simulated extent failure");
                     return OGRERR_FAILURE;
                 }
+                if (_state.warningExtentFailure)
+                {
+                    CPLError(CE_Warning, CPLE_NotSupported, "Simulated unavailable extent");
+                    return OGRERR_FAILURE;
+                }
                 if (_state.silentExtentFailure || _state.emptyLayer ||
                     _state.onlyEmptyGeometries)
                     return OGRERR_FAILURE;
@@ -172,8 +183,10 @@ namespace mwg::test
         {
         public:
             explicit VectorReadTestDataset(VectorReadTestDriver& state)
-                : _layer(state)
+                : _state(state), _layer(state)
             {
+                if (state.simulateShapefile)
+                    poDriver = GetGDALDriverManager()->GetDriverByName("ESRI Shapefile");
             }
 
             int GetLayerCount() const override
@@ -186,7 +199,18 @@ namespace mwg::test
                 return index == 0 ? &_layer : nullptr;
             }
 
+            OGRLayer* ExecuteSQL(const char* statement, OGRGeometry*, const char*) override
+            {
+                if (!std::string_view(statement).starts_with("RECOMPUTE EXTENT ON "))
+                    throw std::runtime_error("Unexpected test SQL statement");
+                ++_state.recomputeExtentCalls;
+                if (_state.failRecomputeExtent)
+                    CPLError(CE_Failure, CPLE_AppDefined, "Simulated extent recompute failure");
+                return nullptr;
+            }
+
         private:
+            VectorReadTestDriver& _state;
             VectorReadTestLayer _layer;
         };
     }

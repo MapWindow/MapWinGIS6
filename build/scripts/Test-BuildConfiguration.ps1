@@ -11,9 +11,9 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) "MapWinGIS build checks $([guid]::NewGuid())"
 try {
-    New-Item -ItemType Directory -Path "$temp\build\props" -Force | Out-Null
+    New-Item -ItemType Directory -Path $temp -Force | Out-Null
     Copy-Item "$repoRoot\Directory.Build.props", "$repoRoot\Directory.Build.targets" $temp
-    Copy-Item "$repoRoot\build\props\MapWinGIS.Cpp.props" "$temp\build\props"
+    Copy-Item "$repoRoot\build" "$temp\build" -Recurse
     New-Item -ItemType Directory -Path "$temp\packages\share\gdal", "$temp\packages\share\proj" -Force | Out-Null
     Set-Content "$temp\packages\share\gdal\test.csv" 'GDAL fixture'
     Set-Content "$temp\packages\share\proj\proj.db" 'PROJ fixture'
@@ -29,7 +29,6 @@ $commandLine | Select-Object -Skip $start | Set-Content (Join-Path $PSScriptRoot
     <Configuration>Debug</Configuration>
     <Platform>x64</Platform>
     <MwgVcpkgRoot>$(MSBuildThisFileDirectory)no-vcpkg</MwgVcpkgRoot>
-    <MwgVcpkgFeatures>tests;full-drivers</MwgVcpkgFeatures>
   </PropertyGroup>
   <Import Project="Directory.Build.props" />
   <PropertyGroup>
@@ -42,10 +41,10 @@ $commandLine | Select-Object -Skip $start | Set-Content (Join-Path $PSScriptRoot
   </Target>
 </Project>
 '@
-    Set-Content "$temp\MapWinGIS.Core.proj" $project
+    Set-Content "$temp\RuntimeDataOwner.proj" $project
     Set-Content "$temp\MapWinGIS.ActiveX.proj" $project
     $powerShell = (Get-Process -Id $PID).Path
-    & $MSBuild "$temp\MapWinGIS.Core.proj" -nologo -v:q -t:CaptureArguments "-p:MwgTestPowerShell=$powerShell"
+    & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:CaptureArguments "-p:MwgTestPowerShell=$powerShell" '-p:MwgVcpkgFeatures=tests%3Bfull-drivers'
     if ($LASTEXITCODE -ne 0) { throw 'Dependency argument capture failed.' }
     $arguments = @(Get-Content "$temp\arguments.txt")
     if ($arguments.Count -ne 3 -or
@@ -60,7 +59,7 @@ $commandLine | Select-Object -Skip $start | Set-Content (Join-Path $PSScriptRoot
     if ($LASTEXITCODE -ne 0) { throw 'Consumer deployment check failed.' }
     if (Test-Path "$temp\output") { throw 'A consumer copied shared runtime data.' }
 
-    & $MSBuild "$temp\MapWinGIS.Core.proj" -nologo -v:q -t:MwgDeployGdalRuntimeData
+    & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:MwgDeployGdalRuntimeData -p:MwgDeployRuntimeData=true
     if ($LASTEXITCODE -ne 0) { throw 'Core deployment failed.' }
     foreach ($relative in @('gdal-data\test.csv', 'proj\proj.db')) {
         if (-not (Test-Path "$temp\output\$relative")) { throw "Runtime data missing: $relative" }
