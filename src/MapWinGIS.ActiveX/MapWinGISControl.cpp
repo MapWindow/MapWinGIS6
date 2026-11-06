@@ -716,7 +716,7 @@ bool CMapWinGISControl::CaptureMouse() noexcept
     if (m_bWndLess)
     {
         return m_spInPlaceSite != nullptr &&
-            SUCCEEDED(m_spInPlaceSite->SetCapture(TRUE));
+            m_spInPlaceSite->SetCapture(TRUE) == S_OK;
     }
 
     if (m_hWnd == nullptr)

@@ -1843,9 +1843,12 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             BitmapSurface initialNavigationSurface(resizedWidth, resizedHeight);
             BitmapSurface wheelNavigationSurface(resizedWidth, resizedHeight);
             BitmapSurface panNavigationSurface(resizedWidth, resizedHeight);
+            BitmapSurface expectedNavigationSurface(resizedWidth, resizedHeight);
             ASSERT_TRUE(initialNavigationSurface.IsValid());
             ASSERT_TRUE(wheelNavigationSurface.IsValid());
             ASSERT_TRUE(panNavigationSurface.IsValid());
+            ASSERT_TRUE(expectedNavigationSurface.IsValid());
+            ASSERT_EQ(navigationControl->FitToMap(), S_OK);
             ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
                 DVASPECT_CONTENT,
                 -1,
@@ -1958,6 +1961,31 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             ASSERT_TRUE(expectedNavigation.Pan(
                 -dragDeltaX * *resolutionAfterWheel,
                 dragDeltaY * *resolutionAfterWheel));
+            ASSERT_EQ(navigationControl->FitToMap(), S_OK);
+            ASSERT_EQ(
+                navigationControl->ZoomAt(anchorX, anchorY, 1.2),
+                S_OK);
+            ASSERT_EQ(
+                navigationControl->Pan(
+                    -dragDeltaX * *resolutionAfterWheel,
+                    dragDeltaY * *resolutionAfterWheel),
+                S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                expectedNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            EXPECT_FALSE(HasDifferentPixel(
+                panNavigationSurface.Get(),
+                expectedNavigationSurface.Get(),
+                resizedWidth,
+                resizedHeight));
             const auto expectedFeaturePixel =
                 mwg::ToPixel(*expectedNavigation.MapToScreen({1, 2.5}));
             ASSERT_TRUE(expectedFeaturePixel.has_value());

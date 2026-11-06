@@ -398,9 +398,9 @@ Windows CPU fallback; Core has no independent platform-neutral renderer.
 The C# host's pixel assertions, activation, and native tests pass for Debug
 and Release on Win32 and x64 in an interactive desktop session.
 Core navigation on the shared `MapView` (zoom to map and layer, zoom in and
-out, anchored zoom, and pan) is implemented but not yet exposed through COM or
-mouse input; that is the next milestone. Deep zoom can push a layer past the
-GDI coordinate range until clipping exists. Measure scene preparation with
-representative datasets before adding caching, paging, or broader OpenGL
-geometry support.
+out, anchored zoom, and pan) is exposed through `IMapWinGISControl4`; the
+ActiveX control also supports left-button drag panning and cursor-anchored
+wheel zoom. Deep zoom can push a layer past the GDI coordinate range until
+clipping exists. Measure scene preparation with representative datasets
+before adding caching, paging, or broader OpenGL geometry support.
 OpenCL and full MapWinGIS 5 API parity remain deferred.
