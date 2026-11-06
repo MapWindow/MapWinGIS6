@@ -86,7 +86,7 @@ namespace mwg
                 return std::nullopt;
 
             PersistentOutput result;
-            result.path = hasDescription ? description : outputName;
+            result.path = hasOutputName ? outputName : description;
             if (dataset->GetAccess() == GA_Update)
                 result.openFlags |= GDAL_OF_UPDATE;
             if (dataset->GetRasterCount() > 0)

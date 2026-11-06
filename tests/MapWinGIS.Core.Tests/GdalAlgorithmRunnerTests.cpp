@@ -279,6 +279,7 @@ namespace
         static bool rejectOpen;
         static inline bool finalizeSucceeded = true;
         static inline int openCount = 0;
+        static inline std::string lastOpenedPath;
 
         OutputFailureAlgorithm()
             : GDALAlgorithm(
@@ -783,6 +784,7 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
             return nullptr;
         }
         ++OutputFailureAlgorithm::openCount;
+        OutputFailureAlgorithm::lastOpenedPath = path;
         if (OutputFailureAlgorithm::rejectOpen)
         {
             CPLError(CE_Failure, CPLE_OpenFailed, "%s",
@@ -814,6 +816,7 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
                          true, false, false, true, false},
              FailureCase{"close", "Simulated output close failure", false, true, false, true, false},
              FailureCase{"reopen", "no dataset could be reopened", true, false, true, true, false},
+             FailureCase{"named-output", "", true, true, false, true, false},
              FailureCase{"finalize", "forced output finalization failure", true, false, true, false, false},
              FailureCase{"cancel", "cancelled", true, false, true, true, true}})
     {
@@ -822,11 +825,14 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
         GdalDatasetPtr failingOutput(static_cast<GDALDataset*>(
             GDALOpen(path.c_str(), GA_Update)));
         ASSERT_NE(failingOutput, nullptr);
+        if (std::string_view(failure.kind) == "named-output")
+            failingOutput->SetDescription("driver-specific output");
         OutputFailureAlgorithm::outputDataset = failingOutput.release();
         OutputFailureAlgorithm::runSucceeded = failure.runSucceeded;
         OutputFailureAlgorithm::rejectOpen = failure.rejectReopen;
         OutputFailureAlgorithm::finalizeSucceeded = failure.finalizeSucceeded;
         OutputFailureAlgorithm::openCount = 0;
+        OutputFailureAlgorithm::lastOpenedPath.clear();
         FailingOutputDataset::closeCount = 0;
         GdalAlgorithmRunner failingRunner(
             failure.useGroupCommandLine ? "mwg-test" : "mwg-test output-failure");
@@ -837,17 +843,24 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
             })) << LastError(failingRunner);
         }
 
-        const bool successExpected = std::string_view(failure.kind) == "reopen";
+        const bool successExpected =
+            std::string_view(failure.kind) == "reopen" ||
+            std::string_view(failure.kind) == "named-output";
         EXPECT_EQ(failingRunner.Run([&](double, std::string_view) { return !failure.cancel; }),
                   successExpected);
         if (!failure.finalizeSucceeded || failure.cancel)
             EXPECT_EQ(OutputFailureAlgorithm::openCount, 0);
         OutputFailureAlgorithm::rejectOpen = false;
         OutputFailureAlgorithm::finalizeSucceeded = true;
-        EXPECT_NE(
-            failingRunner.Result().DetailedErrorMsg().find(failure.diagnostic),
-            std::string::npos)
-            << failingRunner.Result().DetailedErrorMsg();
+        if (failure.diagnostic[0] != '\0')
+        {
+            EXPECT_NE(
+                failingRunner.Result().DetailedErrorMsg().find(failure.diagnostic),
+                std::string::npos)
+                << failingRunner.Result().DetailedErrorMsg();
+        }
+        if (std::string_view(failure.kind) == "named-output")
+            EXPECT_EQ(OutputFailureAlgorithm::lastOpenedPath, path);
         if (std::string_view(failure.kind) == "close-diagnostic")
             EXPECT_EQ(FailingOutputDataset::closeCount, 1);
         OutputFailureAlgorithm::outputDataset = nullptr;
