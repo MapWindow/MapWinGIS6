@@ -37,29 +37,37 @@ namespace
     using mwg::activex::ComConversion::CreateStringArray;
     using mwg::activex::ComConversion::Utf8ToBstr;
 
-    [[nodiscard]] HRESULT SetComErrorInfo(
-        const std::string& message,
-        const HRESULT errorCode)
+    [[nodiscard]] HRESULT SetControlComErrorInfo(
+        const char* message,
+        REFIID sourceIid,
+        const HRESULT errorCode) noexcept
     {
-        const CA2W wideMessage(message.c_str(), CP_UTF8);
-        return AtlReportError(
-            CLSID_MapWinGISControl,
-            wideMessage,
-            IID_IMapWinGISControlGdal,
-            errorCode);
+        try
+        {
+            const CA2W wideMessage(message, CP_UTF8);
+            return AtlReportError(CLSID_MapWinGISControl, wideMessage, sourceIid, errorCode);
+        }
+        catch (...)
+        {
+            return errorCode;
+        }
     }
 
-    [[nodiscard]] HRESULT SetControlComErrorInfo(
-        const std::string& message,
-        REFIID sourceIid,
-        const HRESULT errorCode)
+    [[nodiscard]] HRESULT SetComErrorInfo(
+        const char* message,
+        const HRESULT errorCode) noexcept
     {
-        const CA2W wideMessage(message.c_str(), CP_UTF8);
-        return AtlReportError(
-            CLSID_MapWinGISControl,
-            wideMessage,
-            sourceIid,
-            errorCode);
+        return SetControlComErrorInfo(message, IID_IMapWinGISControlGdal, errorCode);
+    }
+
+    [[nodiscard]] HRESULT CopyLayerId(const mwg::LayerId id, LONGLONG* destination) noexcept
+    {
+        if (id.value > static_cast<std::uint64_t>(std::numeric_limits<LONGLONG>::max()))
+        {
+            return E_UNEXPECTED;
+        }
+        *destination = static_cast<LONGLONG>(id.value);
+        return S_OK;
     }
 
     template <typename Operation>
@@ -89,6 +97,10 @@ namespace
                 exception.what(),
                 IID_IMapWinGISControl4,
                 E_FAIL);
+        }
+        catch (...)
+        {
+            return E_FAIL;
         }
     }
 
@@ -128,6 +140,15 @@ CMapWinGISControl::CMapWinGISControl()
           &CMapWinGISControl::DispatchGdalNotifications,
           this)
 {
+}
+
+STDMETHODIMP CMapWinGISControl::InterfaceSupportsErrorInfo(REFIID interfaceId)
+{
+    return IsEqualIID(interfaceId, IID_IMapWinGISControl) ||
+        IsEqualIID(interfaceId, IID_IMapWinGISControl2) ||
+        IsEqualIID(interfaceId, IID_IMapWinGISControl3) ||
+        IsEqualIID(interfaceId, IID_IMapWinGISControl4) ||
+        IsEqualIID(interfaceId, IID_IMapWinGISControlGdal) ? S_OK : S_FALSE;
 }
 
 STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
@@ -171,6 +192,10 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
     {
         return SetComErrorInfo(exception.what(), E_INVALIDARG);
     }
+    catch (...)
+    {
+        return E_FAIL;
+    }
 
     try
     {
@@ -187,6 +212,10 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
     catch (const std::exception& exception)
     {
         return SetComErrorInfo(exception.what(), E_FAIL);
+    }
+    catch (...)
+    {
+        return E_FAIL;
     }
 }
 
@@ -412,6 +441,12 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
         }
 
         const mwg::LayerId id = _view.AddLayer(std::move(dataset), std::move(preparedScene));
+        LONGLONG convertedId = 0;
+        if (layerId != nullptr && FAILED(CopyLayerId(id, &convertedId)))
+        {
+            (void)_view.RemoveLayer(id);
+            return E_UNEXPECTED;
+        }
         try
         {
             // Fit the combined extent so the newly added layer is visible.
@@ -426,7 +461,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
         _featureCount += count;
         if (layerId != nullptr)
         {
-            *layerId = static_cast<LONGLONG>(id.value);
+            *layerId = convertedId;
         }
         FireViewChange();
         return S_OK;
@@ -438,6 +473,10 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
     catch (const std::exception& exception)
     {
         return SetControlComErrorInfo(exception.what(), sourceIid, E_FAIL);
+    }
+    catch (...)
+    {
+        return E_FAIL;
     }
 }
 
@@ -605,12 +644,12 @@ STDMETHODIMP CMapWinGISControl::ZoomToLayer(const LONGLONG layerId)
 {
     if (layerId <= 0)
     {
-        return E_INVALIDARG;
+        return SetControlComErrorInfo("Layer ID must be positive", IID_IMapWinGISControl4, E_INVALIDARG);
     }
     const mwg::LayerId id{static_cast<std::uint64_t>(layerId)};
     if (_view.GetMap().FindLayer(id) == nullptr)
     {
-        return E_INVALIDARG;
+        return SetControlComErrorInfo("Layer ID was not found", IID_IMapWinGISControl4, E_INVALIDARG);
     }
 
     bool changed = false;
@@ -649,14 +688,7 @@ STDMETHODIMP CMapWinGISControl::GetLayerId(
         return E_INVALIDARG;
     }
 
-    const std::uint64_t value = map.Layer(index).Id().value;
-    if (value > static_cast<std::uint64_t>(
-            std::numeric_limits<LONGLONG>::max()))
-    {
-        return E_UNEXPECTED;
-    }
-    *layerId = static_cast<LONGLONG>(value);
-    return S_OK;
+    return CopyLayerId(map.Layer(index).Id(), layerId);
 }
 
 bool CMapWinGISControl::ResizeView(const LONG width, const LONG height) noexcept
