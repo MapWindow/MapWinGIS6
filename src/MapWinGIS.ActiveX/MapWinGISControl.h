@@ -201,6 +201,11 @@ private:
     mwg::activex::FrameBuffer _frameBuffer;
     mwg::activex::FrameBuffer _layerCache;
     mwg::Viewport _layerCacheViewport;
+
+    /// COLOR_WINDOW the cached frame was rendered with; a system-color or
+    /// high-contrast change makes the cache unusable.
+    COLORREF _layerCacheBackground = 0;
+
     bool _layerCacheValid = false;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
