@@ -1061,60 +1061,76 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
         ? RECT{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)}
         : bounds;
 
-    if (::FillRect(
-            frameDc,
-            &frameBounds,
-            ::GetSysColorBrush(COLOR_WINDOW)) == 0)
+    const auto renderFrame = [&]() -> HRESULT
     {
-        return E_FAIL;
-    }
-
-    if (!drawable)
-    {
-        return S_OK;
-    }
-
-    HRESULT result = S_OK;
-    try
-    {
-        const mwg::rendering::MapRenderScene& scene = _view.Scene();
-        // Printing and scaled draws use a snapshot, never the live viewport.
-        mwg::Viewport viewport = _view.GetViewport();
-        viewport.SetSize(static_cast<int>(width), static_cast<int>(height));
-        if (!viewport.HasView())
+        if (::FillRect(
+                frameDc,
+                &frameBounds,
+                ::GetSysColorBrush(COLOR_WINDOW)) == 0)
         {
-            (void)viewport.FitExtent(_view.GetMap().GetExtent(), mwg::MapView::kDefaultPadding);
+            return E_FAIL;
         }
-        if (!scene.layers.empty() && viewport.IsValid())
+
+        if (!drawable)
         {
-            result = _renderer.Draw(frameDc, frameBounds, scene, viewport);
+            return S_OK;
         }
-    }
-    catch (const std::bad_alloc&)
+
+        try
+        {
+            const mwg::rendering::MapRenderScene& scene = _view.Scene();
+            // Printing and scaled draws use a snapshot, never the live viewport.
+            mwg::Viewport viewport = _view.GetViewport();
+            viewport.SetSize(static_cast<int>(width), static_cast<int>(height));
+            if (!viewport.HasView())
+            {
+                (void)viewport.FitExtent(_view.GetMap().GetExtent(), mwg::MapView::kDefaultPadding);
+            }
+            if (!scene.layers.empty() && viewport.IsValid())
+            {
+                return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+            }
+            return S_OK;
+        }
+        catch (const std::bad_alloc&)
+        {
+            return E_OUTOFMEMORY;
+        }
+        catch (const std::exception& exception)
+        {
+            ::OutputDebugStringA(exception.what());
+            return E_FAIL;
+        }
+    };
+
+    if (buffered)
     {
-        result = E_OUTOFMEMORY;
-    }
-    catch (const std::exception& exception)
-    {
-        ::OutputDebugStringA(exception.what());
-        result = E_FAIL;
+        const HRESULT result = renderFrame();
+        if (FAILED(result))
+        {
+            return result;
+        }
+        if (::BitBlt(
+                drawInfo.hdcDraw,
+                bounds.left,
+                bounds.top,
+                static_cast<int>(width),
+                static_cast<int>(height),
+                frameDc,
+                0,
+                0,
+                SRCCOPY) != 0)
+        {
+            return result;
+        }
+
+        // A blit between different devices (printer or metafile targets)
+        // can fail; present the frame by drawing straight to the target.
+        frameDc = drawInfo.hdcDraw;
+        frameBounds = bounds;
     }
 
-    if (buffered && ::BitBlt(
-            drawInfo.hdcDraw,
-            bounds.left,
-            bounds.top,
-            static_cast<int>(width),
-            static_cast<int>(height),
-            frameDc,
-            0,
-            0,
-            SRCCOPY) == 0)
-    {
-        return E_FAIL;
-    }
-
-    return result;
+    return renderFrame();
 }
 
 LRESULT CMapWinGISControl::OnEraseBkgnd(
