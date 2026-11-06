@@ -536,7 +536,6 @@ STDMETHODIMP CMapWinGISControl::get_RenderingBackend(BSTR* backend)
 
 STDMETHODIMP CMapWinGISControl::get_RenderingStatus(BSTR* status)
 {
-    return CopyToBstr(_renderer.GetDiagnostic(), backend_or_status(status));
     return CopyToBstr(_renderer.GetDiagnostic(), status);
 }
 
