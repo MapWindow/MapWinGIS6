@@ -46,6 +46,7 @@ namespace mwg::test
         bool unknownCount = false;
         bool ignoredFields = false;
         bool ignoredGeometry = false;
+        std::string layerName = "features";
         std::string storedName = "Original";
         int storedValue = 0;
         int nextFeature = 0;
@@ -53,6 +54,7 @@ namespace mwg::test
         int countCalls = 0;
         int extentCalls = 0;
         int recomputeExtentCalls = 0;
+        std::string recomputeExtentStatement;
 
     private:
         std::unique_ptr<GDALDriver> _driver;

@@ -509,6 +509,7 @@ namespace mwg
         bool finalized = false;
         std::optional<PersistentOutput> persistentOutput;
         GDALArgDatasetValue* outputValue = nullptr;
+        bool outputWasClosed = false;
         if (succeeded)
         {
             GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());
@@ -553,6 +554,7 @@ namespace mwg
             GdalErrorScope outputScope;
             const std::size_t outputErrorCount = _impl->errors.size();
             const bool outputClosed = outputValue->Close();
+            outputWasClosed = outputClosed;
             AppendErrors(_impl->errors, outputScope);
             outputScope.RethrowCaptureException();
             if (!outputClosed)
@@ -631,7 +633,7 @@ namespace mwg
                                            ? actualAlgorithm->GetArg("output")
                                            : nullptr;
             bool outputClosed = true;
-            if (output != nullptr && output->GetType() == GAAT_DATASET)
+            if (output != nullptr && output->GetType() == GAAT_DATASET && !outputWasClosed)
             {
                 outputClosed = output->Get<GDALArgDatasetValue>().Close();
             }

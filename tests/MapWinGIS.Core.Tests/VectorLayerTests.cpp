@@ -560,6 +560,7 @@ TEST(VectorLayer, AttributeEditsDoNotInvalidateTheExtent)
 TEST(VectorLayer, FailedGeometryWritesDiscardTheEditedFeatureAndExtentCache)
 {
     VectorReadTestDriver driver;
+    driver.simulateShapefile = true;
     const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath, OpenMode::Update);
     VectorLayer& layer = dataset->Layer(0);
     ASSERT_DOUBLE_EQ(layer.GetExtent().xMax, 1.0);
@@ -569,12 +570,16 @@ TEST(VectorLayer, FailedGeometryWritesDiscardTheEditedFeatureAndExtentCache)
         0, "POLYGON ((10 0, 11 0, 11 1, 10 1, 10 0))"), CoreError);
     EXPECT_EQ(layer.GeometryWkt(0), original);
     EXPECT_DOUBLE_EQ(layer.GetExtent().xMax, 1.0);
+    driver.failSetFeature = false;
+    EXPECT_NO_THROW(dataset->Flush());
+    EXPECT_EQ(driver.recomputeExtentCalls, 0);
 }
 
 TEST(VectorLayer, BatchesStoredExtentUpdatesAndRetriesAfterRecomputeFailure)
 {
     VectorReadTestDriver driver;
     driver.simulateShapefile = true;
+    driver.layerName = "road \"section\"";
     const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath, OpenMode::Update);
     ASSERT_EQ(dataset->DriverName(), "ESRI Shapefile");
     VectorLayer& layer = dataset->Layer(0);
@@ -594,11 +599,24 @@ TEST(VectorLayer, BatchesStoredExtentUpdatesAndRetriesAfterRecomputeFailure)
                   std::string::npos);
     }
     EXPECT_EQ(driver.recomputeExtentCalls, 1);
+    EXPECT_EQ(driver.recomputeExtentStatement, "RECOMPUTE EXTENT ON road \"section\"");
     driver.failRecomputeExtent = false;
     EXPECT_NO_THROW(dataset->Flush());
     EXPECT_EQ(driver.recomputeExtentCalls, 2);
     EXPECT_NO_THROW(dataset->Flush());
     EXPECT_EQ(driver.recomputeExtentCalls, 2);
+}
+
+TEST(VectorLayer, FlushRecomputesExtentForShapefileLayerNamesWithSpaces)
+{
+    const TempDirectory directory;
+    const auto path = MakeProvincesDataset(directory.Path(), "road section.shp");
+    const auto dataset = VectorDataset::Open(path, OpenMode::Update);
+    VectorLayer& layer = dataset->Layer(0);
+
+    layer.SetGeometryWkt(0, "POLYGON ((100000 400000, 100001 400000, "
+                            "100001 400001, 100000 400001, 100000 400000))");
+    EXPECT_NO_THROW(dataset->Flush());
 }
 
 TEST(VectorLayer, PropagatesLoggerExceptionsFromWritesAndExtentQueries)

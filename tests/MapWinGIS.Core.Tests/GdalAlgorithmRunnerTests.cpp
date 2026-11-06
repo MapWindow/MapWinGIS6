@@ -223,9 +223,13 @@ namespace
     class FailingOutputDataset final : public GDALDataset
     {
     public:
-        FailingOutputDataset(const bool failFlush, const bool failClose)
+        static inline int closeCount = 0;
+
+        FailingOutputDataset(
+            const bool failFlush, const bool failClose, const bool reportCloseDiagnostic = false)
             : _failFlush(failFlush),
-              _failClose(failClose)
+              _failClose(failClose),
+              _reportCloseDiagnostic(reportCloseDiagnostic)
         {
         }
 
@@ -236,10 +240,17 @@ namespace
 
         CPLErr Close() override
         {
+            ++closeCount;
             const CPLErr flushResult = FlushCache(false);
-            return flushResult == CE_None
-                       ? ReportFailure(_failClose, "Simulated output close failure")
-                       : flushResult;
+            if (flushResult != CE_None)
+                return flushResult;
+            if (_reportCloseDiagnostic)
+            {
+                CPLError(CE_Failure, CPLE_FileIO, "%s",
+                         "Simulated diagnostic during successful output close");
+                return CE_None;
+            }
+            return ReportFailure(_failClose, "Simulated output close failure");
         }
 
     private:
@@ -257,6 +268,7 @@ namespace
 
         bool _failFlush;
         bool _failClose;
+        bool _reportCloseDiagnostic;
     };
 
     class OutputFailureAlgorithm final : public GDALAlgorithm
@@ -779,7 +791,8 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
         }
         const bool failFlush = path.ends_with(":flush");
         const bool failClose = path.ends_with(":close");
-        return new FailingOutputDataset(failFlush, failClose);
+        const bool reportCloseDiagnostic = path.ends_with(":close-diagnostic");
+        return new FailingOutputDataset(failFlush, failClose, reportCloseDiagnostic);
     };
     GetGDALDriverManager()->RegisterDriver(driver.get());
 
@@ -796,6 +809,9 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
     for (const FailureCase& failure : {
              FailureCase{"flush", "Simulated output flush failure", true, false, false, true, false},
              FailureCase{"close", "Simulated output close failure", true, false, false, true, false},
+             FailureCase{"close-diagnostic",
+                         "Simulated diagnostic during successful output close",
+                         true, false, false, true, false},
              FailureCase{"close", "Simulated output close failure", false, true, false, true, false},
              FailureCase{"reopen", "no dataset could be reopened", true, false, true, true, false},
              FailureCase{"finalize", "forced output finalization failure", true, false, true, false, false},
@@ -811,6 +827,7 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
         OutputFailureAlgorithm::rejectOpen = failure.rejectReopen;
         OutputFailureAlgorithm::finalizeSucceeded = failure.finalizeSucceeded;
         OutputFailureAlgorithm::openCount = 0;
+        FailingOutputDataset::closeCount = 0;
         GdalAlgorithmRunner failingRunner(
             failure.useGroupCommandLine ? "mwg-test" : "mwg-test output-failure");
         if (failure.useGroupCommandLine)
@@ -831,6 +848,8 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
             failingRunner.Result().DetailedErrorMsg().find(failure.diagnostic),
             std::string::npos)
             << failingRunner.Result().DetailedErrorMsg();
+        if (std::string_view(failure.kind) == "close-diagnostic")
+            EXPECT_EQ(FailingOutputDataset::closeCount, 1);
         OutputFailureAlgorithm::outputDataset = nullptr;
     }
 

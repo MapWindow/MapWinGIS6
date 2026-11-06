@@ -42,7 +42,7 @@ namespace mwg::test
         public:
             explicit VectorReadTestLayer(VectorReadTestDriver& state)
                 : _state(state),
-                  _definition(OGRFeatureDefn::CreateFeatureDefn("features"))
+                  _definition(OGRFeatureDefn::CreateFeatureDefn(state.layerName.c_str()))
             {
                 _definition->Reference();
                 _definition->SetGeomType(wkbPolygon);
@@ -201,6 +201,7 @@ namespace mwg::test
 
             OGRLayer* ExecuteSQL(const char* statement, OGRGeometry*, const char*) override
             {
+                _state.recomputeExtentStatement = statement;
                 if (!std::string_view(statement).starts_with("RECOMPUTE EXTENT ON "))
                     throw std::runtime_error("Unexpected test SQL statement");
                 ++_state.recomputeExtentCalls;

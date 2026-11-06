@@ -199,7 +199,6 @@ namespace mwg
             {
                 _extent.reset();
                 _extentNeedsExactRecalculation = true;
-                _storedExtentDirty = true;
             }
             if (result != OGRERR_NONE)
             {
@@ -215,6 +214,8 @@ namespace mwg
                     message += " (" + detail + ")";
                 throw CoreError(message);
             }
+            if (geometryChanged)
+                _storedExtentDirty = true;
             GdalEnvironment::RethrowLogException();
         }
 
