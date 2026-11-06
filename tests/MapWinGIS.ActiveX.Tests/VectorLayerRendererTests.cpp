@@ -289,7 +289,8 @@ TEST(VectorLayerRenderer, OpenGlRejectsTheFrameWhenAnyLayerIsUnsupported)
         S_FALSE);
     EXPECT_EQ(
         renderer.GetLastFailureReason(),
-        L"The scene uses geometry that the OpenGL backend does not support.");
+        L"The OpenGL preview backend supports only convex, hole-free "
+        L"polygons; this frame was rendered with GDI.");
 }
 
 TEST(VectorLayerRenderer, FailsWithoutDrawingNonFiniteCoordinates)
@@ -359,7 +360,8 @@ TEST(VectorLayerRenderer, UsesGdiForPolygonWithInteriorRing)
         mwg::activex::VectorRenderBackendKind::Gdi);
     EXPECT_EQ(
         renderer.GetDiagnostic(),
-        L"The scene uses geometry that the OpenGL backend does not support.");
+        L"The OpenGL preview backend supports only convex, hole-free "
+        L"polygons; this frame was rendered with GDI.");
     EXPECT_EQ(GetPixel(surface.Get(), 30, 50), kFill);
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), GetSysColor(COLOR_WINDOW));
 }

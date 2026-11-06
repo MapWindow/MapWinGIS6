@@ -26,6 +26,9 @@ The ActiveX rendering coordinator selects a backend for a Core render scene.
 GDI is the CPU fallback; OpenGL has a narrower supported-scene range and can
 fall back to GDI. Backends consume Core-produced geometry and do not own
 datasets or view state. The OCX owns the host-specific rendering resources.
+The control composes every frame in an offscreen DIB-section `FrameBuffer`
+and presents it with a single `BitBlt`; `WM_ERASEBKGND` is suppressed because
+`OnDraw` paints an opaque frame.
 
 Core objects are not thread-safe by default. The control serializes their use.
 ActiveX-specific implementation units are also compiled into

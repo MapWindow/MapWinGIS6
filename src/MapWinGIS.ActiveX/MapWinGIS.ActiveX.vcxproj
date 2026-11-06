@@ -67,6 +67,7 @@
   <ItemGroup>
     <ClInclude Include="ActiveXModule.h" />
     <ClInclude Include="ComConversion.h" />
+    <ClInclude Include="FrameBuffer.h" />
     <ClInclude Include="GdalDispatchWindow.h" />
     <ClInclude Include="GdalEventSource.h" />
     <ClInclude Include="GdalOperationDispatcher.h" />

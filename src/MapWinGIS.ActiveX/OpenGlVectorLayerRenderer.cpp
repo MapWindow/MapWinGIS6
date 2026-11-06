@@ -564,7 +564,8 @@ namespace mwg::activex
         if (!IsSupported(scene))
         {
             _lastFailureReason =
-                L"The scene uses geometry that the OpenGL backend does not support.";
+                L"The OpenGL preview backend supports only convex, hole-free "
+                L"polygons; this frame was rendered with GDI.";
             return {S_FALSE, std::nullopt};
         }
 

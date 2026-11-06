@@ -7,8 +7,10 @@
  *
  * Redraws: every map or view change made through the control goes through
  * its MapView; the control calls FireViewChange when the MapView reports
- * that the frame changed. OnDraw draws the MapView's render scene through
- * its viewport, so every layer uses the same transformation.
+ * that the frame changed. OnDraw composes the MapView's render scene through
+ * its viewport into an offscreen frame buffer and presents the finished
+ * frame with a single blit, so every layer uses the same transformation and
+ * the visible surface never shows a partially drawn frame.
  */
 #include "MapWinGISControl.h"
 
@@ -1041,46 +1043,106 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
         drawInfo.prcBounds->right,
         drawInfo.prcBounds->bottom};
 
-    if (::FillRect(
-            drawInfo.hdcDraw,
-            &bounds,
-            ::GetSysColorBrush(COLOR_WINDOW)) == 0)
-    {
-        return E_FAIL;
-    }
-
     const LONGLONG width = static_cast<LONGLONG>(bounds.right) - bounds.left;
     const LONGLONG height = static_cast<LONGLONG>(bounds.bottom) - bounds.top;
-    if (width <= 0 || height <= 0 ||
-        width > mwg::Viewport::kMaxDimension || height > mwg::Viewport::kMaxDimension)
+    const bool drawable = width > 0 && height > 0 &&
+        width <= mwg::Viewport::kMaxDimension && height <= mwg::Viewport::kMaxDimension;
+
+    // Compose the frame in an offscreen buffer and present it with a single
+    // blit, so the visible surface never shows the background erase or a
+    // partially drawn frame. Drawing straight to the target device context
+    // is the fallback for sizes the buffer cannot hold.
+    const bool buffered = drawable &&
+        _frameBuffer.Resize(
+            static_cast<int>(width),
+            static_cast<int>(height));
+    HDC frameDc = buffered ? _frameBuffer.Get() : drawInfo.hdcDraw;
+    RECT frameBounds = buffered
+        ? RECT{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)}
+        : bounds;
+
+    const auto renderFrame = [&]() -> HRESULT
     {
-        return S_OK;
-    }
-    try
-    {
-        const mwg::rendering::MapRenderScene& scene = _view.Scene();
-        // Printing and scaled draws use a snapshot, never the live viewport.
-        mwg::Viewport viewport = _view.GetViewport();
-        viewport.SetSize(static_cast<int>(width), static_cast<int>(height));
-        if (!viewport.HasView())
+        if (::FillRect(
+                frameDc,
+                &frameBounds,
+                ::GetSysColorBrush(COLOR_WINDOW)) == 0)
         {
-            (void)viewport.FitExtent(_view.GetMap().GetExtent(), mwg::MapView::kDefaultPadding);
+            return E_FAIL;
         }
-        if (scene.layers.empty() || !viewport.IsValid())
+
+        if (!drawable)
         {
             return S_OK;
         }
-        return _renderer.Draw(drawInfo.hdcDraw, bounds, scene, viewport);
-    }
-    catch (const std::bad_alloc&)
+
+        try
+        {
+            const mwg::rendering::MapRenderScene& scene = _view.Scene();
+            // Printing and scaled draws use a snapshot, never the live viewport.
+            mwg::Viewport viewport = _view.GetViewport();
+            viewport.SetSize(static_cast<int>(width), static_cast<int>(height));
+            if (!viewport.HasView())
+            {
+                (void)viewport.FitExtent(_view.GetMap().GetExtent(), mwg::MapView::kDefaultPadding);
+            }
+            if (!scene.layers.empty() && viewport.IsValid())
+            {
+                return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+            }
+            return S_OK;
+        }
+        catch (const std::bad_alloc&)
+        {
+            return E_OUTOFMEMORY;
+        }
+        catch (const std::exception& exception)
+        {
+            ::OutputDebugStringA(exception.what());
+            return E_FAIL;
+        }
+    };
+
+    if (buffered)
     {
-        return E_OUTOFMEMORY;
+        const HRESULT result = renderFrame();
+        if (FAILED(result))
+        {
+            return result;
+        }
+        if (::BitBlt(
+                drawInfo.hdcDraw,
+                bounds.left,
+                bounds.top,
+                static_cast<int>(width),
+                static_cast<int>(height),
+                frameDc,
+                0,
+                0,
+                SRCCOPY) != 0)
+        {
+            return result;
+        }
+
+        // A blit between different devices (printer or metafile targets)
+        // can fail; present the frame by drawing straight to the target.
+        frameDc = drawInfo.hdcDraw;
+        frameBounds = bounds;
     }
-    catch (const std::exception& exception)
-    {
-        ::OutputDebugStringA(exception.what());
-        return E_FAIL;
-    }
+
+    return renderFrame();
+}
+
+LRESULT CMapWinGISControl::OnEraseBkgnd(
+    UINT,
+    WPARAM,
+    LPARAM,
+    BOOL& handled)
+{
+    // OnDraw paints an opaque frame over the whole bounds, so erasing the
+    // background first would only flash the host's color through.
+    handled = TRUE;
+    return 1;
 }
 
 CMapWinGISControl::~CMapWinGISControl()
