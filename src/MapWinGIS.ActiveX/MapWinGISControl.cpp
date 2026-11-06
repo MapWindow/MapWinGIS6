@@ -16,7 +16,7 @@
  * offscreen buffer. While the user drags the map (WM_LBUTTONDOWN through
  * WM_LBUTTONUP), OnDraw paints the background and blits the cached frame at
  * the accumulated pixel offset instead of re-rasterizing every layer on
- * each WM_MOUSEMOVE; the button-up handler invalidates the cache so the new
+ * each WM_MOUSEMOVE; the drag-end handler invalidates the cache so the new
  * view is rasterized once. The cache is invalidated on layer add/remove/
  * clear, zoom, resize, and backend-preference changes.
  */
@@ -771,6 +771,24 @@ void CMapWinGISControl::CancelMousePan() noexcept
     }
 }
 
+void CMapWinGISControl::EndMousePan() noexcept
+{
+    if (!_isPanning)
+    {
+        return;
+    }
+
+    CancelMousePan();
+    // The drag ended: rasterize the layers once at the final view so the
+    // cached frame matches the new center exactly (a clamped pan can leave
+    // the blitted frame up to half a pixel off). Every drag termination
+    // path (button-up, capture loss, cancel mode, button released) goes
+    // through here, so a terminated drag never leaves the shifted cached
+    // frame on screen.
+    InvalidateLayerCache();
+    FireViewChange();
+}
+
 bool CMapWinGISControl::GetMousePoint(
     const LPARAM lParam,
     const bool screenCoordinates,
@@ -838,7 +856,7 @@ LRESULT CMapWinGISControl::OnMouseMove(
 
     if ((wParam & MK_LBUTTON) == 0)
     {
-        CancelMousePan();
+        EndMousePan();
         handled = TRUE;
         return 0;
     }
@@ -898,12 +916,7 @@ LRESULT CMapWinGISControl::OnLButtonUp(
         return 0;
     }
 
-    CancelMousePan();
-    // The drag ended: rasterize the layers once at the final view so the
-    // cached frame matches the new center exactly (a clamped pan can leave
-    // the blitted frame up to half a pixel off).
-    InvalidateLayerCache();
-    FireViewChange();
+    EndMousePan();
     handled = TRUE;
     return 0;
 }
@@ -955,7 +968,7 @@ LRESULT CMapWinGISControl::OnCaptureChanged(
     LPARAM,
     BOOL& handled)
 {
-    _isPanning = false;
+    EndMousePan();
     handled = TRUE;
     return 0;
 }
@@ -966,7 +979,7 @@ LRESULT CMapWinGISControl::OnCancelMode(
     LPARAM,
     BOOL& handled)
 {
-    CancelMousePan();
+    EndMousePan();
     handled = TRUE;
     return 0;
 }
