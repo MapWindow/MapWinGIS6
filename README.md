@@ -88,6 +88,7 @@ For additional configurations, dependency features, and troubleshooting, see
 | `tests/MapWinGIS.Core.Tests/` | Core C++ unit tests (GoogleTest) |
 | `tests/MapWinGIS.ActiveX.Tests/` | ActiveX and COM-hosting C++ unit tests (GoogleTest) |
 | `samples/Cpp/` | Buildable native C++ examples |
+| `samples/CSharp/ActiveXTestHost/` | WinForms host for manual and automated ActiveX testing |
 | `build/` | Shared MSBuild props, vcpkg triplets and scripts |
 | `docs/` | Build, architecture, coding, GDAL integration, porting and testing documentation |
 
