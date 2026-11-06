@@ -165,6 +165,13 @@ private:
     bool CaptureMouse() noexcept;
     void ReleaseMouseCapture() noexcept;
     void CancelMousePan() noexcept;
+
+    /// Ends an active drag pan through every termination path (button-up,
+    /// capture loss, cancel mode, button released): stops panning,
+    /// invalidates the layer cache so the final view is rasterized, and
+    /// requests a redraw.
+    void EndMousePan() noexcept;
+
     bool GetMousePoint(LPARAM lParam, bool screenCoordinates, POINT& point) const noexcept;
 
     /// Drops the cached layer frame; the next draw re-renders the layers
