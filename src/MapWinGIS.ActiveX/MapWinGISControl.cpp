@@ -15,6 +15,7 @@
 #include <atlconv.h>
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <limits>
@@ -24,6 +25,8 @@
 #include <utility>
 #include <vector>
 
+#include <windowsx.h>
+
 #include "ComConversion.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -31,6 +34,8 @@
 
 namespace
 {
+    constexpr double kMouseWheelZoomFactor = 1.2;
+
     using mwg::activex::ComConversion::BstrToUtf8;
     using mwg::activex::ComConversion::CopyStringArray;
     using mwg::activex::ComConversion::CopyToBstr;
@@ -706,6 +711,239 @@ bool CMapWinGISControl::ResizeView(const LONG width, const LONG height) noexcept
     }
 }
 
+bool CMapWinGISControl::CaptureMouse() noexcept
+{
+    if (m_bWndLess)
+    {
+        return m_spInPlaceSite != nullptr &&
+            SUCCEEDED(m_spInPlaceSite->SetCapture(TRUE));
+    }
+
+    if (m_hWnd == nullptr)
+    {
+        return false;
+    }
+
+    ::SetCapture(m_hWnd);
+    return ::GetCapture() == m_hWnd;
+}
+
+void CMapWinGISControl::ReleaseMouseCapture() noexcept
+{
+    if (m_bWndLess)
+    {
+        if (m_spInPlaceSite != nullptr)
+        {
+            m_spInPlaceSite->SetCapture(FALSE);
+        }
+    }
+    else if (m_hWnd != nullptr && ::GetCapture() == m_hWnd)
+    {
+        ::ReleaseCapture();
+    }
+}
+
+void CMapWinGISControl::CancelMousePan() noexcept
+{
+    if (_isPanning)
+    {
+        _isPanning = false;
+        ReleaseMouseCapture();
+    }
+}
+
+bool CMapWinGISControl::GetMousePoint(
+    const LPARAM lParam,
+    const bool screenCoordinates,
+    POINT& point) const noexcept
+{
+    point = POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+
+    HWND coordinateWindow = m_hWnd;
+    if (screenCoordinates)
+    {
+        if (m_bWndLess)
+        {
+            if (m_spInPlaceSite == nullptr ||
+                FAILED(m_spInPlaceSite->GetWindow(&coordinateWindow)))
+            {
+                return false;
+            }
+        }
+
+        if (coordinateWindow == nullptr ||
+            !::ScreenToClient(coordinateWindow, &point))
+        {
+            return false;
+        }
+    }
+
+    if (m_bWndLess)
+    {
+        point.x -= m_rcPos.left;
+        point.y -= m_rcPos.top;
+    }
+    return true;
+}
+
+LRESULT CMapWinGISControl::OnLButtonDown(
+    UINT,
+    WPARAM,
+    const LPARAM lParam,
+    BOOL& handled)
+{
+    POINT point{};
+    if (!GetMousePoint(lParam, false, point) || !CaptureMouse())
+    {
+        handled = FALSE;
+        return 0;
+    }
+
+    _lastPanPoint = point;
+    _isPanning = true;
+    handled = TRUE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnMouseMove(
+    UINT,
+    const WPARAM wParam,
+    const LPARAM lParam,
+    BOOL& handled)
+{
+    if (!_isPanning)
+    {
+        handled = FALSE;
+        return 0;
+    }
+
+    if ((wParam & MK_LBUTTON) == 0)
+    {
+        CancelMousePan();
+        handled = TRUE;
+        return 0;
+    }
+
+    POINT point{};
+    if (!GetMousePoint(lParam, false, point))
+    {
+        handled = TRUE;
+        return 0;
+    }
+
+    const LONG pixelDeltaX = point.x - _lastPanPoint.x;
+    const LONG pixelDeltaY = point.y - _lastPanPoint.y;
+    _lastPanPoint = point;
+    if (pixelDeltaX == 0 && pixelDeltaY == 0)
+    {
+        handled = TRUE;
+        return 0;
+    }
+
+    const std::optional<double> resolution = _view.GetViewport().Resolution();
+    if (!resolution.has_value())
+    {
+        handled = TRUE;
+        return 0;
+    }
+
+    bool changed = false;
+    const HRESULT result = RunViewOperation(
+        [this, pixelDeltaX, pixelDeltaY, resolution]()
+        {
+            return _view.Pan(
+                -static_cast<double>(pixelDeltaX) * *resolution,
+                static_cast<double>(pixelDeltaY) * *resolution);
+        },
+        changed);
+    if (SUCCEEDED(result) && changed)
+    {
+        FireViewChange();
+    }
+
+    handled = TRUE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnLButtonUp(
+    UINT,
+    WPARAM,
+    LPARAM,
+    BOOL& handled)
+{
+    if (!_isPanning)
+    {
+        handled = FALSE;
+        return 0;
+    }
+
+    CancelMousePan();
+    handled = TRUE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnMouseWheel(
+    UINT,
+    const WPARAM wParam,
+    const LPARAM lParam,
+    BOOL& handled)
+{
+    const int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+    POINT point{};
+    const mwg::Viewport& viewport = _view.GetViewport();
+    if (wheelDelta == 0 ||
+        !viewport.IsValid() ||
+        !GetMousePoint(lParam, true, point) ||
+        point.x < 0 || point.x >= viewport.Width() ||
+        point.y < 0 || point.y >= viewport.Height())
+    {
+        handled = FALSE;
+        return 0;
+    }
+
+    const double factor = std::pow(
+        kMouseWheelZoomFactor,
+        static_cast<double>(wheelDelta) / WHEEL_DELTA);
+    bool changed = false;
+    const HRESULT result = RunViewOperation(
+        [this, point, factor]()
+        {
+            return _view.ZoomAt(
+                {static_cast<double>(point.x), static_cast<double>(point.y)},
+                factor);
+        },
+        changed);
+    if (SUCCEEDED(result) && changed)
+    {
+        FireViewChange();
+    }
+
+    handled = TRUE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnCaptureChanged(
+    UINT,
+    WPARAM,
+    LPARAM,
+    BOOL& handled)
+{
+    _isPanning = false;
+    handled = TRUE;
+    return 0;
+}
+
+LRESULT CMapWinGISControl::OnCancelMode(
+    UINT,
+    WPARAM,
+    LPARAM,
+    BOOL& handled)
+{
+    CancelMousePan();
+    handled = TRUE;
+    return 0;
+}
+
 LRESULT CMapWinGISControl::OnSize(
     UINT,
     WPARAM,
@@ -736,6 +974,7 @@ LRESULT CMapWinGISControl::OnDestroy(
     LPARAM,
     BOOL& handled)
 {
+    CancelMousePan();
     _gdalEvents.OnDestroy();
     handled = FALSE;
     return 0;
@@ -762,6 +1001,7 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
 
 STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
 {
+    CancelMousePan();
     _gdalEvents.Close();
     return ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
 }
@@ -845,5 +1085,6 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
 
 CMapWinGISControl::~CMapWinGISControl()
 {
+    CancelMousePan();
     _gdalEvents.Shutdown();
 }

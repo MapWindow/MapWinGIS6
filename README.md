@@ -27,8 +27,9 @@ cancellation events.
 The core also supports a shared map viewport with pan, center zoom, anchored
 zoom, and fitting to the visible map or a named layer. These navigation calls
 do not depend on a window. `IMapWinGISControl4` exposes this programmatic
-navigation and stable layer IDs through ActiveX; mouse navigation remains
-future work.
+navigation and stable layer IDs through ActiveX. The control also supports
+left-button drag panning and cursor-anchored mouse-wheel zoom. Resizing keeps
+the current map center and resolution.
 
 Vector loads add layers rather than replace them. Call `ClearLayers` to
 release the loaded datasets before switching or refreshing them.
