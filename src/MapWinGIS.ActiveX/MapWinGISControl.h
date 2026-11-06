@@ -4,8 +4,8 @@
  * @file MapWinGISControl.h
  * @brief Declares the COM-creatable MapWinGIS ActiveX control.
  *
- * Provides automation for vector loading, GDAL operations, rendering
- * preferences, and painting the map's polygon layers. The control owns one
+ * Provides automation for vector loading, map navigation, GDAL operations,
+ * rendering preferences, and painting polygon layers. The control owns one
  * Core MapView, the only map and view state; it forwards host events to it
  * and draws its render scene through its viewport.
  */
@@ -37,12 +37,15 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IViewObjectExImpl<CMapWinGISControl>,
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
+    public ISupportErrorInfo,
+    // Load the default dispatch type information from this OCX, not a
+    // potentially older registered copy of the same type library.
     public ATL::IDispatchImpl<
-        IMapWinGISControl3,
-        &IID_IMapWinGISControl3,
+        IMapWinGISControl4,
+        &IID_IMapWinGISControl4,
         &LIBID_MapWinGISActiveXLib,
-        1,
-        0>,
+        0xFFFF,
+        0xFFFF>,
     public ATL::IDispatchImpl<
         IMapWinGISControlGdal,
         &IID_IMapWinGISControlGdal,
@@ -58,12 +61,14 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IMapWinGISControl3)
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
+        COM_INTERFACE_ENTRY(ISupportErrorInfo)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
-        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl3)
+        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IViewObjectEx)
         COM_INTERFACE_ENTRY(IViewObject2)
         COM_INTERFACE_ENTRY(IViewObject)
@@ -92,6 +97,7 @@ public:
 
     DECLARE_VIEW_STATUS(VIEWSTATUS_SOLIDBKGND | VIEWSTATUS_OPAQUE)
 
+    STDMETHOD(InterfaceSupportsErrorInfo)(REFIID interfaceId) override;
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
     STDMETHOD(LoadVectorDataset)(BSTR path) override;
     STDMETHOD(ClearLayers)() override;
@@ -101,6 +107,15 @@ public:
     STDMETHOD(get_RenderingStatus)(BSTR* status) override;
     STDMETHOD(get_RenderingBackendPreference)(BSTR* preference) override;
     STDMETHOD(put_RenderingBackendPreference)(BSTR preference) override;
+    STDMETHOD(FitToMap)() override;
+    STDMETHOD(ZoomIn)(DOUBLE factor) override;
+    STDMETHOD(ZoomOut)(DOUBLE factor) override;
+    STDMETHOD(Pan)(DOUBLE deltaX, DOUBLE deltaY) override;
+    STDMETHOD(ZoomAt)(DOUBLE x, DOUBLE y, DOUBLE factor) override;
+    STDMETHOD(ZoomToLayer)(LONGLONG layerId) override;
+    STDMETHOD(get_LayerCount)(LONG* count) override;
+    STDMETHOD(LoadVectorDatasetEx)(BSTR path, LONGLONG* layerId) override;
+    STDMETHOD(GetLayerId)(LONG index, LONGLONG* layerId) override;
     STDMETHOD(BeginGdalOperation)(
         BSTR algorithmPath,
         SAFEARRAY* arguments,
@@ -127,6 +142,8 @@ public:
     ~CMapWinGISControl();
 
 private:
+    HRESULT LoadVectorDatasetImpl(BSTR path, LONGLONG* layerId, REFIID sourceIid);
+
     /// Resizes the view to a host size, clamped to the supported range, and
     /// returns true when the frame must be redrawn.
     bool ResizeView(LONG width, LONG height) noexcept;
