@@ -90,6 +90,12 @@ public:
     END_PROP_MAP()
 
     BEGIN_MSG_MAP(CMapWinGISControl)
+        MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
+        MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
+        MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
+        MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
+        MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChanged)
+        MESSAGE_HANDLER(WM_CANCELMODE, OnCancelMode)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
         CHAIN_MSG_MAP(ATL::CComControl<CMapWinGISControl>)
@@ -134,6 +140,12 @@ public:
     STDMETHOD(Close)(DWORD saveOption) override;
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
+    LRESULT OnLButtonDown(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnMouseMove(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnLButtonUp(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnMouseWheel(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnCaptureChanged(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnCancelMode(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnGdalDispatch(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -147,11 +159,17 @@ private:
     /// Resizes the view to a host size, clamped to the supported range, and
     /// returns true when the frame must be redrawn.
     bool ResizeView(LONG width, LONG height) noexcept;
+    bool CaptureMouse() noexcept;
+    void ReleaseMouseCapture() noexcept;
+    void CancelMousePan() noexcept;
+    bool GetMousePoint(LPARAM lParam, bool screenCoordinates, POINT& point) const noexcept;
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
+    POINT _lastPanPoint{};
+    bool _isPanning = false;
 };
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

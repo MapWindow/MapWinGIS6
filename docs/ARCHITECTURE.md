@@ -228,8 +228,9 @@ has no extent or transform of its own.
   the view cancels it. A missing layer or an invalid extent also cancels a
   pending fit. Navigation that returns `false` keeps it, including `ZoomAt`
   on a zero-sized viewport and center zoom at a resolution limit.
-  None of this depends on COM, mouse messages, or a
-  renderer; Phase 5 maps input onto these calls.
+  None of this depends on COM, mouse messages, or a renderer. The ActiveX
+  control maps left-button drags and cursor-anchored wheel input onto these
+  calls.
 
 ## ActiveX and rendering architecture
 
@@ -261,7 +262,13 @@ viewport. For windowless hosts, `SetObjectRects` supplies the live size.
 output, and scaled draws do not change the live viewport or its pending fit.
 If no view exists yet, drawing fits only that copy to the visible map extent.
 Resizing updates the OpenGL viewport and staging buffers without changing
-ownership of map data.
+ownership of map data. A left-button drag pans the shared `MapView` by the
+pixel delta converted with the viewport's map-units-per-pixel resolution.
+Wheel input calls `MapView::ZoomAt` at the cursor. The control acquires and
+releases mouse capture through either its window or its windowless in-place
+site, and ends a drag on capture loss, cancellation, close, or destruction.
+These view changes do not rebuild the render scene, and both backends draw
+through the updated viewport.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. For each
@@ -391,9 +398,9 @@ Windows CPU fallback; Core has no independent platform-neutral renderer.
 The C# host's pixel assertions, activation, and native tests pass for Debug
 and Release on Win32 and x64 in an interactive desktop session.
 Core navigation on the shared `MapView` (zoom to map and layer, zoom in and
-out, anchored zoom, and pan) is implemented but not yet exposed through COM or
-mouse input; that is the next milestone. Deep zoom can push a layer past the
-GDI coordinate range until clipping exists. Measure scene preparation with
-representative datasets before adding caching, paging, or broader OpenGL
-geometry support.
+out, anchored zoom, and pan) is exposed through `IMapWinGISControl4`; the
+ActiveX control also supports left-button drag panning and cursor-anchored
+wheel zoom. Deep zoom can push a layer past the GDI coordinate range until
+clipping exists. Measure scene preparation with representative datasets
+before adding caching, paging, or broader OpenGL geometry support.
 OpenCL and full MapWinGIS 5 API parity remain deferred.

@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <cwchar>
 #include <fstream>
 #include <string>
@@ -1834,6 +1835,167 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             EXPECT_EQ(
                 GetPixel(resizedSurface.Get(), resizedWidth / 2, resizedHeight / 2),
                 RGB(61, 122, 169));
+
+            ATL::CComQIPtr<IOleInPlaceObjectWindowless> inputControl(hostedControl);
+            ASSERT_NE(inputControl.p, nullptr);
+            ATL::CComQIPtr<IMapWinGISControl4> navigationControl(hostedControl);
+            ASSERT_NE(navigationControl.p, nullptr);
+            BitmapSurface initialNavigationSurface(resizedWidth, resizedHeight);
+            BitmapSurface wheelNavigationSurface(resizedWidth, resizedHeight);
+            BitmapSurface panNavigationSurface(resizedWidth, resizedHeight);
+            BitmapSurface expectedNavigationSurface(resizedWidth, resizedHeight);
+            ASSERT_TRUE(initialNavigationSurface.IsValid());
+            ASSERT_TRUE(wheelNavigationSurface.IsValid());
+            ASSERT_TRUE(panNavigationSurface.IsValid());
+            ASSERT_TRUE(expectedNavigationSurface.IsValid());
+            ASSERT_EQ(navigationControl->FitToMap(), S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                initialNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+
+            const int anchorX = resizedWidth / 3;
+            const int anchorY = resizedHeight / 3;
+            POINT wheelPoint{
+                resizedBounds.left + anchorX,
+                resizedBounds.top + anchorY};
+            ASSERT_TRUE(ClientToScreen(hostWindow.Get(), &wheelPoint));
+            LRESULT inputResult = 0;
+            ASSERT_EQ(
+                inputControl->OnWindowMessage(
+                    WM_MOUSEWHEEL,
+                    MAKEWPARAM(0, WHEEL_DELTA),
+                    MAKELPARAM(wheelPoint.x, wheelPoint.y),
+                    &inputResult),
+                S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                wheelNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            EXPECT_TRUE(HasDifferentPixel(
+                initialNavigationSurface.Get(),
+                wheelNavigationSurface.Get(),
+                resizedWidth,
+                resizedHeight));
+
+            HWND controlWindow = nullptr;
+            const HRESULT getWindowResult = inputControl->GetWindow(&controlWindow);
+            POINT dragStart{anchorX, anchorY};
+            if (getWindowResult == E_FAIL)
+            {
+                dragStart.x += resizedBounds.left;
+                dragStart.y += resizedBounds.top;
+            }
+            else
+            {
+                ASSERT_TRUE(SUCCEEDED(getWindowResult));
+                ASSERT_NE(controlWindow, nullptr);
+            }
+
+            constexpr int dragDeltaX = 24;
+            constexpr int dragDeltaY = 12;
+            ASSERT_EQ(
+                inputControl->OnWindowMessage(
+                    WM_LBUTTONDOWN,
+                    MK_LBUTTON,
+                    MAKELPARAM(dragStart.x, dragStart.y),
+                    &inputResult),
+                S_OK);
+            ASSERT_EQ(
+                inputControl->OnWindowMessage(
+                    WM_MOUSEMOVE,
+                    MK_LBUTTON,
+                    MAKELPARAM(
+                        dragStart.x + dragDeltaX,
+                        dragStart.y + dragDeltaY),
+                    &inputResult),
+                S_OK);
+            ASSERT_EQ(
+                inputControl->OnWindowMessage(
+                    WM_LBUTTONUP,
+                    0,
+                    MAKELPARAM(
+                        dragStart.x + dragDeltaX,
+                        dragStart.y + dragDeltaY),
+                    &inputResult),
+                S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                panNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            EXPECT_TRUE(HasDifferentPixel(
+                wheelNavigationSurface.Get(),
+                panNavigationSurface.Get(),
+                resizedWidth,
+                resizedHeight));
+
+            mwg::Viewport expectedNavigation(resizedWidth, resizedHeight);
+            ASSERT_TRUE(expectedNavigation.FitExtent({0, 0, 10, 5}, 12.0));
+            ASSERT_TRUE(expectedNavigation.ZoomAt(
+                {static_cast<double>(anchorX), static_cast<double>(anchorY)},
+                1.2));
+            const std::optional<double> resolutionAfterWheel =
+                expectedNavigation.Resolution();
+            ASSERT_TRUE(resolutionAfterWheel.has_value());
+            ASSERT_TRUE(expectedNavigation.Pan(
+                -dragDeltaX * *resolutionAfterWheel,
+                dragDeltaY * *resolutionAfterWheel));
+            ASSERT_EQ(navigationControl->FitToMap(), S_OK);
+            ASSERT_EQ(
+                navigationControl->ZoomAt(anchorX, anchorY, 1.2),
+                S_OK);
+            ASSERT_EQ(
+                navigationControl->Pan(
+                    -dragDeltaX * *resolutionAfterWheel,
+                    dragDeltaY * *resolutionAfterWheel),
+                S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                expectedNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            EXPECT_FALSE(HasDifferentPixel(
+                panNavigationSurface.Get(),
+                expectedNavigationSurface.Get(),
+                resizedWidth,
+                resizedHeight));
+            const auto expectedFeaturePixel =
+                mwg::ToPixel(*expectedNavigation.MapToScreen({1, 2.5}));
+            ASSERT_TRUE(expectedFeaturePixel.has_value());
+            EXPECT_EQ(
+                GetPixel(
+                    panNavigationSurface.Get(),
+                    expectedFeaturePixel->x,
+                    expectedFeaturePixel->y),
+                RGB(61, 122, 169));
+            ASSERT_EQ(navigationControl->FitToMap(), S_OK);
 
             ATL::CComBSTR openGlPreference(L"OpenGL");
             ASSERT_EQ(
