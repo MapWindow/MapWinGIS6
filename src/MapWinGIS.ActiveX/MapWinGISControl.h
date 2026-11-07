@@ -165,11 +165,48 @@ private:
     bool CaptureMouse() noexcept;
     void ReleaseMouseCapture() noexcept;
     void CancelMousePan() noexcept;
+
+    /// Ends an active drag pan through every termination path (button-up,
+    /// capture loss, cancel mode, button released): stops panning,
+    /// invalidates the layer cache so the final view is rasterized, and
+    /// requests a redraw.
+    void EndMousePan() noexcept;
+
     bool GetMousePoint(LPARAM lParam, bool screenCoordinates, POINT& point) const noexcept;
+
+    /// Drops the cached layer frame; the next draw re-renders the layers
+    /// into the cache. Called when layers, the view (except a drag pan), the
+    /// viewport size, or the backend preference changes.
+    void InvalidateLayerCache() noexcept;
+
+    /// Paints the cached layer frame over the already-cleared frame device
+    /// context, shifted to the viewport's current view when only the center
+    /// moved (a drag pan). Returns true when the cache could be used; false
+    /// when the layers must be re-rendered (cache miss, resize, zoom, or a
+    /// clamped, sub-pixel pan).
+    bool TryBlitCachedLayers(HDC frameDc, const mwg::Viewport& viewport) noexcept;
+
+    /// Draws the layers for the viewport, refreshing the layer cache when
+    /// useCache holds. Falls back to drawing straight to frameDc when the
+    /// cache cannot be allocated or the cached frame cannot be blitted.
+    [[nodiscard]] HRESULT DrawLayersAndUpdateCache(
+        HDC frameDc,
+        const RECT& frameBounds,
+        const mwg::rendering::MapRenderScene& scene,
+        const mwg::Viewport& viewport,
+        bool useCache);
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
     mwg::activex::FrameBuffer _frameBuffer;
+    mwg::activex::FrameBuffer _layerCache;
+    mwg::Viewport _layerCacheViewport;
+
+    /// COLOR_WINDOW the cached frame was rendered with; a system-color or
+    /// high-contrast change makes the cache unusable.
+    COLORREF _layerCacheBackground = 0;
+
+    bool _layerCacheValid = false;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
     POINT _lastPanPoint{};
