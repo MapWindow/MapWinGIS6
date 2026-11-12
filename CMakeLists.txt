@@ -71,3 +71,8 @@ mwg_add_runtime_data_target()
 
 add_subdirectory(src/MapWinGIS.Core)
 add_subdirectory(src/MapWinGIS.ActiveX)
+
+if(MWG_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests/MapWinGIS.Core.Tests)
+endif()
