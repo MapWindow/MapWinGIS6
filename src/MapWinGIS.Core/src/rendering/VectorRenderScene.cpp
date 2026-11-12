@@ -20,6 +20,7 @@
 
 #include "internal/VectorLayerAccess.h"
 #include "internal/VectorRenderSceneBuilder.h"
+#include "mapwingis/rendering/PolygonTriangulation.h"
 
 namespace mwg::rendering
 {
@@ -112,6 +113,24 @@ namespace mwg::rendering
             {
                 AppendGeometry(geometry, scene);
             });
+
+        // Prepare one fill mesh per polygon while the scene is created, so
+        // renderers never triangulate per frame. A polygon that cannot be
+        // triangulated keeps a null mesh; its rings above remain available
+        // for outlines and ring-based backends such as GDI.
+        scene.fillMeshes.reserve(scene.polygons.size());
+        for (const Polygon& polygon : scene.polygons)
+        {
+            std::optional<TriangleMesh> mesh;
+            try
+            {
+                mesh = TriangulatePolygon(polygon);
+            }
+            catch (const CoreError&)
+            {
+            }
+            scene.fillMeshes.push_back(std::move(mesh));
+        }
         return scene;
     }
 

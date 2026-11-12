@@ -69,6 +69,7 @@
     <ClCompile Include="MapRenderSceneTests.cpp" />
     <ClCompile Include="MapTests.cpp" />
     <ClCompile Include="MapViewTests.cpp" />
+    <ClCompile Include="PolygonTriangulationTests.cpp" />
     <ClCompile Include="ViewportTests.cpp" />
     <ClCompile Include="TestData.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
