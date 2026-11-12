@@ -57,10 +57,21 @@ param(
 
     [string] $OutputPath,
 
-    [switch] $FailOnLostFlags
+    [switch] $FailOnLostFlags,
+
+    [switch] $FailOnAddedFlags,
+
+    [switch] $FailOnNewWarnings
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($FailOnAddedFlags -and -not $CMakeBuildDir) {
+    throw '-FailOnAddedFlags requires -CMakeBuildDir.'
+}
+if ($FailOnNewWarnings -and (-not $CMakeBuildDir -or -not $CMakeBuildLog)) {
+    throw '-FailOnNewWarnings requires -CMakeBuildDir and -CMakeBuildLog.'
+}
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $parityDir = Join-Path $repoRoot 'out\parity'
@@ -252,6 +263,7 @@ function Read-MSBuildCommands([string] $logPath, [string] $binDir) {
     $compiles = @{}
     $links = @{}
     $projectDirs = @{}
+    $duplicateCompiles = 0
     Get-ChildItem -Path $repoRoot -Recurse -Filter *.vcxproj -File |
         Where-Object { $_.FullName -notmatch '\\(out|obj|bin|vcpkg_installed)\\' } |
         ForEach-Object { $projectDirs[$_.BaseName] = $_.DirectoryName }
@@ -276,7 +288,12 @@ function Read-MSBuildCommands([string] $logPath, [string] $binDir) {
             $set = ConvertTo-OptionSet $arguments $baseDir $placeholders @('.c', '.cpp', '.cxx', '.cc')
             foreach ($source in $set.Sources) {
                 # Keyed by target: the tests compile some ActiveX sources a second time.
-                $compiles["$target $source"] = [pscustomobject]@{
+                $key = "$target $source"
+                if ($compiles.ContainsKey($key)) {
+                    $duplicateCompiles++
+                    Write-Warning "Duplicate MSBuild compile entry for target '$target' and source '$source'; the parity report keeps the last command."
+                }
+                $compiles[$key] = [pscustomobject]@{
                     Target  = $target
                     Source  = $source
                     Options = Merge-VcpkgPlatform $set.Options
@@ -300,12 +317,17 @@ function Read-MSBuildCommands([string] $logPath, [string] $binDir) {
         }
     }
 
-    return [pscustomobject]@{ Compiles = $compiles; Links = $links }
+    return [pscustomobject]@{
+        Compiles          = $compiles
+        Links             = $links
+        DuplicateCompiles = $duplicateCompiles
+    }
 }
 
 function Read-CMakeCommands([string] $buildDir, [string] $logPath, [string] $binDir) {
     $compiles = @{}
     $links = @{}
+    $duplicateCompiles = 0
 
     $database = Join-Path $buildDir 'compile_commands.json'
     if (-not (Test-Path -LiteralPath $database)) {
@@ -321,7 +343,12 @@ function Read-CMakeCommands([string] $buildDir, [string] $logPath, [string] $bin
         $set = ConvertTo-OptionSet $arguments $entry.directory $placeholders @('.c', '.cpp', '.cxx', '.cc')
         $source = Get-NormalizedPath $entry.file $entry.directory $placeholders
         $target = if ($intDir -match '\\CMakeFiles\\(?<t>[^\\]+)\.dir') { $Matches['t'] } else { '' }
-        $compiles["$target $source"] = [pscustomobject]@{
+        $key = "$target $source"
+        if ($compiles.ContainsKey($key)) {
+            $duplicateCompiles++
+            Write-Warning "Duplicate CMake compile entry for target '$target' and source '$source'; the parity report keeps the last command."
+        }
+        $compiles[$key] = [pscustomobject]@{
             Target  = $target
             Source  = $source
             Options = Merge-VcpkgPlatform $set.Options
@@ -344,7 +371,11 @@ function Read-CMakeCommands([string] $buildDir, [string] $logPath, [string] $bin
         }
     }
 
-    return [pscustomobject]@{ Compiles = $compiles; Links = $links }
+    return [pscustomobject]@{
+        Compiles          = $compiles
+        Links             = $links
+        DuplicateCompiles = $duplicateCompiles
+    }
 }
 
 function Get-WarningCount([string] $logPath) {
@@ -405,8 +436,16 @@ if (-not $MSBuildLog) {
     $msbuildExe = Find-MSBuild
     Write-Host "MSBuild: $msbuildExe"
     # A rebuild guarantees that every translation unit appears in the log.
-    & $msbuildExe (Join-Path $repoRoot 'MapWinGIS6.slnx') -restore '-t:Rebuild' "-p:Configuration=$Configuration" `
-        "-p:Platform=$Platform" -m '-v:m' "-flp:logfile=$MSBuildLog;verbosity=detailed"
+    $buildArguments = @(
+        (Join-Path $repoRoot 'MapWinGIS6.slnx'),
+        '-restore',
+        '-t:Rebuild',
+        "-p:Configuration=$Configuration",
+        "-p:Platform=$Platform"
+    )
+    if ($env:MWG_WINDOWS_SDK) { $buildArguments += "-p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK" }
+    $buildArguments += @('-m', '-v:m', "-flp:logfile=$MSBuildLog;verbosity=detailed")
+    & $msbuildExe @buildArguments
     if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE" }
 }
 
@@ -427,6 +466,7 @@ $report = [ordered]@{
 # --- CMake side and diff ---------------------------------------------------
 
 $lostTotal = 0
+$addedTotal = 0
 if ($CMakeBuildDir) {
     $CMakeBuildDir = (Resolve-Path -LiteralPath $CMakeBuildDir).Path
     if (-not $CMakeBinDirectory) { $CMakeBinDirectory = Join-Path $CMakeBuildDir 'bin' }
@@ -450,10 +490,12 @@ if ($CMakeBuildDir) {
         if ($diff.Lost.Count -or $diff.Added.Count) {
             $compileDiff[$key] = $diff
             $lostTotal += $diff.Lost.Count
+            $addedTotal += $diff.Added.Count
         }
     }
     foreach ($key in ($cmakeCommands.Compiles.Keys | Where-Object { -not $msbuildCommands.Compiles.ContainsKey($_) })) {
         $compileDiff[$key] = 'only in CMake'
+        $addedTotal++
     }
 
     $linkDiff = [ordered]@{}
@@ -463,7 +505,12 @@ if ($CMakeBuildDir) {
         if ($diff.Lost.Count -or $diff.Added.Count) {
             $linkDiff[$binary] = $diff
             $lostTotal += $diff.Lost.Count
+            $addedTotal += $diff.Added.Count
         }
+    }
+    foreach ($binary in ($cmakeCommands.Links.Keys | Where-Object { -not $msbuildCommands.Links.ContainsKey($_) })) {
+        $linkDiff[$binary] = 'only in CMake'
+        $addedTotal++
     }
 
     $report.cmake = [ordered]@{
@@ -508,7 +555,12 @@ if ($CMakeBuildDir) {
     Write-Host "CMake TUs/links:     $($report.cmake.compiles.Count) / $($report.cmake.links.Count)"
     Write-Host "CMake warnings:      $($report.cmake.warnings)"
     Write-Host "Lost options:        $lostTotal"
+    Write-Host "Added options/TUs/links: $addedTotal"
+    Write-Host "Duplicate CMake compile entries: $($cmakeCommands.DuplicateCompiles)"
 }
+Write-Host "Duplicate MSBuild compile entries: $($msbuildCommands.DuplicateCompiles)"
 Write-Host "Report:              $OutputPath"
 
 if ($FailOnLostFlags -and $lostTotal -gt 0) { exit 1 }
+if ($FailOnAddedFlags -and $addedTotal -gt 0) { exit 1 }
+if ($FailOnNewWarnings -and $report.cmake.warnings -gt $report.msbuild.warnings) { exit 1 }
