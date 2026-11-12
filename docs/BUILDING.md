@@ -211,7 +211,7 @@ then configure from a VS 2026 Developer PowerShell (or any shell after
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 cmake --preset x64-debug
 cmake --build --preset x64-debug
-ctest --preset x64-debug --output-on-failure -LE interactive
+ctest --preset x64-debug --output-on-failure
 ```
 
 | Preset | Generator | Build directory |

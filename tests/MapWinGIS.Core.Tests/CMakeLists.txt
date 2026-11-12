@@ -97,7 +97,6 @@ if(_mwg_activation_shell)
     add_test(NAME Verify-ActiveXActivation
         COMMAND "${_mwg_activation_shell}" -NoProfile -File
             "${CMAKE_CURRENT_SOURCE_DIR}/Verify-ActiveXActivation.ps1"
-            -Configuration "$<CONFIG>"
             -Platform "${MWG_PLATFORM}"
             -BinDirectory "${MWG_RUNTIME_DIR}"
     )

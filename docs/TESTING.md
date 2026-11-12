@@ -25,7 +25,7 @@ The CMake test target uses the same GoogleTest sources and fixtures:
 ```powershell
 cmake --preset x64-debug
 cmake --build --preset x64-debug
-ctest --preset x64-debug --output-on-failure -LE interactive
+ctest --preset x64-debug --output-on-failure
 ```
 
 `gtest_discover_tests()` discovers individual cases before CTest runs them.
