@@ -79,7 +79,7 @@ try {
     $control = $null
 
     $testExecutable = [System.IO.Path]::GetFullPath(
-        (Join-Path $PSScriptRoot "..\..\bin\$Configuration\$Platform\MapWinGIS.Core.Tests.exe")
+        (Join-Path $PSScriptRoot "..\..\bin\$Configuration\$Platform\MapWinGIS.ActiveX.Tests.exe")
     )
     if (-not (Test-Path -LiteralPath $testExecutable -PathType Leaf)) {
         throw "The ActiveX hosting test executable was not found at '$testExecutable'. Build the solution first."

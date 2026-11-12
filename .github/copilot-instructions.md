@@ -5,6 +5,10 @@
 Follow [AGENTS.md](../AGENTS.md) and the detailed standards linked there.
 They take precedence over the general guidance below.
 
+Use the shared project memory by following the
+[AI Memory Management workflow in `AGENTS.md`](../AGENTS.md#ai-memory-management),
+starting with `.ai/memory/MEMORY.md`.
+
 `MapWinGIS.Core` is a C++20 DLL. It must not use COM, ATL, or MFC.
 The ActiveX wrapper has an initial implementation. COM/ActiveX guidance below
 applies to the implemented subset and any future compatibility work.
@@ -25,18 +29,21 @@ Run these commands from the repository root:
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
 Run one GoogleTest case by adding its suite and test name:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe --gtest_filter=VectorDatasetTest.ReportsTheDriverAndPath
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe --gtest_filter=VectorLayerRenderer.OpenGlRecreatesLostContextOnLaterDraw
 ```
 
 Write a JUnit-style test report when needed:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresults.xml
 ```
 
 The test project uses GoogleTest. Shared generated data and temporary-directory

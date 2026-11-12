@@ -55,6 +55,15 @@ multidimensional API.
 `TakeOutputDataset()` remains the runner's ownership-transfer method.
 Snapshots keep their diagnostics when a later compatibility operation changes the object's state.
 
+Persistent outputs that the runner owns pass a checked close before success.
+After successful finalization, the runner tries all registered readers to
+reopen them with their original access mode, then read-only if needed.
+If no reader can open an output, the write still succeeds with a warning.
+`TakeOutputDataset()` then returns `nullptr`.
+Anonymous outputs remain open so in-memory pipelines retain their sources.
+Caller-supplied output datasets remain caller-owned. The runner checks their
+flush, but the caller controls their final close.
+
 `Succeeded()` is true only after execution and finalization succeed.
 `LastErrorCode()` and `ErrorMsg()` select the last failure or fatal diagnostic.
 They return zero and an empty string when the diagnostics contain only warnings.
@@ -86,9 +95,12 @@ Their diagnostic lists remain separate.
 This lock does not cover direct GDAL calls, returned datasets, or the vector dataset API.
 Callers must still serialize access to shared datasets and process-wide configuration.
 
-Progress and logging callbacks run synchronously on the thread that executes the operation.
+GDAL can report progress on worker threads. The progress adapter serializes
+callbacks and protects cancellation and exception state across threads.
+Logging callbacks run on the thread that raises the diagnostic.
 Callbacks must not start another GDAL operation or wait for a thread that needs the execution lock.
-The native operation APIs reject same-thread callback re-entry with `CoreError`.
+Threaded warp options remain supported with progress callbacks.
+The native operation APIs reject callback re-entry with `CoreError` on every thread.
 A callback must remain valid until the operation returns.
 Removing a logger does not stop a callback that already holds a copy of that logger.
 Use owned state or shared ownership for captures that other threads can access.
@@ -112,11 +124,13 @@ The owner-thread dispatch window also polls for queued notifications every
 Event-handler failures are reported separately from GDAL execution status with
 their HRESULT and message. Result retrieval returns `E_PENDING` while an event
 handler is running, so handlers must retrieve results after event delivery
-returns. Destroying the control window suspends dispatch and requests
-cancellation; `IOleObject::Close` permanently shuts down the dispatcher.
-Reactivation resumes dispatch for retained results. A worker does not wait for
-the UI thread, but a GDAL driver without progress callbacks may continue until
-its current native call returns.
+returns. Ordinary control-window destruction suspends notifications without
+cancelling active operations. Workers continue and retain their resources until
+completion. Reactivation resumes notifications for retained results.
+`IOleObject::Close` permanently shuts down the dispatcher and requests
+cancellation. Call `CancelGdalOperation` to request cancellation explicitly.
+A worker does not wait for the UI thread. A GDAL driver without progress
+callbacks can continue until its current native call returns after cancellation.
 
 This is a new v6 interface, not a binary-compatible implementation of the
 legacy `IGdalUtils` interface. The old interface uses a different IID and

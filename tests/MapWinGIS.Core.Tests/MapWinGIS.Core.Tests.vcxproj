@@ -41,12 +41,17 @@
 
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;$(MwgRepoRoot)src\MapWinGIS.ActiveX;$(MwgRepoRoot)obj\MapWinGIS.ActiveX\$(Configuration)\$(Platform);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>MWG_ENABLE_RENDERER_TEST_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
     </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="$([System.String]::Copy(';$(MwgVcpkgFeatures);').Contains(';full-drivers;'))">
+    <ClCompile>
+      <PreprocessorDefinitions>MWG_TEST_FULL_DRIVERS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
   </ItemDefinitionGroup>
 
   <ItemGroup>
@@ -59,20 +64,13 @@
     <ClCompile Include="GdalRuntimeTests.cpp" />
     <ClCompile Include="GdalTypedOptionsTests.cpp" />
     <ClCompile Include="GdalModernCapabilitiesTests.cpp" />
-    <ClCompile Include="GdalOperationDispatcherTests.cpp" />
-    <ClCompile Include="ComConversionTests.cpp" />
     <ClCompile Include="GdalUtilsTests.cpp" />
-    <ClCompile Include="ActiveXActivationTests.cpp" />
     <ClCompile Include="Main.cpp" />
+    <ClCompile Include="MapRenderSceneTests.cpp" />
+    <ClCompile Include="MapTests.cpp" />
+    <ClCompile Include="MapViewTests.cpp" />
+    <ClCompile Include="ViewportTests.cpp" />
     <ClCompile Include="TestData.cpp" />
-    <ClCompile Include="RenderingBaselineTests.cpp" />
-    <ClCompile Include="VectorLayerRendererTests.cpp" />
-    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\GdiVectorLayerRenderer.cpp" />
-    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\OpenGlVectorLayerRenderer.cpp" />
-    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\GdalOperationDispatcher.cpp" />
-    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\ComConversion.cpp" />
-    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\VectorLayerRenderer.cpp" />
-    <ClCompile Include="..\..\src\MapWinGIS.ActiveX\ViewTransform.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />
     <ClCompile Include="VectorLayerTests.cpp" />
     <ClCompile Include="VectorRenderSceneTests.cpp" />
@@ -80,10 +78,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MapWinGIS.Core\MapWinGIS.Core.vcxproj" />
-    <ProjectReference Include="..\..\src\MapWinGIS.ActiveX\MapWinGIS.ActiveX.vcxproj">
-      <Project>{731D2046-E5DE-4079-8044-790245634856}</Project>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

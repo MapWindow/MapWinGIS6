@@ -10,6 +10,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 #include "mapwingis/core/Api.h"
@@ -35,6 +36,14 @@ namespace mwg
         [[nodiscard]] bool IsEmpty() const noexcept
         {
             return !(xMin <= xMax && yMin <= yMax);
+        }
+
+        /// True when the extent is not empty and every bound is finite.
+        /// Map-level calculations ignore extents that are not valid.
+        [[nodiscard]] bool IsValid() const noexcept
+        {
+            return !IsEmpty() && std::isfinite(xMin) && std::isfinite(yMin) &&
+                   std::isfinite(xMax) && std::isfinite(yMax);
         }
 
         [[nodiscard]] double Width() const noexcept { return IsEmpty() ? 0.0 : xMax - xMin; }

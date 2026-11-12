@@ -167,7 +167,10 @@ namespace mwg
 
     std::string GdalEnvironment::LastErrorMessage()
     {
-        return t_lastError;
+        if (!t_lastError.empty())
+            return t_lastError;
+        const char* const message = CPLGetLastErrorMsg();
+        return message != nullptr ? message : "";
     }
 
     void GdalEnvironment::ClearLastError()

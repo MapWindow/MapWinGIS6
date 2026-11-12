@@ -2,56 +2,27 @@
 
 /**
  * @file ViewTransform.cpp
- * @brief Builds the shared source-to-device transform for polygon renderers.
+ * @brief Captures the Core viewport as the renderers' map-to-device transform.
  */
 #include "ViewTransform.h"
 
-#include <algorithm>
-#include <cmath>
-
 namespace mwg::activex
 {
-    std::optional<ViewTransform> ViewTransform::Create(
-        const Extent& extent,
-        const double targetWidth,
-        const double targetHeight) noexcept
+    std::optional<ViewTransform> ViewTransform::Create(const Viewport& viewport) noexcept
     {
-        const double extentWidth = extent.Width();
-        const double extentHeight = extent.Height();
-        const double availableWidth = targetWidth - 2.0 * kMargin;
-        const double availableHeight = targetHeight - 2.0 * kMargin;
-        if (extent.IsEmpty() || !std::isfinite(extentWidth) ||
-            !std::isfinite(extentHeight) || extentWidth <= 0.0 ||
-            extentHeight <= 0.0 || !std::isfinite(availableWidth) ||
-            !std::isfinite(availableHeight) || availableWidth <= 0.0 ||
-            availableHeight <= 0.0)
+        const std::optional<MapPoint> center = viewport.Center();
+        const std::optional<double> resolution = viewport.Resolution();
+        if (!viewport.IsValid() || !center.has_value() || !resolution.has_value())
         {
             return std::nullopt;
         }
 
-        const double scale = std::min(
-            availableWidth / extentWidth,
-            availableHeight / extentHeight);
-        if (!std::isfinite(scale) || scale <= 0.0)
-        {
-            return std::nullopt;
-        }
-
-        const double drawingWidth = extentWidth * scale;
-        const double drawingHeight = extentHeight * scale;
-        const double offsetX = (targetWidth - drawingWidth) / 2.0;
-        const double offsetY = (targetHeight - drawingHeight) / 2.0;
-        if (!std::isfinite(drawingWidth) || !std::isfinite(drawingHeight) ||
-            !std::isfinite(offsetX) || !std::isfinite(offsetY))
-        {
-            return std::nullopt;
-        }
-
+        // Same terms as Viewport::MapToScreen, so both give identical results.
         return ViewTransform{
-            scale,
-            offsetX,
-            offsetY,
-            extent.xMin,
-            extent.yMax};
+            static_cast<double>(viewport.Width()) / 2.0,
+            static_cast<double>(viewport.Height()) / 2.0,
+            center->x,
+            center->y,
+            *resolution};
     }
 }

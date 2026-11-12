@@ -93,6 +93,8 @@ namespace mwg
                             const std::vector<std::string>& options);
 
         /// Legacy warp with synchronous progress and cancellation.
+        /// GDAL can invoke progress on worker threads with "-multi" or
+        /// threaded warp options. The shared adapter serializes these callbacks.
         [[nodiscard]] bool GdalRasterWarp(
                             const std::filesystem::path& sourceFilename,
                             const std::filesystem::path& destinationFilename,

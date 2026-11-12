@@ -12,10 +12,11 @@ concurrency:
 jobs:
   build:
     runs-on: windows-2025
+    timeout-minutes: 180
 
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"include":[{"platform":"x64","configuration":"Debug"}]}') }}
+      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"platform":["x64"],"configuration":["Debug","Release"]}') }}
 
     env:
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
@@ -46,23 +47,43 @@ jobs:
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v3
 
+      - name: Check build configuration
+        shell: pwsh
+        run: ./build/scripts/Test-BuildConfiguration.ps1
+
       - name: Build
         shell: pwsh
         run: |
+          $features = if ('${{ matrix.configuration }}' -eq 'Release') { 'tests%3Bfull-drivers' } else { 'tests' }
           msbuild MapWinGIS6.slnx `
             -restore `
             -p:Configuration=${{ matrix.configuration }} `
             -p:Platform=${{ matrix.platform }} `
             -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
+            "-p:MwgVcpkgFeatures=$features" `
             -m -v:m
+
+      - name: Measure build parity baseline
+        shell: pwsh
+        run: |
+          pwsh -File build/scripts/Compare-CompileCommands.ps1 `
+            -Configuration ${{ matrix.configuration }} `
+            -Platform ${{ matrix.platform }} `
+            -FailOnLostFlags
 
       - name: Test
         shell: pwsh
         run: |
-          $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/MapWinGIS.Core.Tests.exe"
-          & $exe --gtest_output="xml:testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          foreach ($test in @(
+            @{ Name = "core"; Project = "MapWinGIS.Core.Tests" },
+            @{ Name = "activex"; Project = "MapWinGIS.ActiveX.Tests" }
+          )) {
+            $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/$($test.Project).exe"
+            $report = "testresults-$($test.Name)-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
+            & $exe --gtest_output="xml:$report"
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           }
 
       - name: Upload test results
@@ -70,7 +91,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: testresults-${{ matrix.platform }}-${{ matrix.configuration }}
-          path: testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml
+          path: testresults-*-${{ matrix.platform }}-${{ matrix.configuration }}.xml
           if-no-files-found: ignore
 
       - name: Upload binaries

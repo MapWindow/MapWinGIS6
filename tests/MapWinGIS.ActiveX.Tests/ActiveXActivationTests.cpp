@@ -17,9 +17,14 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
+#include <cwchar>
+#include <fstream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -30,6 +35,7 @@
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
+#include "mapwingis/map/Viewport.h"
 
 namespace
 {
@@ -625,6 +631,25 @@ namespace
         HGDIOBJ _previous{};
     };
 
+    [[nodiscard]] bool HasDifferentPixel(
+        const HDC first,
+        const HDC second,
+        const int width,
+        const int height) noexcept
+    {
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                if (GetPixel(first, x, y) != GetPixel(second, x, y))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     class TestHostWindow final
     {
     public:
@@ -747,6 +772,459 @@ namespace
         HMODULE _handle;
     };
 
+    class ActiveXMapTest : public testing::Test
+    {
+    protected:
+        void SetUp() override
+        {
+            ASSERT_TRUE(SUCCEEDED(_apartment.Result()));
+            wchar_t executablePath[MAX_PATH]{};
+            const DWORD length = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
+            ASSERT_GT(length, 0U);
+            ASSERT_LT(length, static_cast<DWORD>(MAX_PATH));
+            _module = std::make_unique<Module>(LoadLibraryW(
+                (std::filesystem::path(executablePath).parent_path() / L"MapWinGIS.ocx").c_str()));
+            ASSERT_NE(_module->Get(), nullptr);
+            using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+            const auto getClassObject = reinterpret_cast<GetClassObject>(
+                GetProcAddress(_module->Get(), "DllGetClassObject"));
+            ASSERT_NE(getClassObject, nullptr);
+            ComPtr<IClassFactory> factory;
+            ASSERT_EQ(getClassObject(__uuidof(MapWinGISControl), IID_PPV_ARGS(&factory)), S_OK);
+            ASSERT_EQ(factory->CreateInstance(nullptr, IID_PPV_ARGS(&_control)), S_OK);
+            ASSERT_EQ(_control.As(&_window), S_OK);
+            ASSERT_EQ(_control.As(&_viewObject), S_OK);
+            ASSERT_EQ(_control->put_RenderingBackendPreference(ATL::CComBSTR(L"GDI")), S_OK);
+        }
+
+        HRESULT LoadRectangles(const std::vector<mwg::Extent>& rectangles)
+        {
+            const auto path = mwg::test::MakeRectanglesDataset(
+                _directory.Path(), "layer-" + std::to_string(_datasetCount++) + ".gpkg", rectangles);
+            return _control->LoadVectorDataset(ATL::CComBSTR(path.c_str()));
+        }
+
+        HRESULT LoadLine()
+        {
+            const auto path = _directory.Path() / "line.geojson";
+            std::ofstream output(path);
+            output << R"({"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1000,1000],[1010,1010]]}}]})";
+            output.close();
+            if (!output)
+            {
+                return E_FAIL;
+            }
+            return _control->LoadVectorDataset(ATL::CComBSTR(path.c_str()));
+        }
+
+        HRESULT Resize(const int width, const int height)
+        {
+            LRESULT result = 0;
+            return _window->OnWindowMessage(WM_SIZE, 0, MAKELPARAM(width, height), &result);
+        }
+
+        HRESULT Draw(const HDC target, const int width, const int height)
+        {
+            const RECTL bounds{0, 0, width, height};
+            return _viewObject->Draw(
+                DVASPECT_CONTENT, -1, nullptr, nullptr, nullptr, target,
+                &bounds, nullptr, nullptr, 0);
+        }
+
+        ComApartment _apartment;
+        std::unique_ptr<Module> _module;
+        mwg::test::TempDirectory _directory;
+        std::unique_ptr<mwg::test::VectorReadTestDriver> _readDriver;
+        ComPtr<IMapWinGISControl3> _control;
+        ComPtr<IOleInPlaceObjectWindowless> _window;
+        ComPtr<IViewObjectEx> _viewObject;
+        int _datasetCount = 0;
+    };
+
+}
+
+TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
+{
+    ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}, {3, 0, 5, 2}}), S_OK);
+    ASSERT_EQ(LoadRectangles({{10, 0, 12, 2}}), S_OK);
+    LONGLONG count = -1;
+    for (int read = 0; read < 3; ++read)
+    {
+        ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+        EXPECT_EQ(count, 3);
+    }
+    EXPECT_EQ(_control->get_FeatureCount(nullptr), E_POINTER);
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    VARIANT_BOOL loaded = VARIANT_TRUE;
+    ASSERT_EQ(_control->get_LayerLoaded(&loaded), S_OK);
+    EXPECT_EQ(loaded, VARIANT_FALSE);
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 0);
+    // Windows refuses an exclusive file open while GDAL still holds it.
+    const auto path = _directory.Path() / "layer-0.gpkg";
+    const HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    ASSERT_NE(file, INVALID_HANDLE_VALUE);
+    CloseHandle(file);
+    ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}}), S_OK);
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 1);
+}
+
+TEST_F(ActiveXMapTest, ExposesStableLayerIdsAndMapNavigation)
+{
+    constexpr int width = 120;
+    constexpr int height = 100;
+    ASSERT_EQ(Resize(width, height), S_OK);
+
+    ComPtr<IMapWinGISControl4> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+
+    LONG layerCount = -1;
+    EXPECT_EQ(control->get_LayerCount(nullptr), E_POINTER);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+
+    const std::vector<mwg::Extent> firstRectangle{{0, 0, 10, 10}};
+    const auto firstPath = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "navigation-first.gpkg",
+        firstRectangle);
+    LONGLONG firstLayerId = -1;
+    EXPECT_EQ(control->LoadVectorDatasetEx(ATL::CComBSTR(firstPath.c_str()), nullptr), E_POINTER);
+    EXPECT_EQ(control->GetLayerId(0, nullptr), E_POINTER);
+    ASSERT_EQ(
+        control->LoadVectorDatasetEx(
+            ATL::CComBSTR(firstPath.c_str()),
+            &firstLayerId),
+        S_OK);
+    EXPECT_GT(firstLayerId, 0);
+
+    LONGLONG indexedLayerId = 0;
+    ASSERT_EQ(control->GetLayerId(0, &indexedLayerId), S_OK);
+    EXPECT_EQ(indexedLayerId, firstLayerId);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+
+    ASSERT_EQ(LoadRectangles({{20, 0, 30, 10}}), S_OK);
+    LONGLONG secondLayerId = 0;
+    ASSERT_EQ(control->GetLayerId(1, &secondLayerId), S_OK);
+    EXPECT_GT(secondLayerId, firstLayerId);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 2);
+
+    LONGLONG failedLayerId = -1;
+    EXPECT_EQ(control->LoadVectorDatasetEx(nullptr, &failedLayerId), E_INVALIDARG);
+    EXPECT_EQ(failedLayerId, 0);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 2);
+    ASSERT_EQ(LoadLine(), E_FAIL);
+    failedLayerId = -1;
+    EXPECT_EQ(control->LoadVectorDatasetEx(
+        ATL::CComBSTR((_directory.Path() / "line.geojson").c_str()), &failedLayerId), E_FAIL);
+    EXPECT_EQ(failedLayerId, 0);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 2);
+
+    EXPECT_EQ(control->GetLayerId(-1, &indexedLayerId), E_INVALIDARG);
+    EXPECT_EQ(control->GetLayerId(2, &indexedLayerId), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomToLayer(0), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomToLayer(secondLayerId + 100), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomIn(1.0), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomOut(1.0), E_INVALIDARG);
+    EXPECT_EQ(control->ZoomIn(std::numeric_limits<double>::quiet_NaN()), E_INVALIDARG);
+    EXPECT_EQ(
+        control->Pan(std::numeric_limits<double>::infinity(), 0.0),
+        E_INVALIDARG);
+    EXPECT_EQ(control->ZoomAt(0.0, 0.0, 0.0), E_INVALIDARG);
+
+    BitmapSurface fitted(width, height);
+    BitmapSurface zoomed(width, height);
+    ASSERT_TRUE(fitted.IsValid());
+    ASSERT_TRUE(zoomed.IsValid());
+    mwg::Viewport expected(width, height);
+    ASSERT_TRUE(expected.FitExtent({0, 0, 30, 10}, 12.0));
+    const auto expectFeatureAt = [&](const mwg::MapPoint& point)
+    {
+        const auto screen = expected.MapToScreen(point);
+        ASSERT_TRUE(screen.has_value());
+        const auto pixel = mwg::ToPixel(*screen);
+        ASSERT_TRUE(pixel.has_value());
+        ASSERT_GE(pixel->x, 0);
+        ASSERT_LT(pixel->x, width);
+        ASSERT_GE(pixel->y, 0);
+        ASSERT_LT(pixel->y, height);
+        EXPECT_EQ(GetPixel(zoomed.Get(), pixel->x, pixel->y), RGB(61, 122, 169));
+    };
+
+    ASSERT_EQ(control->FitToMap(), S_OK);
+    ASSERT_EQ(Draw(fitted.Get(), width, height), S_OK);
+    ASSERT_EQ(control->ZoomIn(2.0), S_OK);
+    ASSERT_TRUE(expected.Zoom(2.0));
+    ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
+    EXPECT_TRUE(HasDifferentPixel(fitted.Get(), zoomed.Get(), width, height));
+    expectFeatureAt({8, 5});
+
+    ASSERT_EQ(control->ZoomOut(2.0), S_OK);
+    ASSERT_TRUE(expected.ZoomOut(2.0));
+    ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
+    expectFeatureAt({2, 5});
+
+    ASSERT_EQ(control->Pan(2.0, -1.0), S_OK);
+    ASSERT_TRUE(expected.Pan(2.0, -1.0));
+    ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
+    expectFeatureAt({2, 5});
+
+    ASSERT_EQ(control->ZoomAt(15.0, 47.0, 1.5), S_OK);
+    ASSERT_TRUE(expected.ZoomAt({15.0, 47.0}, 1.5));
+    ASSERT_EQ(Draw(zoomed.Get(), width, height), S_OK);
+    expectFeatureAt({8.5, 5});
+
+    ASSERT_EQ(control->ZoomToLayer(firstLayerId), S_OK);
+
+    ASSERT_EQ(control->ClearLayers(), S_OK);
+    EXPECT_EQ(control->ZoomToLayer(firstLayerId), E_INVALIDARG);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+    LONGLONG reloadedLayerId = 0;
+    ASSERT_EQ(
+        control->LoadVectorDatasetEx(
+            ATL::CComBSTR(firstPath.c_str()),
+            &reloadedLayerId),
+        S_OK);
+    EXPECT_GT(reloadedLayerId, secondLayerId);
+    EXPECT_EQ(control->ZoomToLayer(firstLayerId), E_INVALIDARG);
+}
+
+TEST_F(ActiveXMapTest, ReportsAutomationErrorInformation)
+{
+    ComPtr<IMapWinGISControl4> control;
+    ComPtr<ISupportErrorInfo> support;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    ASSERT_EQ(_control.As(&support), S_OK);
+    for (const IID* iid : {&__uuidof(IMapWinGISControl), &__uuidof(IMapWinGISControl2),
+                           &__uuidof(IMapWinGISControl3), &__uuidof(IMapWinGISControl4),
+                           &__uuidof(IMapWinGISControlGdal)})
+    {
+        EXPECT_EQ(support->InterfaceSupportsErrorInfo(*iid), S_OK);
+    }
+    EXPECT_EQ(support->InterfaceSupportsErrorInfo(IID_IUnknown), S_FALSE);
+
+    ASSERT_EQ(control->ZoomIn(1.0), E_INVALIDARG);
+    ComPtr<IErrorInfo> error;
+    ASSERT_EQ(GetErrorInfo(0, &error), S_OK);
+    GUID source{};
+    ASSERT_EQ(error->GetGUID(&source), S_OK);
+    EXPECT_TRUE(IsEqualIID(source, __uuidof(IMapWinGISControl4)));
+    ATL::CComBSTR description;
+    ASSERT_EQ(error->GetDescription(&description), S_OK);
+    EXPECT_STREQ(description.m_str, L"Zoom factor must be a finite number above 1");
+
+    ASSERT_EQ(control->ZoomToLayer(123), E_INVALIDARG);
+    error.Reset();
+    ASSERT_EQ(GetErrorInfo(0, &error), S_OK);
+    ASSERT_EQ(error->GetGUID(&source), S_OK);
+    EXPECT_TRUE(IsEqualIID(source, __uuidof(IMapWinGISControl4)));
+    description.Empty();
+    ASSERT_EQ(error->GetDescription(&description), S_OK);
+    EXPECT_STREQ(description.m_str, L"Layer ID was not found");
+
+    ASSERT_EQ(LoadLine(), E_FAIL);
+    error.Reset();
+    ASSERT_EQ(GetErrorInfo(0, &error), S_OK);
+    ASSERT_EQ(error->GetGUID(&source), S_OK);
+    EXPECT_TRUE(IsEqualIID(source, __uuidof(IMapWinGISControl)));
+}
+
+TEST_F(ActiveXMapTest, NavigationSucceedsWhenThereIsNoViewToChange)
+{
+    ComPtr<IMapWinGISControl4> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    EXPECT_EQ(control->FitToMap(), S_OK);
+    EXPECT_EQ(control->ZoomIn(2), S_OK);
+    EXPECT_EQ(control->ZoomOut(2), S_OK);
+    EXPECT_EQ(control->Pan(1, 1), S_OK);
+    EXPECT_EQ(control->ZoomAt(0, 0, 2), S_OK);
+}
+
+TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
+{
+    ComPtr<IMapWinGISControl> first;
+    ComPtr<IMapWinGISControl2> second;
+    ComPtr<IMapWinGISControl3> third;
+    ComPtr<IMapWinGISControl4> fourth;
+    ASSERT_EQ(_control.As(&first), S_OK);
+    ASSERT_EQ(_control.As(&second), S_OK);
+    ASSERT_EQ(_control.As(&third), S_OK);
+    ASSERT_EQ(_control.As(&fourth), S_OK);
+    ComPtr<IUnknown> identity;
+    ASSERT_EQ(fourth.As(&identity), S_OK);
+    ComPtr<IUnknown> other;
+    ASSERT_EQ(first.As(&other), S_OK);
+    EXPECT_EQ(identity.Get(), other.Get());
+    other.Reset();
+    ASSERT_EQ(second.As(&other), S_OK);
+    EXPECT_EQ(identity.Get(), other.Get());
+    other.Reset();
+    ASSERT_EQ(third.As(&other), S_OK);
+    EXPECT_EQ(identity.Get(), other.Get());
+
+    const IID firstIid{0x1B6D4167, 0xB2D7, 0x4AE4, {0x8F, 0x88, 0x92, 0xC5, 0x75, 0xBF, 0x4A, 0xF7}};
+    const IID secondIid{0x2C386A29, 0xC378, 0x45C1, {0xB8, 0xD5, 0x56, 0x24, 0x50, 0x0C, 0xCF, 0xF2}};
+    const IID thirdIid{0x994F4526, 0x284B, 0x463F, {0x8E, 0xD5, 0x15, 0x51, 0xB6, 0x01, 0x98, 0x1B}};
+    EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl), firstIid));
+    EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl2), secondIid));
+    EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl3), thirdIid));
+
+    ComPtr<IDispatch> dispatch;
+    ASSERT_EQ(_control.As(&dispatch), S_OK);
+    struct Member { const wchar_t* name; DISPID id; };
+    const Member members[]{
+        {L"LoadVectorDataset", 2}, {L"FitToMap", 9}, {L"ZoomIn", 10},
+        {L"ZoomOut", 11}, {L"Pan", 12}, {L"ZoomAt", 13},
+        {L"ZoomToLayer", 14}, {L"LayerCount", 15},
+        {L"LoadVectorDatasetEx", 16}, {L"GetLayerId", 17}};
+    for (const auto& member : members)
+    {
+        std::wstring name(member.name);
+        LPOLESTR namePointer = name.data();
+        DISPID id = DISPID_UNKNOWN;
+        ASSERT_EQ(dispatch->GetIDsOfNames(IID_NULL, &namePointer, 1, LOCALE_USER_DEFAULT, &id), S_OK);
+        EXPECT_EQ(id, member.id) << name.c_str();
+    }
+
+    const std::vector<mwg::Extent> rectangles{{0, 0, 10, 10}};
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "dispatch.gpkg", rectangles);
+    ATL::CComVariant argument(path.c_str());
+    DISPPARAMS parameters{&argument, nullptr, 1, 0};
+    ASSERT_EQ(dispatch->Invoke(2, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD,
+        &parameters, nullptr, nullptr, nullptr), S_OK);
+    DISPPARAMS noArguments{};
+    ATL::CComVariant result;
+    ASSERT_EQ(dispatch->Invoke(15, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYGET,
+        &noArguments, &result, nullptr, nullptr), S_OK);
+    EXPECT_EQ(result.vt, VT_I4);
+    EXPECT_EQ(result.lVal, 1);
+}
+
+TEST_F(ActiveXMapTest, ExtendedLoadRefitsAnExistingNavigationView)
+{
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    const std::vector<mwg::Extent> rectangles{{0, 0, 10, 10}};
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(), "refit.gpkg", rectangles);
+    ComPtr<IMapWinGISControl4> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    LONGLONG id = 0;
+    ASSERT_EQ(control->LoadVectorDatasetEx(ATL::CComBSTR(path.c_str()), &id), S_OK);
+    BitmapSurface initial(120, 100);
+    BitmapSurface zoomed(120, 100);
+    BitmapSurface refitted(120, 100);
+    ASSERT_TRUE(initial.IsValid());
+    ASSERT_TRUE(zoomed.IsValid());
+    ASSERT_TRUE(refitted.IsValid());
+    ASSERT_EQ(Draw(initial.Get(), 120, 100), S_OK);
+    ASSERT_EQ(control->ZoomIn(2), S_OK);
+    ASSERT_EQ(Draw(zoomed.Get(), 120, 100), S_OK);
+    ASSERT_TRUE(HasDifferentPixel(initial.Get(), zoomed.Get(), 120, 100));
+    ASSERT_EQ(control->LoadVectorDatasetEx(ATL::CComBSTR(path.c_str()), &id), S_OK);
+    ASSERT_EQ(Draw(refitted.Get(), 120, 100), S_OK);
+    EXPECT_FALSE(HasDifferentPixel(initial.Get(), refitted.Get(), 120, 100));
+}
+
+TEST_F(ActiveXMapTest, RejectedLoadsLeaveTheMapAndRenderingUnchanged)
+{
+    EXPECT_EQ(LoadLine(), E_FAIL);
+    VARIANT_BOOL loaded = VARIANT_TRUE;
+    ASSERT_EQ(_control->get_LayerLoaded(&loaded), S_OK);
+    EXPECT_EQ(loaded, VARIANT_FALSE);
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    BitmapSurface before(120, 100);
+    BitmapSurface after(120, 100);
+    ASSERT_TRUE(before.IsValid());
+    ASSERT_TRUE(after.IsValid());
+    ASSERT_EQ(Draw(before.Get(), 120, 100), S_OK);
+    EXPECT_EQ(LoadLine(), E_FAIL);
+    LONGLONG count = -1;
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 1);
+    ASSERT_EQ(Draw(after.Get(), 120, 100), S_OK);
+    for (int y = 0; y < 100; ++y)
+    {
+        for (int x = 0; x < 120; ++x)
+        {
+            ASSERT_EQ(GetPixel(before.Get(), x, y), GetPixel(after.Get(), x, y)) << x << ", " << y;
+        }
+    }
+}
+
+TEST_F(ActiveXMapTest, LoadsLayersWhenTheDriverCannotReportAFeatureCount)
+{
+    _readDriver = std::make_unique<mwg::test::VectorReadTestDriver>();
+    _readDriver->unknownCount = true;
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(_control->LoadVectorDataset(
+        ATL::CComBSTR(mwg::test::VectorReadTestDriver::kPath)), S_OK);
+
+    LONGLONG count = -1;
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 3);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
+}
+
+TEST_F(ActiveXMapTest, ValidatedLoadsDoNotRereadGeometryOnTheFirstDraw)
+{
+    _readDriver = std::make_unique<mwg::test::VectorReadTestDriver>();
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    for (int load = 1; load <= 2; ++load)
+    {
+        ASSERT_EQ(_control->LoadVectorDataset(
+            ATL::CComBSTR(mwg::test::VectorReadTestDriver::kPath)), S_OK);
+        ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+        EXPECT_EQ(_readDriver->readCalls, 4 * load);
+        EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
+    }
+
+    _readDriver->failOnSecondRead = true;
+    EXPECT_EQ(_control->LoadVectorDataset(
+        ATL::CComBSTR(mwg::test::VectorReadTestDriver::kPath)), E_FAIL);
+    LONGLONG count = -1;
+    ASSERT_EQ(_control->get_FeatureCount(&count), S_OK);
+    EXPECT_EQ(count, 6);
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_EQ(_readDriver->readCalls, 10);
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(61, 122, 169));
+}
+
+TEST_F(ActiveXMapTest, AlternateDrawBoundsDoNotChangeTheLiveSizeUsedForFitting)
+{
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 24, 18), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    mwg::Viewport expected(120, 100);
+    ASSERT_TRUE(expected.FitExtent({0, 0, 10, 5}, 12.0));
+    const auto sample = mwg::ToPixel(*expected.MapToScreen({1, 2.5}));
+    ASSERT_TRUE(sample.has_value());
+    EXPECT_EQ(GetPixel(surface.Get(), sample->x, sample->y), RGB(61, 122, 169));
+    ASSERT_EQ(Resize(200, 120), S_OK);
+    BitmapSurface resized(200, 120);
+    ASSERT_TRUE(resized.IsValid());
+    ASSERT_EQ(Draw(resized.Get(), 200, 120), S_OK);
+    expected.SetSize(200, 120);
+    const auto moved = mwg::ToPixel(*expected.MapToScreen({1, 2.5}));
+    ASSERT_TRUE(moved.has_value());
+    EXPECT_EQ(GetPixel(resized.Get(), moved->x, moved->y), RGB(61, 122, 169));
 }
 
 TEST(ActiveXActivation, CreatesControlThroughClassFactory)
@@ -913,6 +1391,7 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
         << std::hex << static_cast<unsigned long>(apartment.Result());
     ASSERT_TRUE(AtlAxWinInit());
 
+    bool openGlUnavailable = false;
     for (int iteration = 0; iteration < 2; ++iteration)
     {
         TestHostWindow hostWindow;
@@ -1314,6 +1793,248 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             GetPixel(resizedSurface.Get(), resizedWidth - 1, resizedHeight - 1),
             GetSysColor(COLOR_WINDOW));
 
+        if (iteration == 0)
+        {
+            ATL::CComQIPtr<IMapWinGISControl3> rendererControl(hostedControl);
+            ASSERT_NE(rendererControl.p, nullptr);
+            mwg::test::TempDirectory renderDirectory;
+            const std::vector<mwg::Extent> renderRectangles{{0, 0, 10, 5}};
+            const std::filesystem::path renderDataset =
+                mwg::test::MakeRectanglesDataset(
+                    renderDirectory.Path(),
+                    "registered-render.gpkg",
+                    renderRectangles);
+            const std::wstring renderDatasetText = renderDataset.wstring();
+            ATL::CComBSTR renderDatasetBstr(renderDatasetText.c_str());
+            ASSERT_EQ(rendererControl->LoadVectorDataset(renderDatasetBstr), S_OK);
+
+            const RECT rendererRect{0, 0, resizedWidth, resizedHeight};
+            const RECTL rendererBounds{0, 0, resizedWidth, resizedHeight};
+            ATL::CComBSTR gdiPreference(L"GDI");
+            ASSERT_EQ(
+                rendererControl->put_RenderingBackendPreference(gdiPreference),
+                S_OK);
+            ASSERT_NE(FillRect(
+                resizedSurface.Get(),
+                &rendererRect,
+                GetSysColorBrush(COLOR_WINDOW)), 0);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                resizedSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            ATL::CComBSTR gdiBackend;
+            ASSERT_TRUE(SUCCEEDED(rendererControl->get_RenderingBackend(&gdiBackend)));
+            EXPECT_STREQ(gdiBackend, L"GDI");
+            EXPECT_EQ(
+                GetPixel(resizedSurface.Get(), resizedWidth / 2, resizedHeight / 2),
+                RGB(61, 122, 169));
+
+            ATL::CComQIPtr<IOleInPlaceObjectWindowless> inputControl(hostedControl);
+            ASSERT_NE(inputControl.p, nullptr);
+            ATL::CComQIPtr<IMapWinGISControl4> navigationControl(hostedControl);
+            ASSERT_NE(navigationControl.p, nullptr);
+            BitmapSurface initialNavigationSurface(resizedWidth, resizedHeight);
+            BitmapSurface wheelNavigationSurface(resizedWidth, resizedHeight);
+            BitmapSurface panNavigationSurface(resizedWidth, resizedHeight);
+            BitmapSurface expectedNavigationSurface(resizedWidth, resizedHeight);
+            ASSERT_TRUE(initialNavigationSurface.IsValid());
+            ASSERT_TRUE(wheelNavigationSurface.IsValid());
+            ASSERT_TRUE(panNavigationSurface.IsValid());
+            ASSERT_TRUE(expectedNavigationSurface.IsValid());
+            ASSERT_EQ(navigationControl->FitToMap(), S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                initialNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+
+            const int anchorX = resizedWidth / 3;
+            const int anchorY = resizedHeight / 3;
+            POINT wheelPoint{
+                resizedBounds.left + anchorX,
+                resizedBounds.top + anchorY};
+            ASSERT_TRUE(ClientToScreen(hostWindow.Get(), &wheelPoint));
+            LRESULT inputResult = 0;
+            ASSERT_EQ(
+                inputControl->OnWindowMessage(
+                    WM_MOUSEWHEEL,
+                    MAKEWPARAM(0, WHEEL_DELTA),
+                    MAKELPARAM(wheelPoint.x, wheelPoint.y),
+                    &inputResult),
+                S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                wheelNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            EXPECT_TRUE(HasDifferentPixel(
+                initialNavigationSurface.Get(),
+                wheelNavigationSurface.Get(),
+                resizedWidth,
+                resizedHeight));
+
+            HWND controlWindow = nullptr;
+            const HRESULT getWindowResult = inputControl->GetWindow(&controlWindow);
+            POINT dragStart{anchorX, anchorY};
+            if (getWindowResult == E_FAIL)
+            {
+                dragStart.x += resizedBounds.left;
+                dragStart.y += resizedBounds.top;
+            }
+            else
+            {
+                ASSERT_TRUE(SUCCEEDED(getWindowResult));
+                ASSERT_NE(controlWindow, nullptr);
+            }
+
+            constexpr int dragDeltaX = 24;
+            constexpr int dragDeltaY = 12;
+            ASSERT_EQ(
+                inputControl->OnWindowMessage(
+                    WM_LBUTTONDOWN,
+                    MK_LBUTTON,
+                    MAKELPARAM(dragStart.x, dragStart.y),
+                    &inputResult),
+                S_OK);
+            ASSERT_EQ(
+                inputControl->OnWindowMessage(
+                    WM_MOUSEMOVE,
+                    MK_LBUTTON,
+                    MAKELPARAM(
+                        dragStart.x + dragDeltaX,
+                        dragStart.y + dragDeltaY),
+                    &inputResult),
+                S_OK);
+            ASSERT_EQ(
+                inputControl->OnWindowMessage(
+                    WM_LBUTTONUP,
+                    0,
+                    MAKELPARAM(
+                        dragStart.x + dragDeltaX,
+                        dragStart.y + dragDeltaY),
+                    &inputResult),
+                S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                panNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            EXPECT_TRUE(HasDifferentPixel(
+                wheelNavigationSurface.Get(),
+                panNavigationSurface.Get(),
+                resizedWidth,
+                resizedHeight));
+
+            mwg::Viewport expectedNavigation(resizedWidth, resizedHeight);
+            ASSERT_TRUE(expectedNavigation.FitExtent({0, 0, 10, 5}, 12.0));
+            ASSERT_TRUE(expectedNavigation.ZoomAt(
+                {static_cast<double>(anchorX), static_cast<double>(anchorY)},
+                1.2));
+            const std::optional<double> resolutionAfterWheel =
+                expectedNavigation.Resolution();
+            ASSERT_TRUE(resolutionAfterWheel.has_value());
+            ASSERT_TRUE(expectedNavigation.Pan(
+                -dragDeltaX * *resolutionAfterWheel,
+                dragDeltaY * *resolutionAfterWheel));
+            ASSERT_EQ(navigationControl->FitToMap(), S_OK);
+            ASSERT_EQ(
+                navigationControl->ZoomAt(anchorX, anchorY, 1.2),
+                S_OK);
+            ASSERT_EQ(
+                navigationControl->Pan(
+                    -dragDeltaX * *resolutionAfterWheel,
+                    dragDeltaY * *resolutionAfterWheel),
+                S_OK);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                expectedNavigationSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            EXPECT_FALSE(HasDifferentPixel(
+                panNavigationSurface.Get(),
+                expectedNavigationSurface.Get(),
+                resizedWidth,
+                resizedHeight));
+            const auto expectedFeaturePixel =
+                mwg::ToPixel(*expectedNavigation.MapToScreen({1, 2.5}));
+            ASSERT_TRUE(expectedFeaturePixel.has_value());
+            EXPECT_EQ(
+                GetPixel(
+                    panNavigationSurface.Get(),
+                    expectedFeaturePixel->x,
+                    expectedFeaturePixel->y),
+                RGB(61, 122, 169));
+            ASSERT_EQ(navigationControl->FitToMap(), S_OK);
+
+            ATL::CComBSTR openGlPreference(L"OpenGL");
+            ASSERT_EQ(
+                rendererControl->put_RenderingBackendPreference(openGlPreference),
+                S_OK);
+            ASSERT_NE(FillRect(
+                resizedSurface.Get(),
+                &rendererRect,
+                GetSysColorBrush(COLOR_WINDOW)), 0);
+            ASSERT_TRUE(SUCCEEDED(viewObject->Draw(
+                DVASPECT_CONTENT,
+                -1,
+                nullptr,
+                nullptr,
+                nullptr,
+                resizedSurface.Get(),
+                &rendererBounds,
+                nullptr,
+                nullptr,
+                0)));
+            ATL::CComBSTR openGlBackend;
+            ASSERT_TRUE(SUCCEEDED(
+                rendererControl->get_RenderingBackend(&openGlBackend)));
+            if (openGlBackend == nullptr ||
+                std::wcscmp(openGlBackend, L"OpenGL") != 0)
+            {
+                openGlUnavailable = true;
+            }
+            else
+            {
+                EXPECT_EQ(
+                    GetPixel(
+                        resizedSurface.Get(),
+                        resizedWidth / 2,
+                        resizedHeight / 2),
+                    RGB(61, 122, 169));
+            }
+        }
+
         if (iteration == 1)
         {
             ATL::CComQIPtr<IMapWinGISControlGdal> gdalControl(hostedControl);
@@ -1392,5 +2113,10 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             host = nullptr;
             EXPECT_TRUE(hostWindow.Destroy());
         }
+    }
+
+    if (openGlUnavailable)
+    {
+        GTEST_SKIP() << "The registered control selected GDI for the OpenGL preference.";
     }
 }

@@ -25,6 +25,7 @@
     <RootNamespace>MapWinGISCore</RootNamespace>
     <ProjectName>MapWinGIS.Core</ProjectName>
     <TargetName>MapWinGIS.Core</TargetName>
+    <MwgDeployRuntimeData Condition="'$(MwgDeployRuntimeData)' == ''">true</MwgDeployRuntimeData>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -60,13 +61,18 @@
     <ClInclude Include="include\mapwingis\gdal\GdalTypedOptions.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalModern.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalUtils.h" />
+    <ClInclude Include="include\mapwingis\map\Map.h" />
+    <ClInclude Include="include\mapwingis\map\MapView.h" />
+    <ClInclude Include="include\mapwingis\map\Viewport.h" />
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
+    <ClInclude Include="include\mapwingis\rendering\MapRenderScene.h" />
     <ClInclude Include="include\mapwingis\rendering\VectorRenderScene.h" />
     <ClInclude Include="src\internal\GdalExecution.h" />
     <ClInclude Include="src\internal\GdalProgressAdapterAccess.h" />
     <ClInclude Include="src\internal\Utf8.h" />
     <ClInclude Include="src\internal\VectorLayerAccess.h" />
+    <ClInclude Include="src\internal\VectorRenderSceneBuilder.h" />
   </ItemGroup>
 
   <ItemGroup>
@@ -77,7 +83,11 @@
     <ClCompile Include="src\gdal\GdalRuntime.cpp" />
     <ClCompile Include="src\gdal\GdalTypedOptions.cpp" />
     <ClCompile Include="src\gdal\GdalUtils.cpp" />
+    <ClCompile Include="src\map\Map.cpp" />
+    <ClCompile Include="src\map\MapView.cpp" />
+    <ClCompile Include="src\map\Viewport.cpp" />
     <ClCompile Include="src\vector\VectorDataset.cpp" />
+    <ClCompile Include="src\rendering\MapRenderScene.cpp" />
     <ClCompile Include="src\rendering\VectorRenderScene.cpp" />
   </ItemGroup>
 
