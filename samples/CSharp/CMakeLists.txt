@@ -4,14 +4,9 @@
 
 find_program(MWG_DOTNET_EXECUTABLE NAMES dotnet)
 if(NOT MWG_DOTNET_EXECUTABLE)
-    message(STATUS "Skipping ActiveX test-host targets: dotnet was not found.")
+    message(WARNING
+        "Skipping ActiveX test-host targets: the .NET SDK (dotnet) was not found.")
     return()
-endif()
-
-find_program(MWG_PWSH_EXECUTABLE NAMES pwsh)
-if(NOT MWG_PWSH_EXECUTABLE)
-    message(FATAL_ERROR
-        "PowerShell 7 (pwsh) is required for the ActiveX test-host run targets.")
 endif()
 
 set(_mwg_host_project "${CMAKE_CURRENT_SOURCE_DIR}/ActiveXTestHost/ActiveXTestHost.csproj")
@@ -24,29 +19,35 @@ add_custom_target(build_activex_host
         "-p:OutputPath=${MWG_RUNTIME_DIR}/"
         -p:MwgCMakeBuild=true
         -p:BuildProjectReferences=false
-    DEPENDS MapWinGIS.ActiveX MapWinGIS.RuntimeData
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/ActiveXTestHost"
     USES_TERMINAL
     VERBATIM
 )
+add_dependencies(build_activex_host MapWinGIS.ActiveX MapWinGIS.RuntimeData)
 
-add_custom_target(run_activex_host
-    COMMAND "${MWG_PWSH_EXECUTABLE}" -NoProfile -File "${_mwg_host_launcher}"
-        -Configuration "$<CONFIG>"
-        -Platform "${MWG_PLATFORM}"
-        -BinDirectory "${MWG_RUNTIME_DIR}"
-    DEPENDS build_activex_host
-    USES_TERMINAL
-    VERBATIM
-)
+find_program(MWG_PWSH_EXECUTABLE NAMES pwsh)
+if(MWG_PWSH_EXECUTABLE)
+    add_custom_target(run_activex_host
+        COMMAND "${MWG_PWSH_EXECUTABLE}" -NoProfile -File "${_mwg_host_launcher}"
+            -Configuration "$<CONFIG>"
+            -Platform "${MWG_PLATFORM}"
+            -BinDirectory "${MWG_RUNTIME_DIR}"
+        USES_TERMINAL
+        VERBATIM
+    )
+    add_dependencies(run_activex_host build_activex_host)
 
-add_custom_target(run_activex_host_automated
-    COMMAND "${MWG_PWSH_EXECUTABLE}" -NoProfile -File "${_mwg_host_launcher}"
-        -Configuration "$<CONFIG>"
-        -Platform "${MWG_PLATFORM}"
-        -BinDirectory "${MWG_RUNTIME_DIR}"
-        -Automated
-    DEPENDS build_activex_host
-    USES_TERMINAL
-    VERBATIM
-)
+    add_custom_target(run_activex_host_automated
+        COMMAND "${MWG_PWSH_EXECUTABLE}" -NoProfile -File "${_mwg_host_launcher}"
+            -Configuration "$<CONFIG>"
+            -Platform "${MWG_PLATFORM}"
+            -BinDirectory "${MWG_RUNTIME_DIR}"
+            -Automated
+        USES_TERMINAL
+        VERBATIM
+    )
+    add_dependencies(run_activex_host_automated build_activex_host)
+else()
+    message(STATUS
+        "Skipping ActiveX test-host run targets: PowerShell 7 (pwsh) was not found.")
+endif()
