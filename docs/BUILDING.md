@@ -5,6 +5,7 @@
 | Requirement | Version | Notes |
 |---|---|---|
 | Visual Studio 2026 | 18.10 or later | Workload **Desktop development with C++** |
+| CMake | 3.28 or later | Bundled with Visual Studio 2026 |
 | MSVC toolset | v145 (14.51 or later) | Installed with the workload |
 | Windows SDK | 10.0.28000.0 | Override with `/p:MwgWindowsSdk=10.0` to use the newest installed instead |
 | Git | any recent version | Needed to clone vcpkg |
@@ -331,8 +332,9 @@ run the vcpkg bootstrap command above, then open the repository root folder in
 Visual Studio and select `vs2026-x64` or `vs2026-x86` as the configure preset.
 Select Debug or Release with the matching build preset, such as
 `vs2026-x64-debug`. Build targets from the CMake Targets view and run discovered
-GoogleTest cases from Test Explorer. The `MapWinGIS.Core.Tests` and
-`MapWinGIS.Samples.Translate` executables can also be selected for debugging.
+GoogleTest cases from Test Explorer. The `MapWinGIS.Core.Tests` executable can
+also be selected for debugging. The `MapWinGIS.Samples.Translate` target is
+available when configured with `-DMWG_BUILD_SAMPLES=ON`.
 
 The `.slnx` and `.vcxproj` files remain supported during this transition.
 MSBuild writes to `bin\<Configuration>\<Platform>`, while CMake writes under

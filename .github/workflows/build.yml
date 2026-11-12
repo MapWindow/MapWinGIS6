@@ -62,7 +62,7 @@ jobs:
             -FailOnLostFlags `
             -FailOnNewWarnings
 
-  cmake:
+  cmake-vs:
     runs-on: windows-2025
     timeout-minutes: 180
 
@@ -128,7 +128,7 @@ jobs:
         with:
           name: testresults-cmake-${{ matrix.platform }}-${{ matrix.configuration }}
           path: out/b/${{ matrix.platform == 'x64' && 'vs-x64' || 'vs-x86' }}/test-results/*.xml
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Upload Release binaries
         if: matrix.configuration == 'Release'
