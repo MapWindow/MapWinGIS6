@@ -11,8 +11,11 @@
 #include "mapwingis/rendering/PolygonTriangulation.h"
 
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -117,6 +120,13 @@ namespace mwg::rendering
                 {
                     return found->second;
                 }
+                if (_mesh.vertices.size() >=
+                    static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
+                {
+                    throw CoreError(
+                        "Polygon triangulation produced more distinct vertices than the "
+                        "mesh index type supports");
+                }
                 const auto index = static_cast<std::uint32_t>(_mesh.vertices.size());
                 _mesh.vertices.push_back(point);
                 _vertexLookup.emplace(key, index);
@@ -179,7 +189,9 @@ namespace mwg::rendering
         const std::unique_ptr<OGRPolygon> source = MakeOgrPolygon(polygon);
 
         GdalErrorScope scope;
-        if (!source->IsValid())
+        const bool valid = source->IsValid();
+        scope.RethrowCaptureException();
+        if (!valid)
         {
             throw CoreError(
                 "Polygon triangulation requires a valid polygon; the input is "
@@ -191,10 +203,15 @@ namespace mwg::rendering
         {
             triangulation.reset(source->ConstrainedDelaunayTriangulation());
         }
+        catch (const std::bad_alloc&)
+        {
+            throw;
+        }
         catch (const std::exception& error)
         {
             throw CoreError(std::string("Polygon triangulation failed: ") + error.what());
         }
+        scope.RethrowCaptureException();
         if (triangulation == nullptr)
         {
             std::string message = "Polygon triangulation failed";
