@@ -33,8 +33,9 @@ library MapWinGISActiveXLib
         HRESULT FeatureCount([out, retval] hyper* count);
     };
 
-    // Published interfaces are immutable; new members go on a derived
-    // interface with its own IID so clients never call missing vtable slots.
+    // Extend this automation contract only through a derived interface with a
+    // new IID. Independent capabilities use separate IDispatch interfaces;
+    // event notifications use a dispinterface.
     [
         object,
         dual,
@@ -57,6 +58,66 @@ library MapWinGISActiveXLib
         HRESULT RenderingBackendPreference([in] BSTR preference);
     };
 
+    [
+        object,
+        dual,
+        oleautomation,
+        uuid(994F4526-284B-463F-8ED5-1551B601981B),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl3 : IMapWinGISControl2
+    {
+        [id(8)]
+        HRESULT ClearLayers();
+    };
+
+    [
+        object,
+        dual,
+        oleautomation,
+        uuid(7CBB8D66-3933-4AB3-A3A7-6BEB687B2D04),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl4 : IMapWinGISControl3
+    {
+        // Navigation returns S_OK even when no view change is possible.
+        // A fit requested before the control has a size is deferred.
+        [id(9)]
+        HRESULT FitToMap();
+
+        // Both step factors must be finite and greater than 1.
+        [id(10)]
+        HRESULT ZoomIn([in] double factor);
+
+        [id(11)]
+        HRESULT ZoomOut([in] double factor);
+
+        // Deltas are in map-coordinate units.
+        [id(12)]
+        HRESULT Pan([in] double deltaX, [in] double deltaY);
+
+        // x and y are screen pixels from the top-left; factor must be finite
+        // and positive. Values above 1 zoom in; values below 1 zoom out.
+        [id(13)]
+        HRESULT ZoomAt([in] double x, [in] double y, [in] double factor);
+
+        [id(14)]
+        HRESULT ZoomToLayer([in] hyper layerId);
+
+        [propget, id(15)]
+        HRESULT LayerCount([out, retval] LONG* count);
+
+        // Like LoadVectorDataset, this fits the combined map extent when
+        // possible, resetting any existing navigation view.
+        [id(16)]
+        HRESULT LoadVectorDatasetEx([in] BSTR path, [out, retval] hyper* layerId);
+
+        [id(17)]
+        HRESULT GetLayerId([in] LONG index, [out, retval] hyper* layerId);
+    };
+
+    // GDAL operations are an independent capability, not a version of the
+    // control's core automation contract.
     [
         object,
         dual,
@@ -88,6 +149,8 @@ library MapWinGISActiveXLib
             [out] SAFEARRAY(BSTR)* warnings);
     };
 
+    // Keep event notifications separate from the control's automation
+    // interfaces.
     [
         uuid(3EC7E255-3045-4A32-A9DA-12FA310FD3F0)
     ]
@@ -111,7 +174,7 @@ library MapWinGISActiveXLib
     ]
     coclass MapWinGISControl
     {
-        [default] interface IMapWinGISControl2;
+        [default] interface IMapWinGISControl4;
         interface IMapWinGISControlGdal;
         [default, source] dispinterface IMapWinGISControlEvents;
     };

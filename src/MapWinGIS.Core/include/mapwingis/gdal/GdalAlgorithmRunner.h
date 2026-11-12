@@ -55,6 +55,8 @@ namespace mwg
         [[nodiscard]] bool SetArgument(std::string_view name, const std::vector<std::string>& value);
         /// Sets a dataset or dataset-list argument and retains a reference.
         /// Dataset lists receive one value. The dataset remains owned by the caller.
+        /// When used for "output", Run() checks a flush but does not explicitly
+        /// close the supplied dataset; GDAL reference ownership controls its close.
         [[nodiscard]] bool SetDatasetArgument(std::string_view name, const GdalDatasetPtr& value);
 
         /// Validates configured values using the instantiated GDAL algorithm's
@@ -66,7 +68,8 @@ namespace mwg
 
         /// Runs and finalizes the configured algorithm, reporting progress and
         /// cancellation through the existing GDAL callback adapter.
-        /// Callbacks run on this thread and must not start GDAL operations or
+        /// Progress callbacks are serialized, but GDAL can invoke them on worker
+        /// threads. They must not start GDAL operations or
         /// wait for other threads that need GDAL. Callback exceptions become
         /// failure diagnostics, not user cancellation. Token/callback lifetimes
         /// must cover this call. Capture/logger exceptions propagate after
@@ -78,8 +81,17 @@ namespace mwg
         /// automatically; a later call is harmless and returns the same result.
         [[nodiscard]] bool Finalize();
 
-        /// Transfers the output dataset to the caller, if the algorithm
-        /// produced one. The caller owns the returned dataset.
+        /// Transfers the runner's output reference to the caller, if the
+        /// algorithm produced one. Persistent outputs with a non-empty output
+        /// path or dataset description are checked and closed by Run().
+        /// The runner then tries all registered readers to reopen the output
+        /// with its original access mode, falling back to read-only if needed.
+        /// If no reader can open it (including write-only streaming targets),
+        /// Run() still succeeds and records a warning, but this returns nullptr.
+        /// Anonymous outputs remain open to preserve driver dependencies.
+        /// For outputs supplied through SetDatasetArgument(), this is an
+        /// additional reference; the original remains caller-owned. Run()
+        /// checks its flush but cannot check its eventual close.
         [[nodiscard]] GdalDatasetPtr TakeOutputDataset();
 
         /// Returns all diagnostics captured since construction.

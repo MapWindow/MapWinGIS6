@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{67BB3E1C-8382-48D5-8A19-10A73F8D3A64}</ProjectGuid>
+    <RootNamespace>MapWinGISActiveXTests</RootNamespace>
+    <ProjectName>MapWinGIS.ActiveX.Tests</ProjectName>
+    <TargetName>MapWinGIS.ActiveX.Tests</TargetName>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;$(MwgRepoRoot)src\MapWinGIS.ActiveX;$(MwgRepoRoot)tests\MapWinGIS.Core.Tests;$(MwgRepoRoot)obj\MapWinGIS.ActiveX\$(Configuration)\$(Platform);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClInclude Include="..\MapWinGIS.Core.Tests\TestData.h" />
+    <ClInclude Include="OpenGlVectorLayerRendererTestAccess.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClCompile Include="ActiveXActivationTests.cpp" />
+    <ClCompile Include="ComConversionTests.cpp" />
+    <ClCompile Include="FrameBufferTests.cpp" />
+    <ClCompile Include="GdalOperationDispatcherTests.cpp" />
+    <ClCompile Include="..\MapWinGIS.Core.Tests\Main.cpp" />
+    <ClCompile Include="RenderingBaselineTests.cpp" />
+    <ClCompile Include="..\MapWinGIS.Core.Tests\TestData.cpp" />
+    <ClCompile Include="VectorLayerRendererTests.cpp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MapWinGIS.Core\MapWinGIS.Core.vcxproj">
+      <Project>{2B6A9A3B-0C5E-4E6E-9E31-3E8F5A2D1C01}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\src\MapWinGIS.ActiveX\MapWinGIS.ActiveX.Impl.vcxproj">
+      <Project>{9D1CDD38-30B1-42B0-8D75-9C217BFDB5A8}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\src\MapWinGIS.ActiveX\MapWinGIS.ActiveX.vcxproj">
+      <Project>{731D2046-E5DE-4079-8044-790245634856}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+</Project>

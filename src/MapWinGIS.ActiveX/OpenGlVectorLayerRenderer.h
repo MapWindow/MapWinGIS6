@@ -22,6 +22,11 @@
 
 namespace mwg::activex
 {
+    namespace testing
+    {
+        class OpenGlVectorLayerRendererTestAccess;
+    }
+
     class OpenGlVectorLayerRenderer final : public IVectorRenderBackend
     {
     public:
@@ -48,34 +53,28 @@ namespace mwg::activex
         /**
          * @brief Draws a scene of simple convex single-ring polygons.
          *
-         * Returns S_FALSE without drawing when the scene contains unsupported
-         * geometry or when no OpenGL context with framebuffer-object support
-         * is available, so callers can fall back to another backend.
+         * Draws all layers into one frame, bottom first. Returns S_FALSE
+         * without drawing when any layer contains unsupported geometry or
+         * when no OpenGL context with framebuffer-object support is
+         * available, so callers can fall back to another backend for the
+         * whole frame.
          */
         [[nodiscard]] HRESULT Draw(
             HDC deviceContext,
             const RECT& bounds,
-            const rendering::VectorRenderScene& scene) noexcept override;
+            const rendering::MapRenderScene& scene,
+            const Viewport& viewport) noexcept override;
 
         [[nodiscard]] std::wstring_view GetLastFailureReason() const noexcept
         {
             return _lastFailureReason;
         }
 
-#ifdef MWG_ENABLE_RENDERER_TEST_HOOKS
-        /**
-         * @brief Test hook: destroys the hidden render-target window while the
-         * backend still holds its handles.
-         *
-         * The next draw then fails to activate the context, as after a lost
-         * device context, which lets tests verify recreation on later draws.
-         * Compiled only into the native test build, which defines
-         * MWG_ENABLE_RENDERER_TEST_HOOKS; the ActiveX control does not expose it.
-         */
-        void SimulateContextLossForTesting() noexcept;
-#endif
-
     private:
+        friend class testing::OpenGlVectorLayerRendererTestAccess;
+
+        void SimulateContextLoss() noexcept;
+
         struct FramebufferFunctions;
         struct Target final
         {
@@ -97,10 +96,12 @@ namespace mwg::activex
         [[nodiscard]] TargetValidation ValidateTarget(
             HDC deviceContext,
             const RECT& bounds,
-            const rendering::VectorRenderScene& scene) noexcept;
+            const rendering::MapRenderScene& scene,
+            const Viewport& viewport) noexcept;
         [[nodiscard]] bool EnsureStaging(std::size_t stagingBytes) noexcept;
         [[nodiscard]] HRESULT RenderScene(
-            const rendering::VectorRenderScene& scene,
+            const rendering::MapRenderScene& scene,
+            const Viewport& viewport,
             const Target& target) noexcept;
         [[nodiscard]] HRESULT CopyToDeviceContext(
             HDC deviceContext,

@@ -91,8 +91,9 @@ expect.
   `SetLogHandler()`. Never write to stderr and never show message boxes from
   the core.
 - Algorithm runners, compatibility utilities, and pipelines share an execution
-  lock. Their callbacks run on the calling thread and cannot re-enter these
-  operations. Direct dataset access still needs caller synchronization.
+  lock. GDAL can report progress on worker threads. The shared progress adapter
+  serializes callbacks, which cannot re-enter these operations.
+  Direct dataset access still needs caller synchronization.
   See [operation results and threading](gdal-modern-capabilities.md#operation-results-logging-and-cancellation)
   for result, cancellation, and callback lifetime contracts.
 - The supported GDAL version and dependency pin are documented in
@@ -105,6 +106,145 @@ otherwise. Even `const` methods may cache state (see `VectorLayer`). The
 pattern is: one dataset object per thread, or serialized access.
 `GdalEnvironment` initialization is the exception — safe to call from
 anywhere.
+
+## Map model
+
+`mwg::Map` (`mapwingis/map/Map.h`) is the authoritative owner of the layer
+collection and map-level layer state. It has no windowing, COM, or rendering
+state; hosts and renderers read from it.
+
+- **Identity.** `Map::AddLayer` returns a `LayerId`. Identities start at 1,
+  increase, and are never reused by the same map, even after `RemoveLayer` or
+  `Clear`. `LayerId{}` (0) identifies no layer. Neither display names nor
+  positions identify a layer.
+- **Ordering.** Position 0 is the bottom layer and is drawn first; new layers
+  are appended on top. Positions shift on removal; identities do not.
+- **Ownership.** The map owns its `MapLayer` objects. A `MapLayer` reference
+  stays valid until that layer is removed, the map is cleared, or the map is
+  destroyed; changes to other layers do not invalidate it. Each `MapLayer`
+  shares ownership of its `VectorDataset` (`std::shared_ptr`), so the dataset
+  lives as long as any map layer or other owner uses it.
+- **Duplicates.** The same source layer may be added more than once; each
+  addition is an independent map layer with its own identity and visibility.
+- **Visibility.** Layers are visible when added. `Map::SetLayerVisible`
+  changes visibility. Hidden layers are excluded from
+  `GetExtent(ExtentScope::VisibleLayers)`, the default and the extent used for
+  zoom-to-map, and included in `GetExtent(ExtentScope::AllLayers)`.
+- **Extents.** Map extents are the union of valid layer extents
+  (`Extent::IsValid`: non-empty and finite). They are computed on each call
+  rather than cached, so visibility changes, added or removed layers, and
+  source edits are reflected without invalidation. A map with no valid layer
+  extent reports an empty `Extent`.
+- **Coordinates.** Layers are assumed to share compatible source coordinates.
+  The map does not reproject; layers in different coordinate reference
+  systems do not align until coordinate transformations are implemented.
+
+Vector layer extent queries cache successful results. Read failures throw
+without caching an empty result. If a driver cannot provide an extent and
+reports no failure diagnostic, Core scans the geometries with read-error checks.
+The scan asks the driver to ignore attributes.
+Attribute edits keep the cached extent. After geometry edits, the next extent
+query scans once and caches the result.
+
+Call `VectorDataset::Flush()` before closing after geometry edits to persist
+exact Shapefile and GeoPackage bounds. The flush runs one O(n) stored-extent
+scan per dirty layer, rather than one per edit. A recomputation failure throws
+without rolling back geometry writes and leaves the layer dirty for retry.
+Other formats retain their driver's stored-extent behavior.
+
+## Viewport
+
+`mwg::Viewport` (`mapwingis/map/Viewport.h`) is the view of map coordinates on
+a pixel area. It converts between map and screen coordinates and fits an
+extent, typically `Map::GetExtent()`, into the display area. It does not
+reference a `Map` and holds no windowing, COM, or rendering state. It is a
+small copyable value type, like `Extent`, so renderers and navigation code can
+take snapshots.
+
+- **Coordinates.** Map X increases right and map Y increases up. Screen X
+  increases right and screen Y increases down, in pixels from the top-left
+  corner. Screen coordinates are continuous `double` values: pixel `(i, j)`
+  covers `[i, i + 1) x [j, j + 1)`. `ToPixel` rounds down to the containing
+  pixel; round only there.
+- **State.** A size in pixels plus, once set, a view: the map point at the
+  viewport center and one resolution (map units per pixel) for both axes. The
+  visible extent is derived from these, so it always has the viewport's
+  aspect ratio and geometry is never distorted. Resizing keeps the center and
+  resolution.
+- **Validity.** A viewport is valid when both dimensions are positive and it
+  has a view. On an invalid viewport, transformations return `std::nullopt`
+  and `VisibleExtent` returns an empty `Extent`. A zero-sized viewport keeps
+  its view. Non-finite inputs or results give `std::nullopt`; negative sizes,
+  non-finite views, and invalid padding throw `InvalidArgument`.
+- **Fitting.** `FitExtent` centers the extent and picks the smallest
+  resolution that shows it on both axes, so the other axis expands. Padding
+  is kept free on every side. Extent edges map to the centers of the
+  outermost pixels inside the padding, so pixel rounding never pushes
+  boundary geometry outside the viewport. If padding does not fit, the extent
+  spans half a pixel around the center instead. A zero-span axis does not constrain
+  the resolution. A single point keeps the current resolution, or uses
+  `kDefaultPointResolution` when no view exists. Invalid
+  extents and zero-sized viewports return `false` without changing the view.
+- **Limits.** Sizes are limited to `kMaxDimension` pixels. Centers are clamped
+  to `±kMaxCoordinate` and resolutions to `[MinResolution(center),
+  kMaxResolution]`, where the minimum is relative to the center's magnitude so
+  that pixels stay many representable doubles wide.
+- **Navigation.** `Pan` moves the center in map units. `Zoom` divides the
+  resolution by its factor, and `ZoomOut` multiplies it directly. `ZoomAt`
+  keeps the map coordinate under a screen anchor unless the limits intervene.
+  Moving the center can raise `MinResolution` and change the resolution
+  again, so the anchored coordinate can move even without center clamping.
+  `ZoomAt` needs a valid viewport. Center zoom and pan only need a view.
+
+## Map view and multi-layer rendering
+
+`mwg::MapView` (`mapwingis/map/MapView.h`) owns one `Map`, the one `Viewport`
+all its layers are drawn through, and the render scene prepared from the map.
+It is the only map and view state: the ActiveX control owns a `MapView` and
+has no extent or transform of its own.
+
+- **Render scene.** `rendering::CreateMapRenderScene`
+  (`mapwingis/rendering/MapRenderScene.h`) copies the polygon geometry of
+  every visible layer into an owned `MapRenderScene`, bottom layer first. Each
+  layer is converted on its own: hidden layers, layers without polygon
+  geometry, and layers that fail (for example, non-polygon layers) are listed
+  in `skippedLayers` with a reason and do not stop the other layers.
+  This includes `std::exception` errors except `std::bad_alloc`, which propagates.
+  Exceptions outside that hierarchy also propagate. The scene
+  holds no view state and no references to the map or its datasets.
+- **Shared viewport.** Renderers draw the scene through the `Viewport` passed
+  with it, so every layer uses the same transformation. A view change, such as
+  a resize, does not rebuild the scene.
+- **Redraws.** Map changes go through `MapView` (`AddLayer`, `RemoveLayer`,
+  `ClearLayers`, `SetLayerVisible`), which marks the scene stale; `Scene()`
+  rebuilds it on the next call. The `AddLayer` overload that accepts a prepared
+  vector scene transfers that geometry into the current scene without another
+  traversal. It rebuilds any stale existing scenes before adding the new layer.
+  Every mutator returns whether the frame may
+  have changed, and the host requests a redraw when it does. Edits to source
+  geometry are not observed; call `InvalidateScene` after them.
+- **Initial view and resizing.** While the viewport has no view, adding a
+  layer fits the view to the visible map extent. `Resize` keeps the center
+  and resolution, so resizing neither moves nor rescales the map. A fit
+  requested while the viewport has no size, for example before the host
+  window exists or while it is minimized, is done by the first `Resize` that
+  gives it a size.
+  If reading the pending extent throws, `Resize` propagates the error after
+  applying the size and discarding the pending fit. The center and resolution
+  stay unchanged. The host must request a redraw after this error.
+- **Navigation.** `FitToMap` (zoom to map: visible layers only, with
+  padding), `ZoomToLayer` (by `LayerId`, also for hidden layers), `ZoomIn`
+  and `ZoomOut` (center zoom by a factor above 1, default
+  `kDefaultZoomFactor`), `ZoomAt`, and `Pan` change the shared viewport and
+  return whether a redraw is needed. Empty maps, missing layers, and layers
+  without a valid extent return `false` and keep the view. The latest request
+  wins: a new fit replaces a pending one, and a navigation step that changes
+  the view cancels it. A missing layer or an invalid extent also cancels a
+  pending fit. Navigation that returns `false` keeps it, including `ZoomAt`
+  on a zero-sized viewport and center zoom at a resolution limit.
+  None of this depends on COM, mouse messages, or a renderer. The ActiveX
+  control maps left-button drags and cursor-anchored wheel input onto these
+  calls.
 
 ## ActiveX and rendering architecture
 
@@ -122,23 +262,41 @@ responsibilities, not a requirement to split them into more DLLs.
 | Future compute work | Host optional compute acceleration only for workloads justified by profiling. | OpenGL being installed or selected |
 
 The OCX is the composition root for control, render-coordinator, and
-host-specific graphics-context lifetimes. The control owns the opened
-`VectorDataset` and its prepared `VectorRenderScene`; each `VectorDataset`
-owns its `VectorLayer` objects. Core creates backend-neutral render input; the
-coordinator binds it to the control target and backend. Backends must not
-retain references to dataset-owned objects after a draw. Core dataset and
-layer objects are not thread-safe, so the control must serialize their use.
+host-specific graphics-context lifetimes. The control owns a `MapView`, which
+owns the map, its layers' datasets (shared), the viewport, and the prepared
+`MapRenderScene`; each `VectorDataset` owns its `VectorLayer` objects. Core
+creates backend-neutral render input; the coordinator binds it to the control
+target and backend. Backends must not retain references to dataset-owned
+objects after a draw, and they keep no view state. Core dataset and layer
+objects are not thread-safe, so the control must serialize their use.
 The OpenGL backend owns its WGL context and reusable pixel buffers; those
-resources are released with the control. Resizing updates the OpenGL viewport
-and staging buffers without changing ownership of map data.
+resources are released with the control. `WM_SIZE` resizes the `MapView`
+viewport. For windowless hosts, `SetObjectRects` supplies the live size.
+`OnDraw` uses a viewport copy sized to the drawing target. Printing, metafile
+output, and scaled draws do not change the live viewport or its pending fit.
+If no view exists yet, drawing fits only that copy to the visible map extent.
+Resizing updates the OpenGL viewport and staging buffers without changing
+ownership of map data. A left-button drag pans the shared `MapView` by the
+pixel delta converted with the viewport's map-units-per-pixel resolution.
+Wheel input calls `MapView::ZoomAt` at the cursor. The control acquires and
+releases mouse capture through either its window or its windowless in-place
+site, and ends a drag on capture loss, cancellation, close, or destruction.
+These view changes do not rebuild the render scene, and both backends draw
+through the updated viewport.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
-coordinator nor a backend loads datasets or implements GIS rules. Core selects
-the first dataset layer and sequentially reads Polygon, MultiPolygon,
-CurvePolygon, and MultiSurface features into an owned vector scene, linearizing
-curved geometries. The shared `ViewTransform` supplies the same centered,
-aspect-preserving scale and 12-pixel margin to both renderers. The coordinator
-tries the OpenGL backend for simple convex polygons with one ring.
+coordinator nor a backend loads datasets or implements GIS rules. For each
+visible map layer, Core sequentially reads Polygon, MultiPolygon,
+CurvePolygon, and MultiSurface features into an owned vector scene,
+linearizing curved geometries. `ViewTransform` captures the `Viewport` once
+per frame so both backends transform every vertex of every layer with the
+same arithmetic as `Viewport::MapToScreen`; GDI draws a screen position in
+the pixel that contains it (`ToPixel`). One backend draws the whole frame.
+The coordinator tries the OpenGL backend when every layer has only simple
+convex polygons with one ring. GDI checks each layer before drawing it; a
+layer with non-finite or out-of-range device coordinates is skipped and
+reported (`GetFailedLayers`, `RenderingStatus`) while the other layers are
+still drawn.
 OpenGL uses a context created on a hidden, never-presented window, draws with
 fixed-function calls into a framebuffer object (OpenGL 3.0 or
 `GL_EXT_framebuffer_object`), and reads pixels back into a reusable CPU buffer
@@ -150,16 +308,19 @@ support, initialization failures, and drawing failures use the GDI backend.
 The GDI backend draws the currently supported polygon scene, including its
 interior rings. Both backends draw source coordinates without reprojection,
 and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
-and MultiSurface features from the first vector layer only.
+and MultiSurface features.
 
 The `RenderingBackendPreference` automation property is configurable as
 `Automatic`, `OpenGL`, or `GDI`. `Automatic` and `OpenGL` try the OpenGL
 backend first and fall back to GDI when the scene, hardware, allocation, or
 drawing operation is unsupported. The control reports the active backend and
 the reason for a fallback through `RenderingBackend` and `RenderingStatus`.
-These rendering properties are on `IMapWinGISControl2`, the coclass default
-interface, which derives from `IMapWinGISControl`; the original interface and
-its IID are left unchanged so clients built against it keep working.
+These rendering properties are on `IMapWinGISControl2`, which derives from
+`IMapWinGISControl`. `IMapWinGISControl3` adds `ClearLayers` at DISPID 8.
+The coclass default is `IMapWinGISControl4`, which derives from
+`IMapWinGISControl3`. It adds map navigation, layer count, and stable layer IDs
+at DISPIDs 9-17. The earlier interfaces, their DISPIDs, and their IIDs remain
+unchanged.
 OpenGL capability detection checks framebuffer-object entry points, the
 maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
@@ -197,20 +358,52 @@ and does not claim MapWinGIS 5 `IGdalUtils` binary compatibility.
 At most sixteen operations may be active or awaiting result cleanup. Call
 `EndGdalOperation` after completion to release an operation slot. The control
 delivers events on its owning apartment thread. Destroying the in-place window
-pauses notification delivery without cancelling operations; a subsequent
-`WM_SIZE` reconnects delivery. Calling `Close` or releasing the control's final
-COM reference cancels outstanding work and drops queued notifications.
-Workers never retain COM references or wait for event handlers.
+suspends notification delivery without cancelling operations; a subsequent
+`WM_SIZE` resumes delivery. Calling `Close` or destroying the control after
+the client's final COM reference is released cancels outstanding work and
+discards queued notifications. An in-progress event dispatch holds a temporary
+COM reference, so releasing the client's reference inside an event does not
+destroy the control until dispatch returns. Workers never retain COM references
+or wait for event handlers.
 
-Only the first vector layer in a dataset is considered, and it must be a
-polygon-compatible layer; a dataset whose first layer has another geometry
-type fails to load even if a later layer is polygonal. Raster layers and other
-geometry types are not rendered. There is no map navigation or
-reprojection, so coordinates remain in the source coordinate system.
+`LoadVectorDataset` adds the first vector layer of a dataset on top of the
+map. Earlier layers stay loaded, so calling it again shows several layers.
+This includes repeated loads of the same dataset. `LoadVectorDatasetEx`
+returns the stable ID of the new layer, and `GetLayerId` returns a layer ID by
+its current 0-based position. Call `ClearLayers` before switching or refreshing
+datasets to avoid duplicate layers. It releases all loaded datasets and clears
+the feature total, but keeps the view.
+The layer must be polygon-compatible: a dataset whose first layer has another
+geometry type fails to load and is not added, even if a later layer is
+polygonal. An empty polygon layer loads but draws nothing. The control reads
+and validates the candidate layer before adding it, so a rejected load cannot
+change the live viewport or schedule a fit. The control transfers the validated
+scene into `MapView`. Loading another layer and drawing the first frame reuse
+the prepared geometry of existing layers.
+`LayerLoaded` reports whether the map has any layer, `LayerCount` reports its
+current layer total, and `FeatureCount` is the cached total over all loaded
+layers. The control updates the total after a successful load and resets it on
+`ClearLayers`. Scene preparation counts
+all source features, including null and empty geometries, during its geometry
+traversal. Drivers that report an unknown count can still load. The native
+`VectorLayer::FeatureCount` also returns an exact count. If the driver cannot
+provide one, it builds the feature ID index and reports read failures.
+COM property reads do not scan datasets or rebuild the scene. `FitToMap`,
+`ZoomToLayer`, `ZoomIn`, `ZoomOut`, `ZoomAt`, and `Pan` forward navigation to
+the control's one `MapView` and request a redraw only when its view changes.
+Each successful load still fits the view to the combined map extent. Raster
+layers and other geometry types are not rendered. There is no reprojection, so
+coordinates remain in the source coordinate system and layers are assumed to
+share one.
 
 Core prepares and retains the complete supported polygon scene in memory,
 reading feature geometries sequentially without WKT serialization and
-reparsing. There is no tiling, paging, or unchanged-geometry cache. The opt-in
+reparsing. Adding a prepared layer retains the existing scene. Other layer
+changes and explicit invalidation rebuild the scene for all visible layers.
+There is no tiling, paging, or clipping to the visible extent. GDI skips a
+layer whose device coordinates exceed its range. It clips drawing to the
+requested target rectangle and the host's existing clip region, then restores
+the device context. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation and backend frame costs. OpenGL only supports convex
 single-ring polygons and copies each frame through CPU memory. Its reusable CPU
@@ -220,7 +413,10 @@ Windows CPU fallback; Core has no independent platform-neutral renderer.
 
 The C# host's pixel assertions, activation, and native tests pass for Debug
 and Release on Win32 and x64 in an interactive desktop session.
-The next useful milestone is a tested map-view transform for viewport and
-coordinate-system behavior. Measure scene preparation with representative
-datasets before adding caching, paging, or broader OpenGL geometry support.
+Core navigation on the shared `MapView` (zoom to map and layer, zoom in and
+out, anchored zoom, and pan) is exposed through `IMapWinGISControl4`; the
+ActiveX control also supports left-button drag panning and cursor-anchored
+wheel zoom. Deep zoom can push a layer past the GDI coordinate range until
+clipping exists. Measure scene preparation with representative datasets
+before adding caching, paging, or broader OpenGL geometry support.
 OpenCL and full MapWinGIS 5 API parity remain deferred.

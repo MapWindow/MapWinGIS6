@@ -86,7 +86,7 @@ and MSBuild defaults):
 
 | Option | Source |
 |---|---|
-| `/W4 /WX- /wd4251 /external:W4` | `WarningLevel`, `DisableSpecificWarnings`; `/external:W4` is the MSBuild default for external headers |
+| `/W4 /WX (Debug x64), /WX- (other configurations) /wd4251 /external:W4` | `WarningLevel`, `TreatWarningAsError` for Debug x64, `DisableSpecificWarnings`; `/external:W4` is the MSBuild default for external headers |
 | `/utf-8 /Zc:__cplusplus /Zc:preprocessor /Zc:throwingNew /bigobj` | `AdditionalOptions` |
 | `/permissive- /sdl /EHsc /GS /Gd /Gm- /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline` | `ConformanceMode`, `SDLCheck`, `ExceptionHandling`, MSBuild defaults |
 | `/std:c++20` (`/TP`), `/std:c17` (`/TC`, `_i.c` only) | `LanguageStandard`, `LanguageStandard_C` |
@@ -246,7 +246,9 @@ unless `CMAKE_TOOLCHAIN_FILE` is already set.
 One custom target, `MapWinGIS.ActiveX.Interface`, owns the only MIDL
 invocation and writes to `<build>/src/MapWinGIS.ActiveX/midl`. A small library
 target exposes that include directory and the generated `_i.c`. The OCX and
-the tests both depend on that target, never on each other's intermediates.
+the tests both depend on that target, never on each other's intermediates. The
+type library is copied beside the OCX after linking, matching the MSBuild
+output location.
 
 ### D4. ActiveX sources compiled into the tests
 
@@ -349,6 +351,9 @@ Measured for Debug and Release, x64 and Win32 (Ninja presets):
 - CMake needs two explicit settings to match MSBuild: `DEFINE_SYMBOL ""` (no
   `MapWinGIS_ActiveX_EXPORTS`; the `.def` file exports the entry points) and
   `/TC` for C sources (CMake passes `/TP` for C++ only).
+- CMake compiles the implementation sources directly into the OCX target,
+  while MSBuild builds them in `MapWinGIS.ActiveX.Impl`; they therefore also
+  receive the OCX target's `_ATL_APARTMENT_THREADED` and `_WINDLL` definitions.
 - `dumpbin`: identical dependents, the five COM exports, subsystem and DLL
   characteristics.
 - The generated type library is byte-identical to the MSBuild one, and
@@ -356,7 +361,10 @@ Measured for Debug and Release, x64 and Win32 (Ninja presets):
 - MIDL runs through one custom command for all generators
   (`cmake/MwgMidl.cmake`) with the MSBuild options. This IDL produces no
   proxy or `dlldata.c`; MIDL is told to write them into the output directory
-  anyway, so nothing can land in the source tree.
+  and CMake tracks them as byproducts. If the IDL starts producing them, they
+  must be linked into each COM consumer.
+- The generated `.tlb` is copied beside the OCX after linking, matching the
+  MSBuild output directory.
 - Per-user registration (`regsvr32 /n /i:user`), `New-Object -ComObject
   MapWinGIS6.Control` and unregistration work for the x64 and Win32 OCX.
 - Three clean `-j32` Ninja builds in a row succeeded (no MIDL/RC race), and the

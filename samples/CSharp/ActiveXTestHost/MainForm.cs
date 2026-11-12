@@ -12,6 +12,10 @@ internal sealed class MainForm : Form
 {
     private const string ProgId = "MapWinGIS6.Control.6";
     private const int ColorWindow = 5;
+    private const int HResultFail = unchecked((int)0x80004005);
+    private const int HResultInvalidArgument = unchecked((int)0x80070057);
+    private const int HResultDispatchException = unchecked((int)0x80020009);
+    private const double ZoomStep = 1.5;
     private static readonly Color MapFillColor = Color.FromArgb(61, 122, 169);
 
 #if MWG_X64
@@ -26,7 +30,13 @@ internal sealed class MainForm : Form
 
     private readonly HostOptions _options;
     private readonly Panel _surfacePanel;
-    private readonly ToolStripStatusLabel _statusLabel;
+    private readonly ListView _layerList;
+    private readonly NumericUpDown _panStep;
+    private readonly ToolStripStatusLabel _coreStatusLabel;
+    private readonly ToolStripStatusLabel _layerCountLabel;
+    private readonly ToolStripStatusLabel _featureCountLabel;
+    private readonly ToolStripStatusLabel _backendLabel;
+    private readonly ToolStripStatusLabel _renderingStatusLabel;
     private readonly List<CheckResult> _results = [];
     private readonly object _resultsLock = new();
     private readonly object _reportLock = new();
@@ -45,37 +55,119 @@ internal sealed class MainForm : Form
         ExitCode = options.Automated ? 1 : 0;
         Text = "MapWinGIS ActiveX Test Host";
         ClientSize = new Size(720, 480);
-        MinimumSize = new Size(360, 260);
+        MinimumSize = new Size(620, 360);
         StartPosition = FormStartPosition.CenterScreen;
         TopMost = options.Automated;
 
-        var toolbar = new FlowLayoutPanel
+        var toolbar = new ToolStrip
         {
             Dock = DockStyle.Top,
-            Height = 42,
-            Padding = new Padding(6),
-            WrapContents = false
+            GripStyle = ToolStripGripStyle.Hidden,
+            ImageScalingSize = new Size(16, 16)
         };
-        var recreateButton = new Button { Text = "Recreate control", AutoSize = true };
-        var repaintButton = new Button { Text = "Request repaint", AutoSize = true };
-        recreateButton.Click += (_, _) => RecreateManually();
-        repaintButton.Click += (_, _) => RequestManualRepaint();
-        toolbar.Controls.Add(recreateButton);
-        toolbar.Controls.Add(repaintButton);
+        AddToolButton(toolbar, "Open", OpenVectorDatasets,
+            "Open vector datasets. Only the first layer of each dataset is loaded; formats depend on the GDAL build.");
+        AddToolButton(toolbar, "Clear", ClearLayers, "Remove all loaded layers.");
+        toolbar.Items.Add(new ToolStripSeparator());
+        AddToolButton(toolbar, "Zoom +", () => RunNavigation(automation => automation.ZoomIn(ZoomStep)));
+        AddToolButton(toolbar, "Zoom -", () => RunNavigation(automation => automation.ZoomOut(ZoomStep)));
+        AddToolButton(
+            toolbar,
+            "Map",
+            () => RunNavigation(automation => automation.FitToMap()),
+            "Zoom to the full map.");
+        AddToolButton(toolbar, "Layer", ZoomToSelectedLayer, "Zoom to the selected layer.");
+        toolbar.Items.Add(new ToolStripSeparator());
+        AddToolButton(toolbar, "←", () => PanMap(-1, 0), "Pan left by the selected map-unit step.");
+        AddToolButton(toolbar, "→", () => PanMap(1, 0), "Pan right by the selected map-unit step.");
+        AddToolButton(toolbar, "↑", () => PanMap(0, 1), "Pan up by the selected map-unit step.");
+        AddToolButton(toolbar, "↓", () => PanMap(0, -1), "Pan down by the selected map-unit step.");
+        toolbar.Items.Add(new ToolStripLabel("Pan units:"));
+        _panStep = new NumericUpDown
+        {
+            DecimalPlaces = 2,
+            Minimum = 0.01M,
+            Maximum = 1_000_000_000M,
+            Increment = 0.5M,
+            Value = 1M,
+            Width = 72,
+            ThousandsSeparator = true
+        };
+        toolbar.Items.Add(new ToolStripControlHost(_panStep)
+        {
+            AutoSize = false,
+            Width = 78,
+            ToolTipText = "Pan step in the dataset's map-coordinate units."
+        });
+        toolbar.Items.Add(new ToolStripSeparator());
+        AddToolButton(toolbar, "Recreate", RecreateManually, "Recreate the ActiveX control.");
+        AddToolButton(toolbar, "Repaint", RequestManualRepaint, "Request a repaint of the control.");
+
+        var layerPanel = new Panel { Dock = DockStyle.Fill };
+        _layerList = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            HideSelection = false,
+            MultiSelect = false,
+            ShowItemToolTips = true
+        };
+        _layerList.Columns.Add("Layer", 105);
+        _layerList.Columns.Add("Features", 65, HorizontalAlignment.Right);
+        _layerList.Columns.Add("ID", 75, HorizontalAlignment.Right);
+        layerPanel.Controls.Add(_layerList);
+
+        var layout = new SplitContainer
+        {
+            Size = ClientSize,
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            FixedPanel = FixedPanel.Panel1,
+            SplitterDistance = 270,
+            Panel1MinSize = 250,
+            Panel2MinSize = 250
+        };
+        layout.Panel1.Controls.Add(layerPanel);
 
         _surfacePanel = new Panel
         {
             Dock = DockStyle.Fill,
             BackColor = Color.Magenta
         };
+        layout.Panel2.Controls.Add(_surfacePanel);
 
         var statusStrip = new StatusStrip();
-        _statusLabel = new ToolStripStatusLabel("Starting...");
-        statusStrip.Items.Add(_statusLabel);
+        _coreStatusLabel = new ToolStripStatusLabel("Core: starting");
+        _layerCountLabel = new ToolStripStatusLabel("Layers: 0");
+        _featureCountLabel = new ToolStripStatusLabel("Features: 0");
+        _backendLabel = new ToolStripStatusLabel("Backend: unavailable");
+        _renderingStatusLabel = new ToolStripStatusLabel("Rendering: starting")
+        {
+            Spring = true,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        statusStrip.Items.AddRange(
+        [
+            _coreStatusLabel,
+            new ToolStripStatusLabel("|"),
+            _layerCountLabel,
+            new ToolStripStatusLabel("|"),
+            _featureCountLabel,
+            new ToolStripStatusLabel("|"),
+            _backendLabel,
+            new ToolStripStatusLabel("|"),
+            _renderingStatusLabel
+        ]);
 
-        Controls.Add(_surfacePanel);
+        Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(statusStrip);
+        EnableDatasetDrop(this);
+        EnableDatasetDrop(layout);
+        EnableDatasetDrop(layerPanel);
+        EnableDatasetDrop(_layerList);
+        EnableDatasetDrop(_surfacePanel);
         Shown += OnShown;
         CreateTestDataset();
     }
@@ -105,16 +197,12 @@ internal sealed class MainForm : Form
             LoadTestLayer();
             _host!.Update();
             Application.DoEvents();
-            bool initialized = ReadCoreInitialized();
-            dynamic automation = _host.AutomationObject!;
-            _statusLabel.Text = initialized
-                ? $"Active: {ProgId}; backend={automation.RenderingBackend}; {automation.RenderingStatus}"
-                : $"Active: {ProgId}; CoreInitialized=false";
+            RefreshStatus();
         }
         catch (Exception exception)
         {
             string message = ExplainFailure(exception);
-            _statusLabel.Text = message;
+            _renderingStatusLabel.Text = $"Rendering: {message}";
             MessageBox.Show(
                 this,
                 message,
@@ -128,16 +216,19 @@ internal sealed class MainForm : Form
     {
         if (_host is null)
         {
-            _statusLabel.Text = "The control is not active.";
+            _renderingStatusLabel.Text = "Rendering: the control is not active.";
             return;
         }
 
-        _host.Invalidate(true);
-        _host.Update();
-        _surfacePanel.Update();
-        dynamic automation = _host.AutomationObject!;
-        _statusLabel.Text =
-            $"backend={automation.RenderingBackend}; {automation.RenderingStatus}";
+        try
+        {
+            RepaintHost();
+            RefreshStatus();
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError(exception);
+        }
     }
 
     private async Task RunAutomatedAsync()
@@ -148,12 +239,13 @@ internal sealed class MainForm : Form
             RecordCheck("Activation and creation", CreateHostedControl);
             RecordCheck("Automation contract", () =>
             {
-                bool initialized = ReadCoreInitialized();
-                _statusLabel.Text = $"Active: {ProgId}; CoreInitialized={initialized}";
+                _ = ReadCoreInitialized();
+                RefreshStatus();
             });
             RecordCheck("Load vector layer", LoadTestLayer);
+            RecordCheck("Invalid dataset handling", VerifyInvalidDatasetHandling);
             await RecordCheckAsync("GDAL COM event sinks", VerifyGdalEventSinksAsync);
-            RecordCheck("CPU backend preference and status", VerifyCpuBackendSelection);
+            RecordCheck("Rendering backends", VerifyRenderingBackendsWhereSupported);
 
             RecordCheck("Resize", VerifyResize);
             await RecordCheckAsync("Repaint", VerifyRepaintAsync);
@@ -161,12 +253,22 @@ internal sealed class MainForm : Form
             RecordCheck("Recreation", CreateHostedControl);
             RecordCheck("Recreated automation contract", () =>
             {
-                bool initialized = ReadCoreInitialized();
-                _statusLabel.Text =
-                    $"Recreated: {ProgId}; CoreInitialized={initialized}";
+                _ = ReadCoreInitialized();
+                RefreshStatus();
             });
             RecordCheck("Reload vector layer", LoadTestLayer);
             await RecordCheckAsync("Recreated repaint", VerifyRepaintAsync);
+            RecordCheck("Multiple datasets and stable layer IDs", VerifyMultipleDatasetLoading);
+            RecordCheck("Invalid layer ID handling", VerifyInvalidLayerIdHandling);
+            RecordCheck("Zoom to individual layers", VerifyZoomToLayers);
+            RecordCheck("Zoom in and zoom out", VerifyZoomInAndOut);
+            RecordCheck("Pan", VerifyPan);
+            RecordCheck("ZoomAt", VerifyZoomAt);
+            RecordCheck("Zoom to map", VerifyFitToMap);
+            RecordCheck("Navigation after resizing", VerifyNavigationAfterResize);
+            RecordCheck("Clear and reload layers", VerifyClearAndReload);
+            RecordCheck("Navigation on an empty map", VerifyEmptyMapNavigation);
+            RecordCheck("Interactive load rendering status", VerifyInteractiveLoadStatus);
             RecordCheck("Final dispose", VerifyDispose);
 
             if (_reportWriteError is not null)
@@ -177,13 +279,13 @@ internal sealed class MainForm : Form
             }
 
             ExitCode = 0;
-            _statusLabel.Text = "All automated hosting checks passed.";
+            _renderingStatusLabel.Text = "Automated hosting checks passed.";
         }
         catch (Exception exception)
         {
             ExitCode = 1;
-            _statusLabel.Text = ExplainFailure(exception);
             DisposeHostedControl();
+            _renderingStatusLabel.Text = $"Rendering: {ExplainFailure(exception)}";
         }
         finally
         {
@@ -318,8 +420,10 @@ internal sealed class MainForm : Form
     private void CreateHostedControl()
     {
         DisposeHostedControl();
+        _layerList.Items.Clear();
 
         var host = new ActiveXHostControl { Dock = DockStyle.Fill };
+        EnableDatasetDrop(host);
         _surfacePanel.Controls.Add(host);
         _host = host;
         host.CreateControl();
@@ -361,7 +465,536 @@ internal sealed class MainForm : Form
                 "The control did not load the two-feature polygon test layer.");
         }
 
+        AddLayerListItem(new LoadedLayer(
+            (long)automation.GetLayerId(0), "sample", 2, TestDatasetPath));
         VerifyCoreInitialized("vector dataset load");
+        RefreshStatus();
+    }
+
+    private LoadedLayer AddVectorDataset(string path, List<string> warnings)
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+        }
+
+        dynamic automation = automationObject;
+        int previousLayerCount = (int)automation.LayerCount;
+        long previousFeatureCount = (long)automation.FeatureCount;
+        long layerId = (long)automation.LoadVectorDatasetEx(path);
+        var layer = new LoadedLayer(
+            layerId, Path.GetFileNameWithoutExtension(path), null, path);
+        ListViewItem item = AddLayerListItem(layer);
+
+        // The load is committed. Metadata failures must not hide the layer or report a failed load.
+        try
+        {
+            int currentLayerCount = (int)automation.LayerCount;
+            long currentFeatureCount = (long)automation.FeatureCount;
+            if (layerId <= 0 ||
+                currentLayerCount != previousLayerCount + 1 ||
+                currentFeatureCount < previousFeatureCount)
+            {
+                throw new InvalidOperationException(
+                    "The control returned inconsistent layer information.");
+            }
+
+            // This aggregate delta is valid only for one load at a time on the UI thread.
+            long featureCount = currentFeatureCount - previousFeatureCount;
+            layer = layer with { FeatureCount = featureCount };
+            item.Tag = layer;
+            item.SubItems[1].Text = featureCount.ToString();
+            long indexedLayerId = (long)automation.GetLayerId(previousLayerCount);
+            if (indexedLayerId != layerId)
+            {
+                throw new InvalidOperationException(
+                    $"The control returned layer ID {layerId}, but index {previousLayerCount} reports ID {indexedLayerId}.");
+            }
+        }
+        catch (Exception exception)
+        {
+            warnings.Add($"{path}: loaded as layer {layerId}, but metadata could not be verified. {ExplainOperationFailure(exception)}");
+        }
+
+        return layer;
+    }
+
+    private ListViewItem AddLayerListItem(LoadedLayer layer)
+    {
+        var item = new ListViewItem(layer.Name)
+        {
+            Tag = layer,
+            ToolTipText = layer.Path
+        };
+        item.SubItems.Add(layer.FeatureCount?.ToString() ?? "unavailable");
+        item.SubItems.Add(layer.Id.ToString());
+        _layerList.Items.Add(item);
+        return item;
+    }
+
+    private void OpenVectorDatasets()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Open vector datasets",
+            Filter =
+                "Vector datasets (*.geojson;*.shp;*.gpkg;*.kml;*.gml;*.tab;*.mif)|" +
+                "*.geojson;*.shp;*.gpkg;*.kml;*.gml;*.tab;*.mif|" +
+                "All files (*.*)|*.*",
+            Multiselect = true,
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            LoadDatasetsInteractively(dialog.FileNames);
+        }
+    }
+
+    private void LoadDatasetsInteractively(IEnumerable<string> paths)
+    {
+        List<string> failures = [];
+        List<string> warnings = [];
+        foreach (string path in paths)
+        {
+            try
+            {
+                AddVectorDataset(path, warnings);
+            }
+            catch (Exception exception)
+            {
+                failures.Add($"{path}: {ExplainOperationFailure(exception)}");
+            }
+        }
+
+        try
+        {
+            RepaintHost();
+            RefreshStatus();
+        }
+        catch (Exception exception)
+        {
+            warnings.Add($"Could not refresh the control status: {ExplainOperationFailure(exception)}");
+        }
+
+        if (failures.Count > 0 || warnings.Count > 0)
+        {
+            string message = string.Join(Environment.NewLine, failures.Concat(warnings));
+            _renderingStatusLabel.Text = $"Rendering: {message}";
+            MessageBox.Show(
+                this,
+                message,
+                "Vector dataset load results",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private void ClearLayers()
+    {
+        try
+        {
+            ClearLoadedLayers();
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError(exception);
+        }
+    }
+
+    private void ClearLoadedLayers()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+        }
+
+        dynamic automation = automationObject;
+        automation.ClearLayers();
+        _layerList.Items.Clear();
+        if ((int)automation.LayerCount != 0 || (long)automation.FeatureCount != 0 ||
+            (bool)automation.LayerLoaded)
+        {
+            throw new InvalidOperationException(
+                "The control still reports loaded layers after clearing them.");
+        }
+
+        RepaintHost();
+        RefreshStatus();
+    }
+
+    private void VerifyInvalidDatasetHandling()
+    {
+        dynamic automation = GetAutomation();
+        int previousLayerCount = (int)automation.LayerCount;
+        long previousFeatureCount = (long)automation.FeatureCount;
+        long previousLayerId = (long)automation.GetLayerId(0);
+        string missingPath = Path.Combine(_testDatasetDirectory, "missing.geojson");
+
+        ExpectComFailure(
+            () =>
+            {
+                _ = automation.LoadVectorDatasetEx(missingPath);
+            },
+            HResultFail,
+            "loading a missing dataset");
+
+        if ((int)automation.LayerCount != previousLayerCount ||
+            (long)automation.FeatureCount != previousFeatureCount ||
+            (long)automation.GetLayerId(0) != previousLayerId)
+        {
+            throw new InvalidOperationException(
+                "A failed dataset load changed the existing layers or feature count.");
+        }
+    }
+
+    private void VerifyMultipleDatasetLoading()
+    {
+        ClearLoadedLayers();
+        List<string> warnings = [];
+        LoadedLayer first = AddVectorDataset(TestDatasetPath, warnings);
+        LoadedLayer second = AddVectorDataset(TestDatasetPath, warnings);
+        if (warnings.Count > 0)
+        {
+            throw new InvalidOperationException(string.Join(Environment.NewLine, warnings));
+        }
+
+        dynamic automation = GetAutomation();
+        if (first.Id <= 0 || second.Id <= 0 || first.Id == second.Id ||
+            first.FeatureCount != 2 || second.FeatureCount != 2 ||
+            (int)automation.LayerCount != 2 || (long)automation.FeatureCount != 4 ||
+            (long)automation.GetLayerId(0) != first.Id ||
+            (long)automation.GetLayerId(1) != second.Id ||
+            _layerList.Items.Count != 2)
+        {
+            throw new InvalidOperationException("The two loaded layers have inconsistent IDs or feature counts.");
+        }
+    }
+
+    private void VerifyInvalidLayerIdHandling()
+    {
+        dynamic automation = GetAutomation();
+        ExpectComFailure(
+            () => automation.ZoomToLayer(long.MaxValue),
+            HResultInvalidArgument,
+            "zooming to an unknown layer ID",
+            HResultDispatchException);
+        VerifyLayerTotals(2, 4);
+    }
+
+    private void VerifyZoomToLayers()
+    {
+        dynamic automation = GetAutomation();
+        for (int index = 0; index < _layerList.Items.Count; index++)
+        {
+            LoadedLayer layer = GetLoadedLayer(index);
+            automation.ZoomToLayer(layer.Id);
+            RepaintHost();
+        }
+
+        VerifyLayerTotals(2, 4);
+    }
+
+    private void VerifyZoomInAndOut()
+    {
+        VerifyNavigation(automation =>
+        {
+            automation.ZoomIn(ZoomStep);
+            automation.ZoomOut(ZoomStep);
+        });
+    }
+
+    private void VerifyPan()
+    {
+        VerifyNavigation(automation => automation.Pan(1.0, -1.0));
+    }
+
+    private void VerifyZoomAt()
+    {
+        ActiveXHostControl host = _host ??
+            throw new InvalidOperationException("The ActiveX control has not been created.");
+        VerifyNavigation(automation =>
+        {
+            automation.ZoomAt(host.Width / 2.0, host.Height / 2.0, ZoomStep);
+        });
+    }
+
+    private void VerifyFitToMap()
+    {
+        VerifyNavigation(automation => automation.FitToMap());
+    }
+
+    private void VerifyNavigationAfterResize()
+    {
+        if (_host is null)
+        {
+            throw new InvalidOperationException("The ActiveX control has not been created.");
+        }
+
+        ActiveXHostControl host = _host;
+        ClientSize = new Size(900, 600);
+        PerformLayout();
+        Application.DoEvents();
+        if (host.Bounds != _surfacePanel.ClientRectangle)
+        {
+            throw new InvalidOperationException(
+                $"The hosted surface did not follow the resized panel. Control={host.Bounds}, panel={_surfacePanel.ClientRectangle}.");
+        }
+
+        VerifyNavigation(automation =>
+        {
+            automation.ZoomIn(ZoomStep);
+            automation.Pan(1.0, -1.0);
+            automation.ZoomAt(host.Width / 2.0, host.Height / 2.0, ZoomStep);
+            automation.FitToMap();
+        });
+    }
+
+    private void VerifyClearAndReload()
+    {
+        long previousLayerId = GetLoadedLayer(_layerList.Items.Count - 1).Id;
+        ClearLoadedLayers();
+        List<string> warnings = [];
+        LoadedLayer reloadedLayer = AddVectorDataset(TestDatasetPath, warnings);
+        if (warnings.Count > 0)
+        {
+            throw new InvalidOperationException(string.Join(Environment.NewLine, warnings));
+        }
+
+        if (reloadedLayer.Id <= previousLayerId ||
+            reloadedLayer.FeatureCount != 2 ||
+            (int)GetAutomation().LayerCount != 1 ||
+            (long)GetAutomation().FeatureCount != 2 ||
+            _layerList.Items.Count != 1)
+        {
+            throw new InvalidOperationException(
+                "Reloading after clearing did not create a new stable layer with the expected feature count.");
+        }
+    }
+
+    private void VerifyEmptyMapNavigation()
+    {
+        ClearLoadedLayers();
+        VerifyNavigation(
+            automation =>
+            {
+                automation.FitToMap();
+                automation.ZoomIn(ZoomStep);
+                automation.ZoomOut(ZoomStep);
+                automation.Pan(1.0, -1.0);
+                automation.ZoomAt(0.0, 0.0, ZoomStep);
+            },
+            expectedLayerCount: 0,
+            expectedFeatureCount: 0);
+    }
+
+    private dynamic GetAutomation()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+        }
+
+        return automationObject;
+    }
+
+    private LoadedLayer GetLoadedLayer(int index)
+    {
+        if (index < 0 || index >= _layerList.Items.Count ||
+            _layerList.Items[index].Tag is not LoadedLayer layer)
+        {
+            throw new InvalidOperationException($"No loaded layer exists at index {index}.");
+        }
+
+        return layer;
+    }
+
+    private void VerifyNavigation(
+        Action<dynamic> operation,
+        int expectedLayerCount = 2,
+        long expectedFeatureCount = 4)
+    {
+        dynamic automation = GetAutomation();
+        operation(automation);
+        RepaintHost();
+        RefreshStatus();
+        VerifyLayerTotals(expectedLayerCount, expectedFeatureCount);
+    }
+
+    private void VerifyLayerTotals(int expectedLayerCount, long expectedFeatureCount)
+    {
+        dynamic automation = GetAutomation();
+        if ((int)automation.LayerCount != expectedLayerCount ||
+            (long)automation.FeatureCount != expectedFeatureCount ||
+            (bool)automation.LayerLoaded != (expectedLayerCount > 0))
+        {
+            throw new InvalidOperationException(
+                $"Expected {expectedLayerCount} layers and {expectedFeatureCount} features after the operation.");
+        }
+    }
+
+    private static void ExpectComFailure(
+        Action operation,
+        int expectedHResult,
+        string operationName,
+        int? alternateHResult = null)
+    {
+        try
+        {
+            operation();
+        }
+        catch (Exception exception)
+        {
+            Exception failure = exception.GetBaseException();
+            if (failure is not COMException and not ArgumentException)
+            {
+                throw new InvalidOperationException(
+                    $"The {operationName} threw {failure.GetType().Name}: {failure.Message}");
+            }
+
+            if (failure.HResult == expectedHResult ||
+                failure.HResult == alternateHResult)
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"The {operationName} returned HRESULT 0x{failure.HResult:x8}, expected 0x{expectedHResult:x8}" +
+                (alternateHResult.HasValue ? $" or 0x{alternateHResult:x8}." : ".") +
+                $" COM error: {failure.Message}");
+        }
+
+        throw new InvalidOperationException($"The {operationName} unexpectedly succeeded.");
+    }
+
+    private void VerifyInteractiveLoadStatus()
+    {
+        ClearLoadedLayers();
+        dynamic automation = GetAutomation();
+        string previousPreference = automation.RenderingBackendPreference;
+        try
+        {
+            automation.RenderingBackendPreference = "GDI";
+            LoadDatasetsInteractively([TestDatasetPath]);
+            if ((int)automation.LayerCount != 1 || _layerList.Items.Count != 1 ||
+                _backendLabel.Text != "Backend: GDI" ||
+                _renderingStatusLabel.Text != $"Rendering: {(string)automation.RenderingStatus}")
+            {
+                throw new InvalidOperationException(
+                    "Interactive loading did not report the current frame's rendering status.");
+            }
+        }
+        finally
+        {
+            automation.RenderingBackendPreference = previousPreference;
+            ClearLoadedLayers();
+        }
+    }
+
+    private void ZoomToSelectedLayer()
+    {
+        if (_layerList.SelectedItems.Count == 0 ||
+            _layerList.SelectedItems[0].Tag is not LoadedLayer layer)
+        {
+            _renderingStatusLabel.Text = "Rendering: select a layer first.";
+            return;
+        }
+
+        RunNavigation(automation => automation.ZoomToLayer(layer.Id));
+    }
+
+    private void PanMap(double directionX, double directionY)
+    {
+        double step = (double)_panStep.Value;
+        RunNavigation(automation => automation.Pan(directionX * step, directionY * step));
+    }
+
+    private void RunNavigation(Action<dynamic> operation)
+    {
+        try
+        {
+            if (_host?.AutomationObject is not object automationObject)
+            {
+                throw new InvalidOperationException("The ActiveX automation object is unavailable.");
+            }
+
+            dynamic automation = automationObject;
+            operation(automation);
+            RepaintHost();
+            RefreshStatus();
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError(exception);
+        }
+    }
+
+    private void RefreshStatus()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            _coreStatusLabel.Text = "Core: inactive";
+            _layerCountLabel.Text = $"Layers: {_layerList.Items.Count}";
+            _featureCountLabel.Text = "Features: unavailable";
+            _backendLabel.Text = "Backend: unavailable";
+            _renderingStatusLabel.Text = "Rendering: control is not active.";
+            return;
+        }
+
+        dynamic automation = automationObject;
+        _coreStatusLabel.Text = (bool)automation.CoreInitialized
+            ? "Core: initialized"
+            : "Core: not initialized";
+        _layerCountLabel.Text = $"Layers: {(int)automation.LayerCount}";
+        _featureCountLabel.Text = $"Features: {(long)automation.FeatureCount}";
+        _backendLabel.Text = $"Backend: {(string)automation.RenderingBackend}";
+        _renderingStatusLabel.Text = $"Rendering: {(string)automation.RenderingStatus}";
+    }
+
+    private void ShowOperationError(Exception exception)
+    {
+        string message = ExplainOperationFailure(exception);
+        _renderingStatusLabel.Text = $"Rendering: {message}";
+        MessageBox.Show(
+            this,
+            message,
+            "MapWinGIS ActiveX Test Host",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+    }
+
+    private void AddToolButton(
+        ToolStrip toolbar,
+        string text,
+        Action action,
+        string? toolTip = null)
+    {
+        var button = new ToolStripButton(text)
+        {
+            ToolTipText = toolTip ?? text,
+            DisplayStyle = ToolStripItemDisplayStyle.Text
+        };
+        button.Click += (_, _) => action();
+        toolbar.Items.Add(button);
+    }
+
+    private void EnableDatasetDrop(Control control)
+    {
+        control.AllowDrop = true;
+        control.DragEnter += (_, eventArgs) =>
+        {
+            eventArgs.Effect = eventArgs.Data?.GetDataPresent(DataFormats.FileDrop) == true
+                ? DragDropEffects.Copy
+                : DragDropEffects.None;
+        };
+        control.DragDrop += (_, eventArgs) =>
+        {
+            if (eventArgs.Data?.GetData(DataFormats.FileDrop) is string[] paths)
+            {
+                string[] droppedPaths = paths.ToArray();
+                // Return from the OLE drop before loading or showing a modal dialog.
+                BeginInvoke(new Action(() => LoadDatasetsInteractively(droppedPaths)));
+            }
+        };
     }
 
     private void VerifyCoreInitialized(string activation)
@@ -373,14 +1006,9 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void VerifyCpuBackendSelection()
+    private void VerifyRenderingBackendsWhereSupported()
     {
-        if (_host?.AutomationObject is not object automationObject)
-        {
-            throw new InvalidOperationException("The ActiveX automation object is unavailable.");
-        }
-
-        dynamic automation = automationObject;
+        dynamic automation = GetAutomation();
         string previousPreference = automation.RenderingBackendPreference;
         try
         {
@@ -397,10 +1025,19 @@ internal sealed class MainForm : Form
             }
 
             VerifyMapPixels();
+
+            automation.RenderingBackendPreference = "OpenGL";
+            RepaintHost();
+            string requestedBackend = automation.RenderingBackend;
+            if (requestedBackend is not "GDI" and not "OpenGL")
+            {
+                throw new InvalidOperationException(
+                    $"The control reported an unknown rendering backend '{requestedBackend}'.");
+            }
+            VerifyMapPixels();
         }
         finally
         {
-            // Later resize/repaint checks must exercise the default backend path.
             automation.RenderingBackendPreference = previousPreference;
             RepaintHost();
         }
@@ -446,7 +1083,6 @@ internal sealed class MainForm : Form
     {
         _host?.Invalidate(true);
         _host?.Update();
-        Application.DoEvents();
     }
 
     private void VerifyResize()
@@ -600,6 +1236,7 @@ internal sealed class MainForm : Form
         _surfacePanel.Controls.Remove(host);
         host.Dispose();
         Application.DoEvents();
+        RefreshStatus();
     }
 
     private void RecordCheck(string name, Action action)
@@ -706,6 +1343,14 @@ internal sealed class MainForm : Form
         return exception.Message;
     }
 
+    private static string ExplainOperationFailure(Exception exception)
+    {
+        Exception cause = exception.GetBaseException();
+        return cause is COMException
+            ? $"HRESULT 0x{cause.HResult:x8}: {cause.Message}"
+            : cause.Message;
+    }
+
     private async Task EnforceTimeoutAsync()
     {
         try
@@ -744,6 +1389,8 @@ internal sealed class MainForm : Form
 
     private static uint ColorToColorRef(Color color) =>
         (uint)(color.R | (color.G << 8) | (color.B << 16));
+
+    private sealed record LoadedLayer(long Id, string Name, long? FeatureCount, string Path);
 
     private const uint PrintWindowRenderFullContent = 0x00000002;
 

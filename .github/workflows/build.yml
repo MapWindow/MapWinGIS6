@@ -10,12 +10,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cmake:
+    runs-on: windows-2025
+    timeout-minutes: 180
+
+    env:
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
+      MWG_WINDOWS_SDK: '10.0'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Record runner image version
+        id: runner_image
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@v6
+        with:
+          path: vcpkg-binary-cache
+          key: vcpkg-binary-${{ runner.os }}-x64-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake', 'Directory.Build.props') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-x64-
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: ./build/scripts/bootstrap-vcpkg.ps1
+
+      - name: Build CMake preset
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw 'Visual Studio C++ tools were not found.' }
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          $ninja = Join-Path $vsPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+          $env:PATH = "$ninja;$env:PATH"
+          New-Item -ItemType Directory -Force -Path out/parity | Out-Null
+          $commands = 'call "{0}" && cmake --preset x64-debug -DMWG_WINDOWS_SDK={1} && cmake --build --preset x64-debug -- -v > out\parity\cmake-Debug-x64.log 2>&1' -f $vcvars,$env:MWG_WINDOWS_SDK
+          & $env:ComSpec /d /s /c $commands
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check CMake/MSBuild parity
+        shell: pwsh
+        run: |
+          pwsh -File build/scripts/Compare-CompileCommands.ps1 `
+            -CMakeBuildDir out/b/x64d `
+            -CMakeBuildLog out/parity/cmake-Debug-x64.log `
+            -FailOnLostFlags `
+            -FailOnNewWarnings
+
   build:
     runs-on: windows-2025
+    timeout-minutes: 180
 
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"include":[{"platform":"x64","configuration":"Debug"}]}') }}
+      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"platform":["x64"],"configuration":["Debug","Release"]}') }}
 
     env:
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
@@ -46,23 +99,43 @@ jobs:
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v3
 
+      - name: Check build configuration
+        shell: pwsh
+        run: ./build/scripts/Test-BuildConfiguration.ps1
+
       - name: Build
         shell: pwsh
         run: |
+          $features = if ('${{ matrix.configuration }}' -eq 'Release') { 'tests%3Bfull-drivers' } else { 'tests' }
           msbuild MapWinGIS6.slnx `
             -restore `
             -p:Configuration=${{ matrix.configuration }} `
             -p:Platform=${{ matrix.platform }} `
             -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
+            "-p:MwgVcpkgFeatures=$features" `
             -m -v:m
+
+      - name: Measure build parity baseline
+        shell: pwsh
+        run: |
+          pwsh -File build/scripts/Compare-CompileCommands.ps1 `
+            -Configuration ${{ matrix.configuration }} `
+            -Platform ${{ matrix.platform }} `
+            -FailOnLostFlags
 
       - name: Test
         shell: pwsh
         run: |
-          $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/MapWinGIS.Core.Tests.exe"
-          & $exe --gtest_output="xml:testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          foreach ($test in @(
+            @{ Name = "core"; Project = "MapWinGIS.Core.Tests" },
+            @{ Name = "activex"; Project = "MapWinGIS.ActiveX.Tests" }
+          )) {
+            $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/$($test.Project).exe"
+            $report = "testresults-$($test.Name)-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
+            & $exe --gtest_output="xml:$report"
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           }
 
       - name: Upload test results
@@ -70,7 +143,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: testresults-${{ matrix.platform }}-${{ matrix.configuration }}
-          path: testresults-${{ matrix.platform }}-${{ matrix.configuration }}.xml
+          path: testresults-*-${{ matrix.platform }}-${{ matrix.configuration }}.xml
           if-no-files-found: ignore
 
       - name: Upload binaries

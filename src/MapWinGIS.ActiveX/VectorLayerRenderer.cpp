@@ -14,13 +14,15 @@ namespace mwg::activex
     HRESULT VectorLayerRenderer::Draw(
         const HDC deviceContext,
         const RECT& bounds,
-        const rendering::VectorRenderScene& scene) noexcept
+        const rendering::MapRenderScene& scene,
+        const Viewport& viewport) noexcept
     {
         _activeBackend.reset();
 
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
-            const HRESULT openGlResult = _openGlRenderer.Draw(deviceContext, bounds, scene);
+            const HRESULT openGlResult =
+                _openGlRenderer.Draw(deviceContext, bounds, scene, viewport);
             if (openGlResult == S_OK)
             {
                 _activeBackend = VectorRenderBackendKind::OpenGL;
@@ -40,10 +42,14 @@ namespace mwg::activex
             _diagnostic = L"GDI was selected by the rendering preference.";
         }
 
-        const HRESULT gdiResult = _gdiRenderer.Draw(deviceContext, bounds, scene);
+        const HRESULT gdiResult = _gdiRenderer.Draw(deviceContext, bounds, scene, viewport);
         if (SUCCEEDED(gdiResult))
         {
             _activeBackend = VectorRenderBackendKind::Gdi;
+            if (!_gdiRenderer.GetFailedLayers().empty())
+            {
+                _diagnostic = L"GDI could not draw one or more layers; the other layers were drawn.";
+            }
         }
         else
         {

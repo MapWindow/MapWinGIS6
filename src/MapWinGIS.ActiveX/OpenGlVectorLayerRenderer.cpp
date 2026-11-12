@@ -219,25 +219,65 @@ namespace mwg::activex
             return orientation != 0.0 && std::abs(totalTurn) < 3.0 * kPi;
         }
 
-        [[nodiscard]] bool IsSupported(const rendering::VectorRenderScene& scene) noexcept
+        [[nodiscard]] bool IsSupported(const rendering::MapRenderScene& scene) noexcept
         {
-            for (const rendering::Polygon& polygon : scene.polygons)
+            for (const rendering::LayerRenderScene& layer : scene.layers)
             {
-                if (polygon.size() != 1 || !IsConvex(polygon.front()))
+                for (const rendering::Polygon& polygon : layer.scene.polygons)
                 {
-                    return false;
-                }
-
-                for (const rendering::Point& point : polygon.front())
-                {
-                    if (!std::isfinite(point.x) || !std::isfinite(point.y))
+                    if (polygon.size() != 1 || !IsConvex(polygon.front()))
                     {
                         return false;
+                    }
+
+                    for (const rendering::Point& point : polygon.front())
+                    {
+                        if (!std::isfinite(point.x) || !std::isfinite(point.y))
+                        {
+                            return false;
+                        }
                     }
                 }
             }
 
             return true;
+        }
+
+        /// Draws the convex single-ring polygons of one layer; IsSupported
+        /// must have accepted the scene.
+        void DrawLayer(
+            const rendering::VectorRenderScene& scene,
+            const ViewTransform& transform) noexcept
+        {
+            for (const rendering::Polygon& polygon : scene.polygons)
+            {
+                const rendering::Ring& ring = polygon.front();
+                std::size_t count = ring.size();
+                if (count > 1 &&
+                    ring.front().x == ring.back().x &&
+                    ring.front().y == ring.back().y)
+                {
+                    --count;
+                }
+
+                glColor3ub(61, 122, 169);
+                glBegin(GL_POLYGON);
+                for (std::size_t index = 0; index < count; ++index)
+                {
+                    const rendering::Point& point = ring[index];
+                    glVertex2d(transform.ToDeviceX(point), transform.ToDeviceY(point));
+                }
+                glEnd();
+
+                glColor3ub(24, 58, 82);
+                glBegin(GL_LINE_LOOP);
+                for (std::size_t index = 0; index < count; ++index)
+                {
+                    const rendering::Point& point = ring[index];
+                    glVertex2d(transform.ToDeviceX(point), transform.ToDeviceY(point));
+                }
+                glEnd();
+            }
         }
 
         [[nodiscard]] std::int64_t GetWidth(const RECT& bounds) noexcept
@@ -505,7 +545,8 @@ namespace mwg::activex
     OpenGlVectorLayerRenderer::ValidateTarget(
         const HDC deviceContext,
         const RECT& bounds,
-        const rendering::VectorRenderScene& scene) noexcept
+        const rendering::MapRenderScene& scene,
+        const Viewport& viewport) noexcept
     {
         if (deviceContext == nullptr)
         {
@@ -513,30 +554,24 @@ namespace mwg::activex
             return {E_INVALIDARG, std::nullopt};
         }
 
-        if (!IsSupported(scene))
+        if (!MatchesViewport(bounds, viewport))
         {
             _lastFailureReason =
-                L"The scene uses geometry that the OpenGL backend does not support.";
-            return {S_FALSE, std::nullopt};
-        }
-
-        if (scene.extent.IsEmpty() || scene.extent.Width() <= 0.0 ||
-            scene.extent.Height() <= 0.0)
-        {
-            _lastFailureReason = L"The scene extent is invalid for OpenGL rendering.";
+                L"The viewport is not valid or does not match the OpenGL target size.";
             return {E_INVALIDARG, std::nullopt};
         }
 
-        const std::int64_t width = GetWidth(bounds);
-        const std::int64_t height = GetHeight(bounds);
-        if (width <= 2 * static_cast<std::int64_t>(ViewTransform::kMargin) ||
-            height <= 2 * static_cast<std::int64_t>(ViewTransform::kMargin) ||
-            width > std::numeric_limits<int>::max() ||
-            height > std::numeric_limits<int>::max())
+        if (!IsSupported(scene))
         {
-            _lastFailureReason = L"The OpenGL target has invalid or too-small dimensions.";
+            _lastFailureReason =
+                L"The OpenGL preview backend supports only convex, hole-free "
+                L"polygons; this frame was rendered with GDI.";
             return {S_FALSE, std::nullopt};
         }
+
+        // MatchesViewport limits both dimensions to Viewport::kMaxDimension.
+        const std::int64_t width = GetWidth(bounds);
+        const std::int64_t height = GetHeight(bounds);
 
         const auto rejectionReason = GetTargetRejectionReason(
             static_cast<int>(width),
@@ -586,17 +621,14 @@ namespace mwg::activex
     }
 
     HRESULT OpenGlVectorLayerRenderer::RenderScene(
-        const rendering::VectorRenderScene& scene,
+        const rendering::MapRenderScene& scene,
+        const Viewport& viewport,
         const Target& target) noexcept
     {
-        const auto transform = ViewTransform::Create(
-            scene.extent,
-            static_cast<double>(target.width),
-            static_cast<double>(target.height));
+        const auto transform = ViewTransform::Create(viewport);
         if (!transform.has_value())
         {
-            _lastFailureReason =
-                L"The scene extent cannot be represented in the OpenGL viewport.";
+            _lastFailureReason = L"The viewport is not valid for OpenGL rendering.";
             return E_INVALIDARG;
         }
 
@@ -646,34 +678,9 @@ namespace mwg::activex
             1.0F);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        for (const rendering::Polygon& polygon : scene.polygons)
+        for (const rendering::LayerRenderScene& layer : scene.layers)
         {
-            const rendering::Ring& ring = polygon.front();
-            std::size_t count = ring.size();
-            if (count > 1 &&
-                ring.front().x == ring.back().x &&
-                ring.front().y == ring.back().y)
-            {
-                --count;
-            }
-
-            glColor3ub(61, 122, 169);
-            glBegin(GL_POLYGON);
-            for (std::size_t index = 0; index < count; ++index)
-            {
-                const rendering::Point& point = ring[index];
-                glVertex2d(transform->ToDeviceX(point), transform->ToDeviceY(point));
-            }
-            glEnd();
-
-            glColor3ub(24, 58, 82);
-            glBegin(GL_LINE_LOOP);
-            for (std::size_t index = 0; index < count; ++index)
-            {
-                const rendering::Point& point = ring[index];
-                glVertex2d(transform->ToDeviceX(point), transform->ToDeviceY(point));
-            }
-            glEnd();
+            DrawLayer(layer.scene, *transform);
         }
 
         glFlush();
@@ -759,8 +766,7 @@ namespace mwg::activex
         return S_OK;
     }
 
-#ifdef MWG_ENABLE_RENDERER_TEST_HOOKS
-    void OpenGlVectorLayerRenderer::SimulateContextLossForTesting() noexcept
+    void OpenGlVectorLayerRenderer::SimulateContextLoss() noexcept
     {
         // Keep the stale handles so Draw observes the failure itself; Release
         // later tolerates the already-released DC and destroyed window.
@@ -773,15 +779,15 @@ namespace mwg::activex
             DestroyWindow(_window);
         }
     }
-#endif
-
     HRESULT OpenGlVectorLayerRenderer::Draw(
         const HDC deviceContext,
         const RECT& bounds,
-        const rendering::VectorRenderScene& scene) noexcept
+        const rendering::MapRenderScene& scene,
+        const Viewport& viewport) noexcept
     {
         _lastFailureReason = L"OpenGL did not render this frame.";
-        const TargetValidation validation = ValidateTarget(deviceContext, bounds, scene);
+        const TargetValidation validation =
+            ValidateTarget(deviceContext, bounds, scene, viewport);
         if (!validation.target.has_value())
         {
             return validation.result;
@@ -821,7 +827,7 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        const HRESULT renderResult = RenderScene(scene, target);
+        const HRESULT renderResult = RenderScene(scene, viewport, target);
         if (FAILED(renderResult) || renderResult == S_FALSE)
         {
             return renderResult;

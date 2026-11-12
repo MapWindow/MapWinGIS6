@@ -6,11 +6,12 @@
 
     vcpkg installs these under share/, and nothing copies them next to the
     binaries. GdalEnvironment looks for "gdal-data" and "proj" beside the
-    loaded module, so they are copied there.
+    loaded module, so the Core project copies them there once. All consumers
+    reference Core and share its output directory.
   -->
 
   <PropertyGroup>
-    <MwgDeployRuntimeData Condition="'$(MwgDeployRuntimeData)' == ''">true</MwgDeployRuntimeData>
+    <MwgDeployRuntimeData Condition="'$(MwgDeployRuntimeData)' == ''">false</MwgDeployRuntimeData>
   </PropertyGroup>
 
   <Target Name="MwgDeployGdalRuntimeData"

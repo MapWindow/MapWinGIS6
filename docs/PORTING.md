@@ -48,17 +48,54 @@ choose deliberately whether it belongs in v6 and document important departures.
 
 ## Current ActiveX compatibility boundary
 
+Use a derived interface with a new IID to add members to an existing
+automation contract. This preserves the published interface while allowing
+clients to query the newer version. Use a separate `IDispatch` interface for
+an independent capability that is not an extension of that contract. Keep
+events in a separate dispinterface.
+
 The initial `MapWinGIS.ocx` exposes a deliberately small v6 automation
 contract. `IMapWinGISControl` reports Core initialization, loads a vector
 dataset, and reports whether a layer is loaded and its feature count.
 `IMapWinGISControl2` adds renderer preference, active backend, and status.
-New members belong on a new derived interface; do not change a published
-interface IID or silently add vtable members to it.
+`IMapWinGISControl3` adds `ClearLayers`. `IMapWinGISControl4` derives from it
+and is the default automation interface; it adds view navigation, layer count,
+`LoadVectorDatasetEx`, and stable layer-ID lookup by 0-based position. Loads
+add layers, including duplicate loads of one dataset. Each successful load
+requests a fit to the combined map extent, replacing any previous pan or zoom
+when the extent is valid and the viewport has a size.
+Call `ClearLayers` before switching
+or refreshing datasets. It releases all layers and resets the cached feature
+total while keeping the viewport.
+`IMapWinGISControlGdal` is a separate interface for the independent GDAL
+operation capability, and `IMapWinGISControlEvents` is a separate dispinterface
+for notifications. Do not change a published interface IID or silently add
+vtable members to it.
+
+| Navigation member | Coordinates and factors |
+|---|---|
+| `Pan(deltaX, deltaY)` | Finite deltas in map-coordinate units; they move the view center. |
+| `ZoomIn(factor)`, `ZoomOut(factor)` | A finite factor greater than 1, applied around the view center. |
+| `ZoomAt(x, y, factor)` | A finite anchor in screen pixels from the top-left; a finite positive factor above 1 zooms in and below 1 zooms out. |
+| `FitToMap()`, `ZoomToLayer(layerId)` | Fit the visible map or the named layer with 12 pixels of padding. |
+
+Navigation returns `S_OK` even if the view did not change, for example when
+there is no valid extent or a zoom limit is reached. A fit requested before
+the viewport has a size is deferred until it is resized. An unknown layer ID
+returns `E_INVALIDARG`.
+
+Layer IDs and `FeatureCount` use Automation `hyper` (`VT_I8`). Hosts must
+support 64-bit integer Automation values to use these members. VB6, 32-bit
+VBA, and VBScript cannot directly use these signatures; use a host with
+`VT_I8` support for layer-ID navigation. Other members do not require it.
+The type library remains at version 1.0: the added interface has its own IID
+and extends the existing library without changing published interfaces.
 
 These are new interfaces, not the MapWinGIS 5 type-library interfaces, and the
 control does not claim binary or API compatibility with existing v5 clients.
-Core scene creation selects only the first vector layer and currently prepares
-Polygon/MultiPolygon scene data; the control requests that scene from Core. It
+Each control load selects the first dataset layer. Core prepares an ordered
+scene for all visible map layers, including Polygon, MultiPolygon,
+CurvePolygon, and MultiSurface geometry. It
 does not expose the broad v5 map, layer, shape, event, or editing API. It draws
 in source coordinates without reprojection. OpenGL only handles convex
 single-ring polygons; GDI handles the supported polygon scene as the CPU
