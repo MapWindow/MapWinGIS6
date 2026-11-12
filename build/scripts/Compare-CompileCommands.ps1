@@ -89,6 +89,7 @@ $explainedLinkDifferences = [ordered]@{
 
 # Compile differences that are deliberate (docs/CMAKE-MIGRATION.md).
 $explainedCompileDifferences = [ordered]@{
+    '^/I<repo>/obj/MapWinGIS\.ActiveX/[^/]+/[^/]+$' = 'MSBuild ActiveX intdir replaced by the CMake MIDL directory (D3)'
     '^/I<intdir>$'                                = 'MIDL output moved from the intermediate directory to <build>/.../midl (D3)'
     '^/I<builddir>/.*/midl$'                      = 'MIDL output directory (D3)'
     '^/I<vcpkg_installed>/[^/]+/include$'         = 'vcpkg auto-include; targets without a vcpkg dependency do not get it, the others get it from imported targets'
