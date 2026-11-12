@@ -2,43 +2,43 @@
 
 /**
  * @file ViewTransform.h
- * @brief Declares the shared source-to-device transform for polygon renderers.
+ * @brief Declares the map-to-device transform shared by the polygon renderers.
  *
- * Provides the same aspect-preserving scale and centered margin to the GDI
- * and OpenGL rendering backends.
+ * Captures the Core viewport once per frame so the GDI and OpenGL backends
+ * transform every vertex of every layer with the same values and the same
+ * arithmetic as Viewport::MapToScreen, without per-vertex optional results.
  */
 #pragma once
 
 #include <optional>
 
-#include "mapwingis/core/Extent.h"
+#include "mapwingis/map/Viewport.h"
 #include "mapwingis/rendering/VectorRenderScene.h"
 
 namespace mwg::activex
 {
     struct ViewTransform final
     {
-        static constexpr double kMargin = 12.0;
-
+        /// Returns std::nullopt when the viewport is not valid.
         [[nodiscard]] static std::optional<ViewTransform> Create(
-            const Extent& extent,
-            double targetWidth,
-            double targetHeight) noexcept;
+            const Viewport& viewport) noexcept;
 
+        /// Screen X of a map point, relative to the viewport's left edge.
         [[nodiscard]] double ToDeviceX(const rendering::Point& point) const noexcept
         {
-            return offsetX + (point.x - xMin) * scale;
+            return halfWidth + (point.x - centerX) / resolution;
         }
 
+        /// Screen Y of a map point, relative to the viewport's top edge.
         [[nodiscard]] double ToDeviceY(const rendering::Point& point) const noexcept
         {
-            return offsetY + (yMax - point.y) * scale;
+            return halfHeight - (point.y - centerY) / resolution;
         }
 
-        double scale = 0.0;
-        double offsetX = 0.0;
-        double offsetY = 0.0;
-        double xMin = 0.0;
-        double yMax = 0.0;
+        double halfWidth = 0.0;
+        double halfHeight = 0.0;
+        double centerX = 0.0;
+        double centerY = 0.0;
+        double resolution = 1.0;
     };
 }

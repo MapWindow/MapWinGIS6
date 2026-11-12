@@ -14,13 +14,21 @@
 #include <thread>
 
 #include <cpl_error.h>
+#include <gdal_priv.h>
 
 #include "mapwingis/gdal/GdalEnvironment.h"
+#include "TestData.h"
 
 using namespace mwg;
 
 namespace
 {
+    std::string ToUtf8(const std::filesystem::path& path)
+    {
+        const std::u8string utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
     // Lower bounds, not exact counts: the driver set depends on the vcpkg
     // manifest feature that was built (core-drivers or full-drivers).
     constexpr int kMinimumRasterDrivers = 50;
@@ -76,10 +84,31 @@ TEST(GdalEnvironment, DeploysRuntimeDataNextToTheModule)
     ASSERT_FALSE(dir.empty());
 
     EXPECT_TRUE(std::filesystem::is_directory(dir / "gdal-data"))
-        << "gdal-data is missing from " << dir.string();
+        << "gdal-data is missing from " << ToUtf8(dir);
     EXPECT_TRUE(std::filesystem::exists(dir / "proj" / "proj.db"))
-        << "proj.db is missing from " << dir.string();
+        << "proj.db is missing from " << ToUtf8(dir);
 }
+
+#ifdef MWG_TEST_FULL_DRIVERS
+TEST(GdalEnvironment, IncludesTheReleaseDriverSet)
+{
+    EXPECT_TRUE(GdalEnvironment::HasRasterDriver("HDF5"));
+    EXPECT_TRUE(GdalEnvironment::HasRasterDriver("netCDF"));
+    EXPECT_TRUE(GdalEnvironment::HasVectorDriver("LIBKML"));
+    EXPECT_TRUE(GdalEnvironment::HasVectorDriver("PostgreSQL"));
+
+    GDALDriver* const sqlite = GetGDALDriverManager()->GetDriverByName("SQLite");
+    ASSERT_NE(sqlite, nullptr);
+    const test::TempDirectory temp;
+    const std::string path = ToUtf8(temp.Path() / "spatialite.sqlite");
+    char spatialiteOption[] = "SPATIALITE=YES";
+    char* options[] = {spatialiteOption, nullptr};
+    GDALDataset* const dataset = sqlite->Create(
+        path.c_str(), 0, 0, 0, GDT_Unknown, options);
+    ASSERT_NE(dataset, nullptr) << GdalEnvironment::LastErrorMessage();
+    EXPECT_EQ(GDALClose(dataset), CE_None);
+}
+#endif
 
 TEST(GdalEnvironment, CapturesTheLastError)
 {

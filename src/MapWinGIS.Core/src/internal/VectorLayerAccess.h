@@ -19,7 +19,8 @@ namespace mwg::detail
 {
     struct VectorLayerAccess final
     {
-        static void ForEachGeometry(
+        /// Returns the exact number of features, including absent geometries.
+        static std::int64_t ForEachGeometry(
             const VectorLayer& layer,
             const std::function<void(const OGRGeometry&)>& callback);
     };

@@ -29,9 +29,14 @@ function(mwg_add_runtime_data_target)
     endif()
 
     file(GLOB_RECURSE data_files CONFIGURE_DEPENDS "${gdal_dir}/*" "${proj_dir}/*")
+    list(SORT data_files)
+
+    set(input_manifest "${MWG_RUNTIME_DIR}/.mwg-runtime-data.inputs")
+    file(GENERATE OUTPUT "${input_manifest}" CONTENT "${data_files}")
 
     set(stamp "${MWG_RUNTIME_DIR}/.mwg-runtime-data.stamp")
     set(commands
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf "${MWG_RUNTIME_DIR}/gdal-data" "${MWG_RUNTIME_DIR}/proj"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different "${gdal_dir}" "${MWG_RUNTIME_DIR}/gdal-data")
     if(EXISTS "${proj_dir}")
         list(APPEND commands
@@ -42,7 +47,7 @@ function(mwg_add_runtime_data_target)
         OUTPUT "${stamp}"
         ${commands}
         COMMAND "${CMAKE_COMMAND}" -E touch "${stamp}"
-        DEPENDS ${data_files}
+        DEPENDS ${data_files} "${input_manifest}"
         COMMENT "Deploying GDAL and PROJ runtime data"
         VERBATIM
     )

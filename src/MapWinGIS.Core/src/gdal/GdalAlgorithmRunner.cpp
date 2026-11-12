@@ -19,6 +19,7 @@
 #include <gdal_priv.h>
 
 #include <exception>
+#include <optional>
 #include <sstream>
 #include <utility>
 
@@ -48,6 +49,95 @@ namespace mwg
             {
                 return error.errorClass >= GdalErrorClass::Failure;
             });
+        }
+
+        GDALAlgorithm* GetActualAlgorithm(GDALAlgorithm* algorithm)
+        {
+            return algorithm != nullptr ? &algorithm->GetActualAlgorithm() : nullptr;
+        }
+
+        struct PersistentOutput final
+        {
+            std::string path;
+            std::vector<std::string> openOptions;
+            unsigned int openFlags = GDAL_OF_READONLY | GDAL_OF_VERBOSE_ERROR;
+        };
+
+        std::optional<PersistentOutput> DescribePersistentOutput(
+            const GDALArgDatasetValue& output,
+            GDALDataset* dataset)
+        {
+            if (dataset == nullptr)
+                return std::nullopt;
+
+            const char* const driverName = dataset->GetDriverName();
+            if (driverName != nullptr &&
+                (std::string_view(driverName) == "MEM" ||
+                 std::string_view(driverName) == "Memory"))
+            {
+                return std::nullopt;
+            }
+
+            const std::string& outputName = output.GetName();
+            const char* const description = dataset->GetDescription();
+            const bool hasOutputName = output.IsNameSet() && !outputName.empty();
+            const bool hasDescription = description != nullptr && description[0] != '\0';
+            if (!hasOutputName && !hasDescription)
+                return std::nullopt;
+
+            PersistentOutput result;
+            result.path = hasOutputName ? outputName : description;
+            if (dataset->GetAccess() == GA_Update)
+                result.openFlags |= GDAL_OF_UPDATE;
+            if (dataset->GetRasterCount() > 0)
+                result.openFlags |= GDAL_OF_RASTER;
+            if (dataset->GetLayerCount() > 0)
+                result.openFlags |= GDAL_OF_VECTOR;
+            if (dataset->GetRootGroup() != nullptr)
+                result.openFlags |= GDAL_OF_MULTIDIM_RASTER;
+
+            if ((result.openFlags & (GDAL_OF_RASTER | GDAL_OF_VECTOR |
+                                     GDAL_OF_MULTIDIM_RASTER)) == 0)
+            {
+                GDALDriver* const driver = dataset->GetDriver();
+                if (driver != nullptr)
+                {
+                    if (driver->GetMetadataItem(GDAL_DCAP_RASTER) != nullptr)
+                        result.openFlags |= GDAL_OF_RASTER;
+                    if (driver->GetMetadataItem(GDAL_DCAP_VECTOR) != nullptr)
+                        result.openFlags |= GDAL_OF_VECTOR;
+                    if (driver->GetMetadataItem(GDAL_DCAP_MULTIDIM_RASTER) != nullptr)
+                        result.openFlags |= GDAL_OF_MULTIDIM_RASTER;
+                }
+            }
+
+            const GDALDataset* const readOnlyDataset = dataset;
+            for (const char* const* option = readOnlyDataset->GetOpenOptions();
+                 option != nullptr && *option != nullptr;
+                 ++option)
+            {
+                result.openOptions.emplace_back(*option);
+            }
+            return result;
+        }
+
+        GdalDatasetPtr ReopenPersistentOutput(const PersistentOutput& output)
+        {
+            if (output.path.empty() || output.path.starts_with("/vsistdout/"))
+                return {};
+
+            std::vector<const char*> openOptions;
+            openOptions.reserve(output.openOptions.size() + 1);
+            for (const std::string& option : output.openOptions)
+                openOptions.push_back(option.c_str());
+            openOptions.push_back(nullptr);
+
+            return GdalDatasetPtr(static_cast<GDALDataset*>(
+                GDALOpenEx(output.path.c_str(),
+                           output.openFlags,
+                           nullptr,
+                           output.openOptions.empty() ? nullptr : openOptions.data(),
+                           nullptr)));
         }
 
         void AppendErrors(std::vector<GdalError>& target, const GdalErrorScope& source)
@@ -100,6 +190,7 @@ namespace mwg
     {
         std::unique_ptr<GDALAlgorithm> algorithm;
         GdalDatasetPtr outputDataset;
+        GdalDatasetPtr callerProvidedOutputDataset;
         std::vector<GdalError> errors;
         bool configurationValid = true;
         bool runAttempted = false;
@@ -190,8 +281,11 @@ namespace mwg
             return false;
         }
 
-        return SetArgumentValue(_impl->algorithm.get(), _impl->errors,
-                                _impl->configurationValid, name, std::string(value));
+        const bool succeeded = SetArgumentValue(_impl->algorithm.get(), _impl->errors,
+                                               _impl->configurationValid, name, std::string(value));
+        if (succeeded && name == "output")
+            _impl->callerProvidedOutputDataset.reset();
+        return succeeded;
     }
 
     bool GdalAlgorithmRunner::SetArgument(const std::string_view name, const char* value)
@@ -204,8 +298,7 @@ namespace mwg
             _impl->configurationValid = false;
             return false;
         }
-        return SetArgumentValue(_impl->algorithm.get(), _impl->errors,
-                                _impl->configurationValid, name, std::string(value));
+        return SetArgument(name, std::string_view(value));
     }
 
     bool GdalAlgorithmRunner::SetArgument(const std::string_view name, const bool value)
@@ -306,6 +399,12 @@ namespace mwg
                                          std::string(name) + "'.");
             _impl->configurationValid = false;
         }
+        else if (argument->GetType() == GAAT_DATASET &&
+                 argument->GetName() == "output")
+        {
+            _impl->callerProvidedOutputDataset.reset(
+                argument->Get<GDALArgDatasetValue>().GetDatasetIncreaseRefCount());
+        }
         return succeeded;
     }
 
@@ -328,6 +427,15 @@ namespace mwg
 
         GdalErrorScope scope;
         const bool succeeded = _impl->algorithm->ParseCommandLineArguments(args);
+        GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());
+        GDALAlgorithmArg* const output = actualAlgorithm != nullptr
+                                            ? actualAlgorithm->GetArg("output") : nullptr;
+        if (output == nullptr || output->GetType() != GAAT_DATASET ||
+            output->Get<GDALArgDatasetValue>().GetDatasetRef() !=
+                _impl->callerProvidedOutputDataset.get())
+        {
+            _impl->callerProvidedOutputDataset.reset();
+        }
         const std::size_t previousCount = _impl->errors.size();
         AppendErrors(_impl->errors, scope);
         scope.RethrowCaptureException();
@@ -399,19 +507,33 @@ namespace mwg
         // or threw after GDAL had already produced its output.
         _impl->executionSucceeded = succeeded;
         bool finalized = false;
+        std::optional<PersistentOutput> persistentOutput;
+        GDALArgDatasetValue* outputValue = nullptr;
+        bool outputWasClosed = false;
         if (succeeded)
         {
-            GDALAlgorithmArg* output = _impl->algorithm != nullptr
-                                           ? _impl->algorithm->GetArg("output")
+            GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());
+            GDALAlgorithmArg* output = actualAlgorithm != nullptr
+                                           ? actualAlgorithm->GetArg("output")
                                            : nullptr;
             if (output != nullptr && output->GetType() == GAAT_DATASET)
             {
-                _impl->outputDataset.reset(
-                    output->Get<GDALArgDatasetValue>().GetDatasetIncreaseRefCount());
+                outputValue = &output->Get<GDALArgDatasetValue>();
+                GDALDataset* const outputDataset = outputValue->GetDatasetRef();
+                persistentOutput = DescribePersistentOutput(*outputValue, outputDataset);
+                const bool callerProvidedOutput =
+                    outputDataset != nullptr &&
+                    outputDataset == _impl->callerProvidedOutputDataset.get();
+                if (!persistentOutput || callerProvidedOutput)
+                {
+                    _impl->outputDataset.reset(
+                        outputValue->GetDatasetIncreaseRefCount());
+                }
             }
             finalized = Finalize();
         }
-        if (_impl->outputDataset != nullptr)
+        if (finalized && !adapter.WasCancelled() && !HasFailure(_impl->errors) &&
+            _impl->outputDataset != nullptr)
         {
             GdalErrorScope outputScope;
             const std::size_t outputErrorCount = _impl->errors.size();
@@ -424,6 +546,50 @@ namespace mwg
                     _impl->errors,
                     outputErrorCount,
                     "GDAL algorithm output could not be flushed.");
+            }
+        }
+        else if (finalized && !adapter.WasCancelled() && !HasFailure(_impl->errors) &&
+                 persistentOutput.has_value() && outputValue != nullptr)
+        {
+            GdalErrorScope outputScope;
+            const std::size_t outputErrorCount = _impl->errors.size();
+            const bool outputClosed = outputValue->Close();
+            outputWasClosed = outputClosed;
+            AppendErrors(_impl->errors, outputScope);
+            outputScope.RethrowCaptureException();
+            if (!outputClosed)
+            {
+                AddFailureIfNoDiagnostic(
+                    _impl->errors,
+                    outputErrorCount,
+                    "GDAL algorithm output could not be closed.");
+            }
+            else if (!HasFailure(_impl->errors))
+            {
+                GdalErrorScope reopenScope;
+                _impl->outputDataset = ReopenPersistentOutput(*persistentOutput);
+                if (_impl->outputDataset == nullptr &&
+                    (persistentOutput->openFlags & GDAL_OF_UPDATE) != 0)
+                {
+                    persistentOutput->openFlags &= ~GDAL_OF_UPDATE;
+                    _impl->outputDataset = ReopenPersistentOutput(*persistentOutput);
+                }
+                // Reopening is a convenience, not part of completing the write.
+                // Some creation drivers have no reader, or support only read-only access.
+                for (GdalError error : reopenScope.Errors())
+                {
+                    if (error.errorClass >= GdalErrorClass::Failure)
+                        error.errorClass = GdalErrorClass::Warning;
+                    _impl->errors.push_back(std::move(error));
+                }
+                reopenScope.RethrowCaptureException();
+                if (_impl->outputDataset == nullptr)
+                {
+                    _impl->errors.push_back({
+                        GdalErrorClass::Warning, kRunnerErrorCode,
+                        "GDAL algorithm output was written but no dataset could be reopened: " +
+                            persistentOutput->path});
+                }
             }
         }
         scope.RethrowCaptureException();
@@ -462,11 +628,12 @@ namespace mwg
             GdalErrorScope closeScope;
             const std::size_t closeErrorCount = _impl->errors.size();
             _impl->outputDataset.reset();
-            GDALAlgorithmArg* output = _impl->algorithm != nullptr
-                                           ? _impl->algorithm->GetArg("output")
+            GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());
+            GDALAlgorithmArg* output = actualAlgorithm != nullptr
+                                           ? actualAlgorithm->GetArg("output")
                                            : nullptr;
             bool outputClosed = true;
-            if (output != nullptr && output->GetType() == GAAT_DATASET)
+            if (output != nullptr && output->GetType() == GAAT_DATASET && !outputWasClosed)
             {
                 outputClosed = output->Get<GDALArgDatasetValue>().Close();
             }

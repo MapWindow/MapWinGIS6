@@ -14,22 +14,21 @@ set(MWG_CORE_TEST_HEADERS
 )
 
 set(MWG_CORE_TEST_SOURCES
-    ActiveXActivationTests.cpp
-    ComConversionTests.cpp
     GdalAlgorithmRunnerTests.cpp
     GdalEnvironmentTests.cpp
     GdalModernCapabilitiesTests.cpp
-    GdalOperationDispatcherTests.cpp
     GdalRuntimeTests.cpp
     GdalTypedOptionsTests.cpp
     GdalUtilsTests.cpp
     Main.cpp
-    RenderingBaselineTests.cpp
+    MapRenderSceneTests.cpp
+    MapTests.cpp
+    MapViewTests.cpp
     TestData.cpp
     VectorDatasetTests.cpp
-    VectorLayerRendererTests.cpp
     VectorLayerTests.cpp
     VectorRenderSceneTests.cpp
+    ViewportTests.cpp
 )
 
 add_executable(MapWinGIS.Core.Tests)
@@ -96,9 +95,10 @@ endif()
 if(_mwg_activation_shell)
     add_test(NAME Verify-ActiveXActivation
         COMMAND "${_mwg_activation_shell}" -NoProfile -File
-            "${CMAKE_CURRENT_SOURCE_DIR}/Verify-ActiveXActivation.ps1"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../MapWinGIS.ActiveX.Tests/Verify-ActiveXActivation.ps1"
             -Platform "${MWG_PLATFORM}"
             -BinDirectory "${MWG_RUNTIME_DIR}"
+            -TestExecutable "MapWinGIS.Core.Tests.exe"
     )
     set_tests_properties(Verify-ActiveXActivation PROPERTIES
         LABELS "interactive"

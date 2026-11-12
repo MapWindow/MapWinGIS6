@@ -223,9 +223,13 @@ namespace
     class FailingOutputDataset final : public GDALDataset
     {
     public:
-        FailingOutputDataset(const bool failFlush, const bool failClose)
+        static inline int closeCount = 0;
+
+        FailingOutputDataset(
+            const bool failFlush, const bool failClose, const bool reportCloseDiagnostic = false)
             : _failFlush(failFlush),
-              _failClose(failClose)
+              _failClose(failClose),
+              _reportCloseDiagnostic(reportCloseDiagnostic)
         {
         }
 
@@ -236,6 +240,16 @@ namespace
 
         CPLErr Close() override
         {
+            ++closeCount;
+            const CPLErr flushResult = FlushCache(false);
+            if (flushResult != CE_None)
+                return flushResult;
+            if (_reportCloseDiagnostic)
+            {
+                CPLError(CE_Failure, CPLE_FileIO, "%s",
+                         "Simulated diagnostic during successful output close");
+                return CE_None;
+            }
             return ReportFailure(_failClose, "Simulated output close failure");
         }
 
@@ -254,6 +268,7 @@ namespace
 
         bool _failFlush;
         bool _failClose;
+        bool _reportCloseDiagnostic;
     };
 
     class OutputFailureAlgorithm final : public GDALAlgorithm
@@ -261,6 +276,10 @@ namespace
     public:
         static GDALDataset* outputDataset;
         static bool runSucceeded;
+        static bool rejectOpen;
+        static inline bool finalizeSucceeded = true;
+        static inline int openCount = 0;
+        static inline std::string lastOpenedPath;
 
         OutputFailureAlgorithm()
             : GDALAlgorithm(
@@ -271,8 +290,18 @@ namespace
             AddArg("output", 0, "Output dataset", &_output);
         }
 
+        bool Finalize() override
+        {
+            if (!finalizeSucceeded)
+            {
+                ReportError(CE_Failure, CPLE_AppDefined, "%s", "forced output finalization failure");
+                return false;
+            }
+            return GDALAlgorithm::Finalize();
+        }
+
     protected:
-        bool RunImpl(GDALProgressFunc, void*) override
+        bool RunImpl(GDALProgressFunc progress, void* userData) override
         {
             if (outputDataset == nullptr)
             {
@@ -284,7 +313,57 @@ namespace
             _output.Set(output);
             outputDataset = nullptr;
             GDALReleaseDataset(output);
+            if (progress != nullptr)
+                (void)progress(1.0, "complete", userData);
             return runSucceeded;
+        }
+
+    private:
+        GDALArgDatasetValue _output;
+    };
+
+    class WorkerProgressAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        WorkerProgressAlgorithm()
+            : GDALAlgorithm("mwg-test-worker-progress", "Test worker progress", "")
+        {
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc progress, void* userData) override
+        {
+            std::array<int, 2> results{};
+            const auto report = [&](const std::size_t index)
+            {
+                results[index] = progress(0.5, "worker", userData);
+            };
+            std::thread first(report, 0);
+            std::thread second(report, 1);
+            first.join();
+            second.join();
+            return results[0] != 0 && results[1] != 0;
+        }
+    };
+
+    class CallerOwnedOutputAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        CallerOwnedOutputAlgorithm()
+            : GDALAlgorithm(
+                  "mwg-test-caller-owned-output",
+                  "Test caller-owned algorithm output",
+                  "")
+        {
+            AddArg("output", 0, "Output dataset", &_output);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            GDALDataset* const output = _output.GetDatasetRef();
+            return output != nullptr && output->GetRasterBand(1) != nullptr &&
+                   output->GetRasterBand(1)->Fill(42) == CE_None;
         }
 
     private:
@@ -293,6 +372,7 @@ namespace
 
     GDALDataset* OutputFailureAlgorithm::outputDataset = nullptr;
     bool OutputFailureAlgorithm::runSucceeded = false;
+    bool OutputFailureAlgorithm::rejectOpen = false;
 
     void RegisterTestAlgorithms()
     {
@@ -314,6 +394,10 @@ namespace
                                       [] { return std::make_unique<CallbackLifecycleAlgorithm>(); });
             registry.DeclareAlgorithm({"mwg-test", "output-failure"},
                                       [] { return std::make_unique<OutputFailureAlgorithm>(); });
+            registry.DeclareAlgorithm({"mwg-test", "caller-owned-output"},
+                                      [] { return std::make_unique<CallerOwnedOutputAlgorithm>(); });
+            registry.DeclareAlgorithm({"mwg-test", "worker-progress"},
+                                      [] { return std::make_unique<WorkerProgressAlgorithm>(); });
         });
     }
 
@@ -608,6 +692,51 @@ TEST(GdalAlgorithmRunner, SerializesConcurrentRunnersAndIsolatesTheirResults)
     EXPECT_EQ(results[1].DetailedErrorMsg().find("first operation"), std::string::npos);
 }
 
+TEST(GdalAlgorithmRunner, SerializesWorkerCallbacksAndRetainsCancellationAndExceptions)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    int callbackCount = 0;
+    std::atomic_int active{0};
+    std::atomic_bool overlapped{false};
+    GdalAlgorithmRunner runner("mwg-test worker-progress");
+    EXPECT_TRUE(runner.Run([&](double, std::string_view)
+    {
+        if (active.fetch_add(1) != 0)
+            overlapped.store(true);
+        ++callbackCount;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        active.fetch_sub(1);
+        return true;
+    }));
+    EXPECT_EQ(callbackCount, 2);
+    EXPECT_FALSE(overlapped.load());
+
+    GdalAlgorithmRunner cancelled("mwg-test worker-progress");
+    callbackCount = 0;
+    EXPECT_FALSE(cancelled.Run([&](double, std::string_view)
+    {
+        ++callbackCount;
+        return false;
+    }));
+    EXPECT_EQ(callbackCount, 1);
+    EXPECT_TRUE(cancelled.Result().WasCancelled());
+
+    GdalAlgorithmRunner failed("mwg-test worker-progress");
+    EXPECT_FALSE(failed.Run([](double, std::string_view) -> bool
+    {
+        throw std::runtime_error("worker callback failed");
+    }));
+    EXPECT_FALSE(failed.Result().WasCancelled());
+    EXPECT_NE(failed.Result().ErrorMsg().find("worker callback failed"), std::string::npos);
+
+    GdalAlgorithmRunner reentered("mwg-test worker-progress");
+    GdalAlgorithmRunner nested("mwg-test progress");
+    EXPECT_FALSE(reentered.Run([&](double, std::string_view) { return nested.Run(); }));
+    EXPECT_NE(reentered.Result().ErrorMsg().find("cannot be called from a GDAL callback"),
+              std::string::npos);
+}
+
 TEST(GdalAlgorithmRunner, PreservesLoggerExceptionsUntilAfterFinalization)
 {
     GdalEnvironment::Initialize();
@@ -654,8 +783,18 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
         {
             return nullptr;
         }
+        ++OutputFailureAlgorithm::openCount;
+        OutputFailureAlgorithm::lastOpenedPath = path;
+        if (OutputFailureAlgorithm::rejectOpen)
+        {
+            CPLError(CE_Failure, CPLE_OpenFailed, "%s",
+                     "Simulated output reopen failure");
+            return nullptr;
+        }
         const bool failFlush = path.ends_with(":flush");
-        return new FailingOutputDataset(failFlush, !failFlush);
+        const bool failClose = path.ends_with(":close");
+        const bool reportCloseDiagnostic = path.ends_with(":close-diagnostic");
+        return new FailingOutputDataset(failFlush, failClose, reportCloseDiagnostic);
     };
     GetGDALDriverManager()->RegisterDriver(driver.get());
 
@@ -664,25 +803,66 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
         const char* kind;
         const char* diagnostic;
         bool runSucceeded;
+        bool useGroupCommandLine;
+        bool rejectReopen;
+        bool finalizeSucceeded;
+        bool cancel;
     };
     for (const FailureCase& failure : {
-             FailureCase{"flush", "Simulated output flush failure", true},
-             FailureCase{"close", "Simulated output close failure", false}})
+             FailureCase{"flush", "Simulated output flush failure", true, false, false, true, false},
+             FailureCase{"close", "Simulated output close failure", true, false, false, true, false},
+             FailureCase{"close-diagnostic",
+                         "Simulated diagnostic during successful output close",
+                         true, false, false, true, false},
+             FailureCase{"close", "Simulated output close failure", false, true, false, true, false},
+             FailureCase{"reopen", "no dataset could be reopened", true, false, true, true, false},
+             FailureCase{"named-output", "", true, true, false, true, false},
+             FailureCase{"finalize", "forced output finalization failure", true, false, true, false, false},
+             FailureCase{"cancel", "cancelled", true, false, true, true, true}})
     {
         const std::string path =
             std::string("MWG_OUTPUT_FAILURE:output:") + failure.kind;
         GdalDatasetPtr failingOutput(static_cast<GDALDataset*>(
             GDALOpen(path.c_str(), GA_Update)));
         ASSERT_NE(failingOutput, nullptr);
+        if (std::string_view(failure.kind) == "named-output")
+            failingOutput->SetDescription("driver-specific output");
         OutputFailureAlgorithm::outputDataset = failingOutput.release();
         OutputFailureAlgorithm::runSucceeded = failure.runSucceeded;
-        GdalAlgorithmRunner failingRunner("mwg-test output-failure");
+        OutputFailureAlgorithm::rejectOpen = failure.rejectReopen;
+        OutputFailureAlgorithm::finalizeSucceeded = failure.finalizeSucceeded;
+        OutputFailureAlgorithm::openCount = 0;
+        OutputFailureAlgorithm::lastOpenedPath.clear();
+        FailingOutputDataset::closeCount = 0;
+        GdalAlgorithmRunner failingRunner(
+            failure.useGroupCommandLine ? "mwg-test" : "mwg-test output-failure");
+        if (failure.useGroupCommandLine)
+        {
+            ASSERT_TRUE(failingRunner.ParseCommandLineArgs({
+                "output-failure", "--output", path
+            })) << LastError(failingRunner);
+        }
 
-        EXPECT_FALSE(failingRunner.Run());
-        EXPECT_NE(
-            failingRunner.Result().ErrorMsg().find(failure.diagnostic),
-            std::string::npos)
-            << failingRunner.Result().DetailedErrorMsg();
+        const bool successExpected =
+            std::string_view(failure.kind) == "reopen" ||
+            std::string_view(failure.kind) == "named-output";
+        EXPECT_EQ(failingRunner.Run([&](double, std::string_view) { return !failure.cancel; }),
+                  successExpected);
+        if (!failure.finalizeSucceeded || failure.cancel)
+            EXPECT_EQ(OutputFailureAlgorithm::openCount, 0);
+        OutputFailureAlgorithm::rejectOpen = false;
+        OutputFailureAlgorithm::finalizeSucceeded = true;
+        if (failure.diagnostic[0] != '\0')
+        {
+            EXPECT_NE(
+                failingRunner.Result().DetailedErrorMsg().find(failure.diagnostic),
+                std::string::npos)
+                << failingRunner.Result().DetailedErrorMsg();
+        }
+        if (std::string_view(failure.kind) == "named-output")
+            EXPECT_EQ(OutputFailureAlgorithm::lastOpenedPath, path);
+        if (std::string_view(failure.kind) == "close-diagnostic")
+            EXPECT_EQ(FailingOutputDataset::closeCount, 1);
         OutputFailureAlgorithm::outputDataset = nullptr;
     }
 
@@ -701,6 +881,79 @@ TEST(GdalAlgorithmRunner, ReportsOutputFlushAndCloseFailuresAndAllowsSubsequentS
     ASSERT_NE(saved, nullptr);
     EXPECT_EQ(saved->GetRasterXSize(), 32);
     EXPECT_EQ(saved->GetRasterYSize(), 24);
+}
+
+TEST(GdalAlgorithmRunner, ReopensWritableOutputsWithUpdateAccess)
+{
+    GdalEnvironment::Initialize();
+    const test::TempDirectory directory;
+    const auto input = test::MakeRaster(directory.Path());
+    const auto path = directory.Path() / "editable.tif";
+    GdalDatasetPtr output;
+    {
+        GdalAlgorithmRunner runner("raster convert");
+        ASSERT_TRUE(runner.SetArgument("input", ToUtf8(input)));
+        ASSERT_TRUE(runner.SetArgument("output", ToUtf8(path)));
+        ASSERT_TRUE(runner.Run()) << LastError(runner);
+        output = runner.TakeOutputDataset();
+    }
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->GetAccess(), GA_Update);
+    EXPECT_EQ(output->GetRasterBand(1)->SetNoDataValue(255), CE_None);
+    EXPECT_EQ(output->SetMetadataItem("MWG_TEST", "edited"), CE_None);
+    int overviewLevel = 2;
+    EXPECT_EQ(output->BuildOverviews("NEAREST", 1, &overviewLevel, 0, nullptr, nullptr, nullptr),
+              CE_None);
+    ASSERT_EQ(GDALClose(output.release()), CE_None);
+    GdalDatasetPtr reopened(static_cast<GDALDataset*>(GDALOpen(ToUtf8(path).c_str(), GA_ReadOnly)));
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_STREQ(reopened->GetMetadataItem("MWG_TEST"), "edited");
+    EXPECT_DOUBLE_EQ(reopened->GetRasterBand(1)->GetNoDataValue(), 255);
+    EXPECT_EQ(reopened->GetRasterBand(1)->GetOverviewCount(), 1);
+}
+
+TEST(GdalAlgorithmRunner, ReopensAnOutputWithADifferentReader)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    const test::TempDirectory directory;
+    const auto path = test::MakeRaster(directory.Path());
+    auto writer = std::make_unique<GDALDriver>();
+    writer->SetDescription("MWGWriteOnlyTest");
+    // Use a synthetic writer handle for an existing TIFF. Only GTiff can reopen it.
+    class WriterDataset final : public GDALDataset
+    {
+    public:
+        WriterDataset(GDALDriver& driver, const std::string& name)
+        {
+            poDriver = &driver;
+            SetDescription(name.c_str());
+        }
+    };
+    GdalDatasetPtr output(std::make_unique<WriterDataset>(*writer, ToUtf8(path)).release());
+    OutputFailureAlgorithm::outputDataset = output.release();
+    OutputFailureAlgorithm::runSucceeded = true;
+    GdalAlgorithmRunner runner("mwg-test output-failure");
+    ASSERT_TRUE(runner.Run()) << LastError(runner);
+    auto reopened = runner.TakeOutputDataset();
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_STREQ(reopened->GetDriverName(), "GTiff");
+    EXPECT_EQ(reopened->GetRasterXSize(), 12);
+}
+
+TEST(GdalAlgorithmRunner, CompletesWriteOnlyStreamingOutputsWithoutReopening)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    auto output = std::make_unique<FailingOutputDataset>(false, false);
+    output->SetDescription("/vsistdout/");
+    OutputFailureAlgorithm::outputDataset = output.release();
+    OutputFailureAlgorithm::runSucceeded = true;
+    GdalAlgorithmRunner runner("mwg-test output-failure");
+    EXPECT_TRUE(runner.Run()) << LastError(runner);
+    EXPECT_EQ(runner.TakeOutputDataset(), nullptr);
+    EXPECT_NE(runner.Result().DetailedErrorMsg().find("no dataset could be reopened"),
+              std::string::npos);
 }
 
 TEST(GdalAlgorithmRunner, RejectsPreCancelledRunBeforeInvokingAlgorithm)
@@ -740,6 +993,7 @@ TEST(GdalAlgorithmRunner, ConvertsGeoTiffEquivalentlyFromTypedAndCommandLineArgu
     ASSERT_NE(output, nullptr);
     EXPECT_EQ(output->GetRasterXSize(), 32);
     EXPECT_EQ(output->GetRasterYSize(), 24);
+    EXPECT_EQ(output->GetAccess(), GA_ReadOnly);
     output.reset();
 
     GdalAlgorithmRunner parsed("raster convert");
@@ -759,4 +1013,56 @@ TEST(GdalAlgorithmRunner, ConvertsGeoTiffEquivalentlyFromTypedAndCommandLineArgu
     EXPECT_EQ(typedDataset->GetRasterXSize(), parsedDataset->GetRasterXSize());
     EXPECT_EQ(typedDataset->GetRasterYSize(), parsedDataset->GetRasterYSize());
     EXPECT_EQ(ReadPixels(typedDataset.get()), ReadPixels(parsedDataset.get()));
+}
+
+TEST(GdalAlgorithmRunner, CallerOwnedPersistentOutputRemainsOpenAndIsReturned)
+{
+    RegisterTestAlgorithms();
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path outputPath = directory.Path() / "caller-owned.tif";
+    GDALDriver* const driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+    ASSERT_NE(driver, nullptr);
+    GdalDatasetPtr callerOutput(driver->Create(
+        ToUtf8(outputPath).c_str(), 32, 24, 1, GDT_Byte, nullptr));
+    ASSERT_NE(callerOutput, nullptr);
+    GDALDataset* const originalOutput = callerOutput.get();
+
+    GdalDatasetPtr returnedOutput;
+    {
+        GdalAlgorithmRunner runner("mwg-test caller-owned-output");
+        ASSERT_TRUE(runner.SetDatasetArgument("output", callerOutput));
+        ASSERT_TRUE(runner.Run()) << LastError(runner);
+        returnedOutput = runner.TakeOutputDataset();
+    }
+
+    ASSERT_NE(returnedOutput, nullptr);
+    EXPECT_EQ(returnedOutput.get(), originalOutput);
+    EXPECT_EQ(returnedOutput->GetAccess(), GA_Update);
+    std::uint8_t pixel = 0;
+    ASSERT_EQ(returnedOutput->GetRasterBand(1)->RasterIO(
+                  GF_Read, 0, 0, 1, 1, &pixel, 1, 1, GDT_Byte, 0, 0),
+              CE_None);
+    EXPECT_EQ(pixel, 42);
+}
+
+TEST(GdalAlgorithmRunner, GroupCommandLineReturnsSelectedSubalgorithmMemoryOutput)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    mwg::test::TempDirectory directory;
+    const std::filesystem::path input = MakeRaster(directory.Path(), "input.tif");
+
+    GdalAlgorithmRunner runner("raster");
+    ASSERT_TRUE(runner.ParseCommandLineArgs({
+        "convert", "--input", ToUtf8(input), "--output", "memory-output",
+        "--output-format", "MEM"
+    })) << LastError(runner);
+    ASSERT_TRUE(runner.Run()) << LastError(runner);
+
+    GdalDatasetPtr output = runner.TakeOutputDataset();
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->GetRasterXSize(), 32);
+    EXPECT_EQ(output->GetRasterYSize(), 24);
 }

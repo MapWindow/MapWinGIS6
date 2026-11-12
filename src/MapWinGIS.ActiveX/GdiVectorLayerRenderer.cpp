@@ -4,8 +4,8 @@
  * @file GdiVectorLayerRenderer.cpp
  * @brief Draws polygon render scenes into a Windows GDI device context.
  *
- * Fits source coordinates into the control bounds and paints polygon fills
- * and outlines without retaining scene or host resources.
+ * Transforms every layer through the same Core viewport and paints polygon
+ * fills and outlines without retaining scene or host resources.
  */
 #include "GdiVectorLayerRenderer.h"
 
@@ -122,8 +122,8 @@ namespace mwg::activex
                 value <= kMaximumGdiCoordinate;
         }
 
-        /// Checks every vertex before drawing so invalid geometry fails the
-        /// whole scene instead of being partially rasterized.
+        /// Checks every vertex of a layer before drawing so invalid geometry
+        /// skips the whole layer instead of being partially rasterized.
         [[nodiscard]] bool HasDrawableCoordinates(
             const rendering::VectorRenderScene& scene,
             const ViewTransform& transform,
@@ -148,6 +148,9 @@ namespace mwg::activex
             return true;
         }
 
+        /// GDI addresses pixels by integer coordinates, so a continuous
+        /// screen position is drawn in the pixel that contains it, as ToPixel
+        /// defines.
         [[nodiscard]] POINT ToPoint(
             const rendering::Point& point,
             const ViewTransform& transform,
@@ -155,70 +158,16 @@ namespace mwg::activex
             const double originY) noexcept
         {
             return {
-                static_cast<LONG>(std::lround(ToDeviceX(point, transform, originX))),
-                static_cast<LONG>(std::lround(ToDeviceY(point, transform, originY)))};
-        }
-    }
-
-    HRESULT GdiVectorLayerRenderer::Draw(
-        const HDC deviceContext,
-        const RECT& bounds,
-        const rendering::VectorRenderScene& scene) noexcept
-    {
-        if (deviceContext == nullptr || scene.extent.IsEmpty() ||
-            scene.extent.Width() <= 0.0 || scene.extent.Height() <= 0.0)
-        {
-            return E_INVALIDARG;
+                static_cast<LONG>(std::floor(ToDeviceX(point, transform, originX))),
+                static_cast<LONG>(std::floor(ToDeviceY(point, transform, originY)))};
         }
 
-        const double targetWidth =
-            static_cast<double>(bounds.right) - static_cast<double>(bounds.left);
-        const double targetHeight =
-            static_cast<double>(bounds.bottom) - static_cast<double>(bounds.top);
-        if (targetWidth <= 2.0 * ViewTransform::kMargin ||
-            targetHeight <= 2.0 * ViewTransform::kMargin)
-        {
-            return S_OK;
-        }
-
-        const auto transform = ViewTransform::Create(
-            scene.extent,
-            targetWidth,
-            targetHeight);
-        if (!transform.has_value())
-        {
-            return E_INVALIDARG;
-        }
-
-        const double originX = static_cast<double>(bounds.left);
-        const double originY = static_cast<double>(bounds.top);
-        if (!HasDrawableCoordinates(scene, *transform, originX, originY))
-        {
-            return E_INVALIDARG;
-        }
-
-        const ScopedDcState savedState(deviceContext);
-        if (!savedState.IsValid())
-        {
-            return E_FAIL;
-        }
-
-        const ScopedGdiObject brush(CreateSolidBrush(kFillColor));
-        const ScopedGdiObject pen(CreatePen(PS_SOLID, 1, kOutlineColor));
-        if (brush.Get() == nullptr || pen.Get() == nullptr)
-        {
-            return E_OUTOFMEMORY;
-        }
-
-        const ScopedSelection selectedBrush(deviceContext, brush.Get());
-        const ScopedSelection selectedPen(deviceContext, pen.Get());
-        if (!selectedBrush.IsValid() || !selectedPen.IsValid() ||
-            SetPolyFillMode(deviceContext, ALTERNATE) == 0)
-        {
-            return E_FAIL;
-        }
-
-        try
+        [[nodiscard]] HRESULT DrawLayer(
+            const HDC deviceContext,
+            const rendering::VectorRenderScene& scene,
+            const ViewTransform& transform,
+            const double originX,
+            const double originY)
         {
             for (const rendering::Polygon& polygon : scene.polygons)
             {
@@ -242,7 +191,7 @@ namespace mwg::activex
                     ringCounts.push_back(static_cast<int>(ring.size()));
                     for (const rendering::Point& point : ring)
                     {
-                        points.push_back(ToPoint(point, *transform, originX, originY));
+                        points.push_back(ToPoint(point, transform, originX, originY));
                     }
                 }
 
@@ -256,6 +205,92 @@ namespace mwg::activex
                     return E_FAIL;
                 }
             }
+            return S_OK;
+        }
+    }
+
+    HRESULT GdiVectorLayerRenderer::Draw(
+        const HDC deviceContext,
+        const RECT& bounds,
+        const rendering::MapRenderScene& scene,
+        const Viewport& viewport) noexcept
+    {
+        _failedLayers.clear();
+        if (deviceContext == nullptr || !MatchesViewport(bounds, viewport))
+        {
+            return E_INVALIDARG;
+        }
+
+        const auto transform = ViewTransform::Create(viewport);
+        if (!transform.has_value())
+        {
+            return E_INVALIDARG;
+        }
+
+        const ScopedDcState savedState(deviceContext);
+        if (!savedState.IsValid())
+        {
+            return E_FAIL;
+        }
+
+        const int clipResult = IntersectClipRect(
+            deviceContext, bounds.left, bounds.top, bounds.right, bounds.bottom);
+        if (clipResult == ERROR)
+        {
+            return E_FAIL;
+        }
+        RECT clipBounds{};
+        const int effectiveClip = GetClipBox(deviceContext, &clipBounds);
+        if (effectiveClip == ERROR)
+        {
+            return E_FAIL;
+        }
+        if (effectiveClip == NULLREGION)
+        {
+            return S_OK;
+        }
+
+        const ScopedGdiObject brush(CreateSolidBrush(kFillColor));
+        const ScopedGdiObject pen(CreatePen(PS_SOLID, 1, kOutlineColor));
+        if (brush.Get() == nullptr || pen.Get() == nullptr)
+        {
+            return E_OUTOFMEMORY;
+        }
+
+        const ScopedSelection selectedBrush(deviceContext, brush.Get());
+        const ScopedSelection selectedPen(deviceContext, pen.Get());
+        if (!selectedBrush.IsValid() || !selectedPen.IsValid() ||
+            SetPolyFillMode(deviceContext, ALTERNATE) == 0)
+        {
+            return E_FAIL;
+        }
+
+        const double originX = static_cast<double>(bounds.left);
+        const double originY = static_cast<double>(bounds.top);
+        std::size_t drawnLayers = 0;
+        try
+        {
+            for (const rendering::LayerRenderScene& layer : scene.layers)
+            {
+                if (!HasDrawableCoordinates(layer.scene, *transform, originX, originY))
+                {
+                    _failedLayers.push_back(layer.layerId);
+                    continue;
+                }
+
+                const HRESULT layerResult =
+                    DrawLayer(deviceContext, layer.scene, *transform, originX, originY);
+                if (layerResult == E_INVALIDARG)
+                {
+                    _failedLayers.push_back(layer.layerId);
+                    continue;
+                }
+                if (FAILED(layerResult))
+                {
+                    return layerResult;
+                }
+                ++drawnLayers;
+            }
         }
         catch (const std::bad_alloc&)
         {
@@ -266,6 +301,6 @@ namespace mwg::activex
             return E_OUTOFMEMORY;
         }
 
-        return S_OK;
+        return drawnLayers == 0 && !_failedLayers.empty() ? E_INVALIDARG : S_OK;
     }
 }

@@ -5,6 +5,8 @@
 
 include(MwgMidl)
 
+# If MIDL starts emitting proxy/stub files for this IDL, wire them into each
+# COM consumer so their marshalling code is linked into the control.
 mwg_add_midl_target(MapWinGIS.ActiveX.Interface IDL MapWinGIS.ActiveX.idl)
 
 # Compiled into the OCX and, with MWG_ENABLE_RENDERER_TEST_HOOKS, into the
@@ -24,6 +26,7 @@ set(MWG_ACTIVEX_SHARED_SOURCES "${MWG_ACTIVEX_SHARED_SOURCES}" PARENT_SCOPE)
 set(MWG_ACTIVEX_HEADERS
     ActiveXModule.h
     ComConversion.h
+    FrameBuffer.h
     GdalDispatchWindow.h
     GdalEventSource.h
     GdalOperationDispatcher.h
@@ -38,6 +41,7 @@ set(MWG_ACTIVEX_HEADERS
 
 set(MWG_ACTIVEX_SOURCES
     ActiveXModule.cpp
+    FrameBuffer.cpp
     GdalEventSource.cpp
     MapWinGISControl.cpp
 )
@@ -97,3 +101,11 @@ set_target_properties(MapWinGIS.ActiveX PROPERTIES
 )
 
 add_dependencies(MapWinGIS.ActiveX MapWinGIS.ActiveX.Interface)
+
+add_custom_command(TARGET MapWinGIS.ActiveX POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${MapWinGIS.ActiveX.Interface_TLB}"
+        "$<TARGET_FILE_DIR:MapWinGIS.ActiveX>/MapWinGIS.ActiveX.tlb"
+    COMMENT "Copying ActiveX type library beside the OCX"
+    VERBATIM
+)

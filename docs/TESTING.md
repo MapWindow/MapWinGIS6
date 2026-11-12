@@ -1,18 +1,26 @@
 # Testing
 
-- Framework: GoogleTest from the vcpkg `tests` feature (enabled by the MSBuild
-  default and when `MWG_BUILD_TESTS` is on for CMake).
-- Test project: `tests/MapWinGIS.Core.Tests`, built with the MSBuild solution
-  or CMake.
+- Framework: GoogleTest from the vcpkg `tests` feature (enabled by default
+  through the MSBuild `MwgVcpkgFeatures` setting and when `MWG_BUILD_TESTS` is
+  on for CMake).
+- Core test project: `tests/MapWinGIS.Core.Tests`, built with the solution or
+  CMake.
+- ActiveX test project: `tests/MapWinGIS.ActiveX.Tests`, built with the solution.
+- ActiveX implementation units shared by the OCX and its tests are built as
+  `MapWinGIS.ActiveX.Impl.lib`.
 - Shared fixtures and helpers live in `TestData.h/.cpp` (`TempDirectory`,
-  `MakeSampleShapefile`, `MakeProvincesDataset`, and layer constants). Extend
-  these instead of writing per-file fixture code.
+  `MakeSampleShapefile`, `MakeProvincesDataset`, `MakeRectanglesDataset`, and
+  layer constants). Extend these instead of writing per-file fixture code.
+  `MakeRectanglesDataset` writes one rectangle per given extent, so map tests
+  can place layers at chosen coordinates or create an empty layer.
 
 ## Running
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml   # CI
+bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresults.xml
 ```
 
 Also runnable from Visual Studio Test Explorer (GoogleTest adapter picks it
@@ -40,7 +48,7 @@ To run one case from CTest, match its fully qualified GoogleTest name:
 ctest --test-dir out/b/x64d -R 'VectorDatasetTest.ReportsTheDriverAndPath' --output-on-failure
 ```
 
-## ActiveX integration checks
+## ActiveX host integration checks
 
 ### Registered native control check
 
@@ -51,14 +59,14 @@ refuses to run if the control's CLSID or either ProgID is already registered.
 Run it from a PowerShell process that matches the target architecture:
 
 ```powershell
-pwsh -File tests\MapWinGIS.Core.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
+pwsh -File tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
 ```
 
 For a CMake build, pass its runtime directory:
 
 ```powershell
-pwsh -File tests\MapWinGIS.Core.Tests\Verify-ActiveXActivation.ps1 `
-    -Configuration Debug -Platform x64 -BinDirectory out\b\x64d\bin
+pwsh -File tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1 `
+    -Platform x64 -BinDirectory out\b\x64d\bin -TestExecutable MapWinGIS.Core.Tests.exe
 ```
 
 CTest registers this registration-based check with the `interactive` label
@@ -70,6 +78,25 @@ from an interactive desktop when needed:
 ctest --test-dir out/b/x64d -R '^Verify-ActiveXActivation$' --output-on-failure
 ```
 
+## Build configuration tests
+
+```powershell
+pwsh -File build\scripts\Test-BuildConfiguration.ps1
+```
+
+These tests pass `tests%3Bfull-drivers` on the MSBuild command line in a path
+with spaces and inspect the resulting dependency arguments.
+They also make sure that only Core deploys GDAL and PROJ data to the shared
+output folder. CI runs them before the solution build. Builds with
+`full-drivers` also test the release driver set in `GdalEnvironment` tests.
+Pull requests run both Debug and full-driver Release tests for x64.
+
+The native `MapWinGIS.ActiveX.Tests` project covers COM activation, registered
+control rendering through GDI and OpenGL, and GDAL progress/completion events.
+Its registered-control host test also sends a wheel zoom and captured drag to
+the hosted control and verifies their viewport effects. Run this opt-in test
+with `tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1`.
+
 ### C# ActiveX test host
 
 The .NET 10 WinForms host exercises the real ActiveX control through `AxHost`
@@ -78,6 +105,19 @@ manifest. It has a visible manual mode and an `--automated` mode that uses the
 same host, resize, repaint, and dispose paths, with no COM registry changes.
 The automated checks also run a GDAL raster conversion and check progress and
 completion events, including operation IDs and progress arguments.
+
+In manual mode, use `Open` or drag files onto the host to add vector
+datasets. The layer list shows names, feature counts, stable IDs, and file
+path tooltips. Each dataset contributes only its first layer.
+The file formats available depend on the GDAL build.
+
+Use `Clear` to remove all layers, `Zoom +` and `Zoom -` to change zoom,
+`Map` to fit all layers, and `Layer` to fit the selected layer.
+The arrow buttons pan by the `Pan units` value in dataset coordinates.
+The status strip shows core initialization, layer and feature totals,
+the rendering backend, and rendering status or operation errors.
+`Recreate` restores the startup layer, and `Repaint` requests a redraw.
+
 From an interactive Windows desktop session, run:
 
 ```powershell
@@ -87,9 +127,18 @@ pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration
 The launcher makes no COM registration changes. Automated mode creates a
 visible window and runs the UI message loop, checks the `CoreInitialized`
 automation property, loads a generated two-polygon GeoJSON dataset through the
-control, resizes the host, samples rendered polygon and background pixels for
-both the GDI preference and the default (OpenGL-first) path, recreates the
-control, reloads the layer, and writes individual outcomes to
+control, resizes the host, and samples rendered polygon and background pixels
+for GDI and a requested OpenGL path. The OpenGL request can use GDI when
+OpenGL is unavailable or the scene is unsupported. The host recreates the
+control and reloads the layer. It calls the original `LoadVectorDataset`
+method and reads `LayerLoaded` and the absolute `FeatureCount` on each fresh
+control. It also checks failed dataset loads, loads two layers through
+`LoadVectorDatasetEx`, and checks their IDs, counts, and feature-count deltas.
+It exercises map fitting, per-layer fitting, zoom in and out, pan, cursor
+anchored zoom, navigation after resizing, invalid layer IDs, and navigation
+with no layers. It clears and reloads layers and makes sure that failed loads
+and navigation do not change layer or feature counts. The host writes
+individual outcomes to
 `bin\Debug\x64\ActiveXTestHost-results.json`. Pixels are sampled from the host
 window's own composed content (`PrintWindow` with `PW_RENDERFULLCONTENT`), not
 from the screen, so another window on top or a lost foreground race does not
@@ -103,89 +152,8 @@ are not currently part of CI.
 The host executable accepts `--automated`, `--results <path>`, and
 `--timeout-seconds <5-300>`. The PowerShell launcher supplies these options
 and starts the host without changing COM registration.
-
-### Phase 3a validation
-
-On the Debug x64 build, the native test executable ran 135 tests: 133 passed
-and 2 were skipped (the opt-in network test and the separately exercised
-native hosting check). `Verify-ActiveXActivation.ps1` passed its independent,
-registration-based native COM hosting test. The C# automated host passed all
-10 checks without COM registration, including activation, automation access,
-resize, visible repaint, disposal, recreation, and a second paint. Manual mode
-opened visibly and closed through the normal window-close path. The managed
-host also compiles for Win32/x86; matching native x86 hosting was verified
-during Phase 7.
-
-### Phase 4 validation
-
-The Debug x64 native suite ran 137 tests: 135 passed and 2 were skipped. Both
-polygon scene tests passed for Shapefile and GeoPackage fixtures. The
-registration-free C# host passed all 12 checks, including loading a generated
-GeoJSON layer, sampling both polygon fills and the gap between them, and
-reloading and repainting after control recreation. These integration checks
-require an interactive Windows desktop and are not currently part of CI.
-
-### Phase 5 validation
-
-The native renderer tests exercise the OpenGL backend directly when a WGL
-context with framebuffer objects is available, then verify that the
-coordinator selects it. They also verify that polygons with interior rings use
-the GDI fallback and that concave rings hidden by duplicate vertices and
-self-intersecting rings are rejected by OpenGL. Scenes with non-finite or
-out-of-range device coordinates fail with `E_INVALIDARG` before GDI draws
-anything. The OpenGL drawing test skips
-only when the backend reports that no suitable target is available (`S_FALSE`);
-drawing, readback, or presentation failures fail it. The GDI fallback test
-does not require OpenGL. The Debug x64 build completed without compiler
-warnings, and the native suite ran 143 tests: 141 passed and 2 were skipped
-(the opt-in network test and registered-host check). The
-registration-free C# host activated the control, loaded the test layer, and
-resized it, but its screen-pixel checks could not be verified in this
-noninteractive session because the host window was absent from the captured
-desktop. Rerun that check from an interactive Windows desktop.
-
-### Phase 6 and 7 validation
-
-The renderer coordinator tests cover runtime backend preferences, hardware
-capability rejection, and GDI fallback. At Phase 7, recreation of a failed
-OpenGL context on later draws was not covered by an automated test (the
-ActiveX hosting test recreates the entire control, not a failed WGL context);
-the follow-up validation below adds that test. Phase 7 passed Debug and Release solution builds and native test runs
-on Win32 and x64, with no Level 4 compiler warnings. Each test run reported
-146 tests: 144 passed and 2 were skipped (the opt-in network test and the
-separately exercised registered-host check). The native registration and
-host-lifecycle check passed for both architectures in Debug.
-
-The managed host builds for both architectures. At Phase 7 it had not been
-run against both native controls, and the screen-sampled pixel assertions were
-unverified; the follow-up validation below resolves both.
-
-### Follow-up validation of open Phase 5–8 findings
-
-The earlier pixel failures were caused by the check, not the control: it read
-the screen DC, which returns whatever window is on top. A capture of the host
-window showed both polygons and the gap rendered correctly by OpenGL while the
-screen showed another application at that position. The host now samples its
-own window content (see above) and also checks pixels under the GDI preference.
-
-On an interactive console session, the registration-free host passed all 13
-checks for Debug and Release on both Win32 and x64, and passed ten consecutive
-Debug runs (five per architecture). `Verify-ActiveXActivation.ps1` passed for
-Debug and Release on both architectures (32-bit Windows PowerShell for Win32).
-The native suite ran 147 tests in each Release build: 144 passed and 3 were
-skipped (the opt-in network, registered-host, and rendering-baseline tests).
-
-A Win32 Release build with `MwgVcpkgFeatures=tests;full-drivers` installed the
-extra GDAL dependencies and deployed the HDF5, NetCDF, PostgreSQL, and
-SpatiaLite DLLs (libkml links statically). Its native suite, which by then
-included the context-loss test below, ran 148 tests: 145 passed with the same
-three opt-in skips. The host passed all 13 checks.
-
-`VectorLayerRenderer.OpenGlRecreatesLostContextOnLaterDraw` destroys the
-OpenGL backend's hidden render target after a successful draw. It verifies
-that the next draw fails with `E_FAIL` (the coordinator falls back to GDI for
-that frame) and that the following draw recreates the context and renders
-with OpenGL again.
+For build and manual-use instructions, see the
+[ActiveX Test Host README](../samples/CSharp/ActiveXTestHost/README.md).
 
 ## Rendering performance baseline
 
@@ -200,7 +168,7 @@ Release build for meaningful numbers:
 ```powershell
 $env:MWG_RUN_RENDERING_BASELINE = '1'
 $env:MWG_RENDERING_BASELINE_FEATURES = '100000'   # optional; default 50000
-bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_filter=RenderingBaseline.*
+bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_filter=RenderingBaseline.*
 ```
 
 Measurements on one developer workstation (Release, hardware OpenGL); the
@@ -240,8 +208,40 @@ unchanged-geometry cache. Total memory includes the OpenGL driver and context.
 - Append `<< value` to expectations on strings when the failure output
   matters.
 - Test files carry the same SPDX and Doxygen header as production files.
-- `ViewTransform` tests cover the shared scale and offset used by both GDI and
-  OpenGL renderers, including degenerate extents and zero-area targets.
+- `ViewTransform` tests check that the renderers' transform gives the same
+  screen positions as `Viewport::MapToScreen` and requires a valid viewport.
+- Multi-layer rendering is tested in three places, none of which needs a
+  window or ActiveX: `MapRenderSceneTests.cpp` covers scene order, hidden and
+  empty layers, and per-layer failures; `MapViewTests.cpp` covers fitting,
+  resizing, and scene invalidation; and `VectorLayerRendererTests.cpp` draws
+  layers with different extents into memory bitmaps and samples the pixels at
+  `Viewport::MapToScreen` positions, for GDI and, when available, OpenGL.
+- Native `ActiveXMapTest` cases activate the real OCX through its class factory
+  without registration. They cover stacked loads, rejected loads, cached
+  feature totals, dataset release through `ClearLayers`, `WM_SIZE`, and draws
+  into alternate-sized targets that must not change the live fitting size.
+- `VectorReadTestDriver` simulates unknown feature counts and read failures.
+  Its features include polygon, null, and empty geometries. Tests cover retrying
+  failed ID scans, exact counts, and scene reuse through Core and ActiveX.
+  Read counters detect repeated traversal during loading and the first draw.
+- Renderer regressions compare edge-adjacent pixels at quarter- and
+  three-quarter-pixel rectangle coordinates for GDI and OpenGL. Overlapping
+  layers make drawing order visible: the top fill covers the bottom outline.
+  Map view tests fit point and zero-span extents, and tiny targets with default
+  padding. Map scene tests isolate standard geometry-read exceptions, reuse
+  the resulting scene, and let allocation failures propagate.
+- `ViewportTests.cpp` covers pan, center-zoom, and anchored-zoom calculations
+  and their limits, and
+  `MapViewTests.cpp` covers zoom to map and layer, zoom in and out, empty and
+  missing-layer cases, and pending-fit handling on `MapView`. Pending-fit
+  tests cover replacement in both directions between map and layer fits,
+  cancellation by pan and center zoom, and cancellation by missing or empty
+  layers. They also cover unchanged navigation at a resolution limit and
+  `ZoomAt` on a zero-sized viewport, which keep the pending fit.
+  Viewport tests cover anchor movement when the new center raises the
+  minimum resolution, and direct zoom-out multiplication without a reciprocal.
+  The opt-in registered-control host test also verifies cursor-anchored wheel
+  zoom and drag-to-pan pixel scaling and direction.
 - Cover for each feature: happy path, empty/missing input, out-of-range
   indexes, null values, non-ASCII paths, write-then-reopen round-trips, and
   error cases.
