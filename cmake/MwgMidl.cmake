@@ -24,6 +24,17 @@
 function(_mwg_find_midl out_var)
     # The MSBuild Midl task uses the SDK's x86 midl.exe; any host build works.
     set(hints "")
+    if(CMAKE_GENERATOR MATCHES "^Visual Studio" AND CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
+        cmake_host_system_information(RESULT windows_kits_root
+            QUERY WINDOWS_REGISTRY "HKLM\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots"
+            VALUE KitsRoot10)
+        if(windows_kits_root)
+            file(TO_CMAKE_PATH "${windows_kits_root}" windows_kits_root)
+            list(APPEND hints
+                "${windows_kits_root}/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x86"
+                "${windows_kits_root}/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64")
+        endif()
+    endif()
     if(CMAKE_RC_COMPILER)
         get_filename_component(rc_dir "${CMAKE_RC_COMPILER}" DIRECTORY)
         get_filename_component(sdk_bin "${rc_dir}" DIRECTORY)

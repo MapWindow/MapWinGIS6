@@ -11,17 +11,20 @@ automated UI and pixel checks.
 
 ## CI scope
 
-`.github/workflows/build.yml` runs Debug and full-driver Release x64 builds
-and native tests for pull requests and pushes to `development`.
-Each job has a 180-minute timeout. Pushes to `main` additionally build and test
-both configurations for `Win32`. The runner overrides the default SDK with `10.0`
-because the `windows-2025` image does not include the repository's pinned SDK.
-The C# host checks require an interactive desktop and are not part of this CI
-workflow.
+`.github/workflows/build.yml` runs both CMake and MSBuild jobs. Pull requests
+and pushes to `development` build and test Debug and Release x64; pushes to
+`main` additionally build both configurations for Win32. The CMake job uses
+the Visual Studio 18 2026 generator, while a separate Ninja job checks compile
+flags and warnings against the MSBuild baseline. CTest excludes tests labelled
+`interactive`; the C# host checks require a desktop and are not part of CI.
+The runner overrides the default SDK with `10.0` because `windows-2025` does
+not include the repository's pinned SDK. Each build job has a 180-minute
+timeout.
 
 ## References
 
 - [Build requirements and commands](../../../docs/BUILDING.md#prerequisites)
 - [CI workflow](../../../.github/workflows/build.yml)
+- [CMake presets](../../../CMakePresets.json)
 - [Shared toolset and SDK configuration](../../../Directory.Build.props)
 - [ActiveX project](../../../src/MapWinGIS.ActiveX/MapWinGIS.ActiveX.vcxproj)
