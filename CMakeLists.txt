@@ -76,3 +76,8 @@ if(MWG_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests/MapWinGIS.Core.Tests)
 endif()
+
+if(MWG_BUILD_SAMPLES)
+    add_subdirectory(samples/Cpp)
+    add_subdirectory(samples/CSharp)
+endif()

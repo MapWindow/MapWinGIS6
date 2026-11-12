@@ -23,8 +23,8 @@
 
   <!-- Output layout -->
   <PropertyGroup Label="Output">
-    <OutDir>$(MwgRepoRoot)bin\$(Configuration)\$(Platform)\</OutDir>
-    <IntDir>$(MwgRepoRoot)obj\$(MSBuildProjectName)\$(Configuration)\$(Platform)\</IntDir>
+    <OutDir Condition="'$(MwgCMakeBuild)' != 'true'">$(MwgRepoRoot)bin\$(Configuration)\$(Platform)\</OutDir>
+    <IntDir Condition="'$(MwgCMakeBuild)' != 'true'">$(MwgRepoRoot)obj\$(MSBuildProjectName)\$(Configuration)\$(Platform)\</IntDir>
   </PropertyGroup>
 
   <!-- vcpkg -->
@@ -63,6 +63,6 @@
   <Import Project="$(MwgRepoRoot)build\props\MapWinGIS.Cpp.props" />
 
   <Import Project="$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.props"
-          Condition="Exists('$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.props')" />
+          Condition="'$(MwgCMakeBuild)' != 'true' And Exists('$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.props')" />
 
 </Project>

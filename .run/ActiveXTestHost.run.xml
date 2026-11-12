@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="ActiveXTestHost" type="CMakeCustomBuildRunConfiguration" factoryName="CMake Custom Build Application">
+    <option name="BUILD_TARGET_NAME" value="build_activex_host" />
+    <option name="EXECUTABLE" value="$CMakeCurrentBuildDir$/bin/ActiveXTestHost.exe" />
+    <option name="PROGRAM_PARAMETERS" value="" />
+    <option name="WORKING_DIR" value="$CMakeCurrentBuildDir$/bin" />
+    <method v="2">
+      <option name="CMake.BeforeRun" enabled="true" />
+    </method>
+  </configuration>
+</component>

@@ -178,6 +178,10 @@ as include paths.
 - All binaries share `bin/<Config>/<Platform>`. `ActiveXActivationTests` loads
   `MapWinGIS.ocx` from the test executable's folder, and the C# host uses
   registration-free COM through `app.manifest`, so the OCX must sit beside it.
+- CMake puts each build's binaries in `<build>/bin`; post-build runtime-DLL
+  copying is also applied to the test and Translate executables. The C# host
+  builds into that same folder through `build_activex_host` and launches through
+  `run_activex_host` or `run_activex_host_automated`.
 
 ## Architecture-specific settings
 
@@ -258,8 +262,9 @@ The `ProjectReference` from `ActiveXTestHost.csproj` to
 `'$(MwgCMakeBuild)' != 'true'`. The CMake custom targets pass
 `-p:MwgCMakeBuild=true -p:BuildProjectReferences=false`, so `dotnet build`
 never tries to build a `.vcxproj` or races CMake for the OCX. The imports in
-`Directory.Build.props/.targets` are guarded by `Exists` and harmless under
-`dotnet build`; the csproj already sets `MwgDeployRuntimeData=false`.
+`Directory.Build.props/.targets` also skip the MSBuild vcpkg integration when
+`MwgCMakeBuild=true`; the csproj keeps `MwgDeployRuntimeData=false` so CMake
+remains responsible for runtime data deployment.
 
 ### D6. Parity measurement
 
@@ -356,3 +361,23 @@ Measured for Debug and Release, x64 and Win32 (Ninja presets):
   MapWinGIS6.Control` and unregistration work for the x64 and Win32 OCX.
 - Three clean `-j32` Ninja builds in a row succeeded (no MIDL/RC race), and the
   Visual Studio generator builds x64 Debug/Release and x86 Debug.
+
+### Samples and runtime deployment (Phase 4)
+
+- `MapWinGIS.Samples.Translate` links only `MapWinGIS::Core` and writes
+  `translate.exe` beside the other CMake runtime files. The test and sample
+  executables also copy their `$<TARGET_RUNTIME_DLLS>` dependencies.
+- `build_activex_host`, `run_activex_host` and
+  `run_activex_host_automated` build or launch the C# host in that runtime
+  folder. `MwgCMakeBuild=true` suppresses the MSBuild vcpkg integration and the
+  conditional project reference prevents `dotnet build` from rebuilding the
+  OCX.
+- Debug x64 Ninja parity: 42 translation units and four binaries; no lost
+  compile or link options. CMake reported 0 warnings versus 1 in the MSBuild
+  baseline. The Translate sample's dependency, subsystem, and DLL
+  characteristics match the MSBuild binary.
+- All 173 CTest cases passed or were skipped as configured (170 passed, 3
+  skipped). The CMake host build passed, and its automated desktop checks
+  passed all 14 checks. The legacy MSBuild host project also built.
+- CLion's host run configuration and launching the sample from CLion were not
+  checked interactively.
