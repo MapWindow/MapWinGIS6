@@ -19,6 +19,10 @@ set(MWG_CORE_PUBLIC_HEADERS
     include/mapwingis/gdal/GdalProgress.h
     include/mapwingis/gdal/GdalTypedOptions.h
     include/mapwingis/gdal/GdalUtils.h
+    include/mapwingis/map/Map.h
+    include/mapwingis/map/MapView.h
+    include/mapwingis/map/Viewport.h
+    include/mapwingis/rendering/MapRenderScene.h
     include/mapwingis/rendering/VectorRenderScene.h
     include/mapwingis/vector/FieldInfo.h
     include/mapwingis/vector/VectorDataset.h
@@ -29,6 +33,7 @@ set(MWG_CORE_PRIVATE_HEADERS
     src/internal/GdalProgressAdapterAccess.h
     src/internal/Utf8.h
     src/internal/VectorLayerAccess.h
+    src/internal/VectorRenderSceneBuilder.h
 )
 
 set(MWG_CORE_SOURCES
@@ -39,9 +44,50 @@ set(MWG_CORE_SOURCES
     src/gdal/GdalRuntime.cpp
     src/gdal/GdalTypedOptions.cpp
     src/gdal/GdalUtils.cpp
+    src/map/Map.cpp
+    src/map/MapView.cpp
+    src/map/Viewport.cpp
+    src/rendering/MapRenderScene.cpp
     src/rendering/VectorRenderScene.cpp
     src/vector/VectorDataset.cpp
 )
+
+# Keep CMake's target sources and headers aligned with the MSBuild project.
+set(_mwg_core_vcxproj "${CMAKE_CURRENT_SOURCE_DIR}/MapWinGIS.Core.vcxproj")
+file(STRINGS "${_mwg_core_vcxproj}" _mwg_core_vcxproj_items
+    REGEX "<Cl(Compile|Include) Include=\"")
+set(_mwg_core_vcxproj_sources)
+set(_mwg_core_vcxproj_headers)
+foreach(_mwg_core_vcxproj_item IN LISTS _mwg_core_vcxproj_items)
+    if(_mwg_core_vcxproj_item MATCHES "<ClCompile Include=\"([^\"]+)\"")
+        set(_mwg_core_vcxproj_path "${CMAKE_MATCH_1}")
+        string(REPLACE "\\" "/" _mwg_core_vcxproj_path "${_mwg_core_vcxproj_path}")
+        list(APPEND _mwg_core_vcxproj_sources "${_mwg_core_vcxproj_path}")
+    elseif(_mwg_core_vcxproj_item MATCHES "<ClInclude Include=\"([^\"]+)\"")
+        set(_mwg_core_vcxproj_path "${CMAKE_MATCH_1}")
+        string(REPLACE "\\" "/" _mwg_core_vcxproj_path "${_mwg_core_vcxproj_path}")
+        list(APPEND _mwg_core_vcxproj_headers "${_mwg_core_vcxproj_path}")
+    endif()
+endforeach()
+
+set(_mwg_core_cmake_sources ${MWG_CORE_SOURCES})
+set(_mwg_core_cmake_headers ${MWG_CORE_PUBLIC_HEADERS} ${MWG_CORE_PRIVATE_HEADERS})
+list(SORT _mwg_core_vcxproj_sources)
+list(SORT _mwg_core_vcxproj_headers)
+list(SORT _mwg_core_cmake_sources)
+list(SORT _mwg_core_cmake_headers)
+if(NOT "${_mwg_core_vcxproj_sources}" STREQUAL "${_mwg_core_cmake_sources}")
+    message(FATAL_ERROR
+        "MapWinGIS.Core CMake sources differ from MapWinGIS.Core.vcxproj.\n"
+        "MSBuild: ${_mwg_core_vcxproj_sources}\n"
+        "CMake: ${_mwg_core_cmake_sources}")
+endif()
+if(NOT "${_mwg_core_vcxproj_headers}" STREQUAL "${_mwg_core_cmake_headers}")
+    message(FATAL_ERROR
+        "MapWinGIS.Core CMake headers differ from MapWinGIS.Core.vcxproj.\n"
+        "MSBuild: ${_mwg_core_vcxproj_headers}\n"
+        "CMake: ${_mwg_core_cmake_headers}")
+endif()
 
 add_library(MapWinGIS.Core SHARED)
 add_library(MapWinGIS::Core ALIAS MapWinGIS.Core)

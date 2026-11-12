@@ -16,7 +16,6 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # --- options needed before project() -----------------------------------------
 option(MWG_BUILD_TESTS "Build the GoogleTest suite (adds the 'tests' vcpkg feature)" ON)
-option(MWG_BUILD_SAMPLES "Build the samples" ON)
 set(MWG_WINDOWS_SDK "10.0.28000.0" CACHE STRING
     "Windows SDK version (MSBuild: MwgWindowsSdk). 10.0 means the newest installed SDK")
 

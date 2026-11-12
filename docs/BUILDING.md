@@ -233,13 +233,6 @@ records a detailed MSBuild log and writes a normalised report to `out\parity\`.
 It finds MSBuild through `MWG_MSBUILD`, `PATH` or `vswhere`, so it also works
 when Visual Studio is not on `PATH` or not installed on `C:`.
 
-## CMake migration
-
-CMake is being introduced as the primary native build. Until it is complete,
-the MSBuild solution above stays the supported build. The audit of the current
-MSBuild settings and the decisions the CMake build follows are in
-[CMAKE-MIGRATION.md](CMAKE-MIGRATION.md).
-
 ### Building with CMake
 
 The CMake build currently covers `MapWinGIS.Core.dll`; the ActiveX control,
@@ -287,7 +280,6 @@ cmake --build --preset x64-debug
 | `MWG_ENABLE_ASAN` | `OFF` | `MwgEnableAsan` |
 | `MWG_DEPLOY_RUNTIME_DATA` | `ON` | `MwgDeployRuntimeData` |
 | `MWG_BUILD_TESTS` | `ON` | — (adds the `tests` feature) |
-| `MWG_BUILD_SAMPLES` | `ON` | — |
 
 Machine-specific settings belong in an uncommitted `CMakeUserPresets.json`
 that inherits from the presets, for example:
@@ -300,11 +292,6 @@ that inherits from the presets, for example:
   ]
 }
 ```
-
-To measure flag and binary parity, `build\scripts\Compare-CompileCommands.ps1`
-records a detailed MSBuild log and writes a normalised report to `out\parity\`.
-It finds MSBuild through `MWG_MSBUILD`, `PATH` or `vswhere`, so it also works
-when Visual Studio is not on `PATH` or not installed on `C:`.
 
 ## Troubleshooting
 

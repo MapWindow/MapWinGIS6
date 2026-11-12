@@ -46,6 +46,7 @@ function(mwg_apply_common_options target)
     )
     if(MWG_ENABLE_ASAN)
         target_compile_options(${target} PRIVATE "$<${c_cxx}:/fsanitize=address>")
+        target_link_options(${target} PRIVATE /INCREMENTAL:NO)
     else()
         # BasicRuntimeChecks; incompatible with AddressSanitizer.
         target_compile_options(${target} PRIVATE "$<${debug}:/RTC1>")
