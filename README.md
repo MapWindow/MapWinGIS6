@@ -24,6 +24,16 @@ and GeoPackage. The ActiveX layer supports COM activation, vector loading,
 polygon rendering, and asynchronous generic GDAL algorithms with progress and
 cancellation events.
 
+The core also supports a shared map viewport with pan, center zoom, anchored
+zoom, and fitting to the visible map or a named layer. These navigation calls
+do not depend on a window. `IMapWinGISControl4` exposes this programmatic
+navigation and stable layer IDs through ActiveX. The control also supports
+left-button drag panning and cursor-anchored mouse-wheel zoom. Resizing keeps
+the current map center and resolution.
+
+Vector loads add layers rather than replace them. Call `ClearLayers` to
+release the loaded datasets before switching or refreshing them.
+
 ## Build and test
 
 ### Prerequisites
@@ -54,27 +64,40 @@ Studio and build the `Debug | x64` configuration.
 
 ### Run the C++ tests
 
-The solution build includes the GoogleTest project by default. After building,
-run the test executable from the repository root:
+The solution build includes both GoogleTest projects by default. After
+building, run the test executables from the repository root:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
 You can also run the tests through Visual Studio's Test Explorer. For the
 Release configuration, build with `-p:Configuration=Release` and run
-`bin\Release\x64\MapWinGIS.Core.Tests.exe`.
+`bin\Release\x64\MapWinGIS.Core.Tests.exe` and
+`bin\Release\x64\MapWinGIS.ActiveX.Tests.exe`.
 
 For additional configurations, dependency features, and troubleshooting, see
 [docs/BUILDING.md](docs/BUILDING.md).
+
+CI Release artifacts use the `full-drivers` feature. Their tests require
+HDF5, NetCDF, KML, SpatiaLite, and PostgreSQL support.
+Pull requests build and test both Debug and full-driver Release for x64.
+Each CI build has a 180-minute timeout.
+
+After vector geometry edits, call `VectorDataset::Flush()` before closing to
+persist exact Shapefile and GeoPackage bounds. The flush batches stored-extent
+scans across multiple edits.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `src/MapWinGIS.Core/` | The core engine. Public headers in `include/mapwingis/` |
-| `tests/MapWinGIS.Core.Tests/` | C++ unit tests (GoogleTest) |
+| `tests/MapWinGIS.Core.Tests/` | Core C++ unit tests (GoogleTest) |
+| `tests/MapWinGIS.ActiveX.Tests/` | ActiveX and COM-hosting C++ unit tests (GoogleTest) |
 | `samples/Cpp/` | Buildable native C++ examples |
+| `samples/CSharp/ActiveXTestHost/` | WinForms host for manual and automated ActiveX testing |
 | `build/` | Shared MSBuild props, vcpkg triplets and scripts |
 | `docs/` | Build, architecture, coding, GDAL integration, porting and testing documentation |
 

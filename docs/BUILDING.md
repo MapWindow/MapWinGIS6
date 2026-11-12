@@ -34,7 +34,7 @@ COM activation without machine-wide registration, run the activation check
 from a PowerShell process that matches the target architecture:
 
 ```powershell
-pwsh -File tests\MapWinGIS.Core.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
+pwsh -File tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
 ```
 
 The script registers the control for the current user, creates it through its
@@ -61,6 +61,19 @@ host beside the native files; the manifest activates that OCX for the host
 process only. The launcher does not read, add, overwrite, or remove COM
 registration.
 
+Manual mode starts with a generated two-polygon layer. Use `Open` to select
+vector datasets, or drag files onto the host. Each load adds an entry to the
+layer list with its name, feature count, stable ID, and file path tooltip.
+Only the first layer of each dataset is loaded. Available formats depend on
+the GDAL drivers in the build.
+
+Use `Clear` to remove all layers. `Zoom +` and `Zoom -` change the zoom,
+`Map` fits all layers, and `Layer` fits the selected layer. The arrow
+buttons pan by the `Pan units` value in dataset coordinates.
+The status strip shows core initialization, total layer and feature counts,
+the rendering backend, and rendering status or operation errors.
+`Recreate` restores the startup layer, and `Repaint` requests a redraw.
+
 ```powershell
 # Visible manual host. Close the window to release the control.
 pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration Debug -Platform x64
@@ -73,22 +86,26 @@ For Win32, use `-Platform Win32` after building the matching native binaries.
 Automated checks need Windows and an interactive desktop session. The host
 creates a temporary two-polygon GeoJSON dataset, loads it through the control,
 and verifies visible polygon fills and the background gap after repaint and
-control recreation. It can activate the OCX without a registration. The
+control recreation. It also loads two layers, checks their IDs and feature
+counts, zooms to each layer, pans, and clears the layers.
+It can activate the OCX without a registration. The
 separate native activation script above retains its own temporary
 registration-based test.
 
 ### Validating both native architectures
 
-Build and run the native tests for each platform. Use `-restore` when
+Build and run both native test executables for each platform. Use `-restore` when
 alternating architectures so the matching vcpkg triplet and managed host
 assets are restored:
 
 ```powershell
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=Win32 -m
 bin\Debug\Win32\MapWinGIS.Core.Tests.exe
+bin\Debug\Win32\MapWinGIS.ActiveX.Tests.exe
 ```
 
 The native activation check uses a PowerShell process with the same bitness as
@@ -113,6 +130,9 @@ Release with it again reinstalls the tree each time.
 2. the `MWG_VCPKG_ROOT` environment variable
 3. `..\vcpkg` next to the repository
 4. the `VCPKG_ROOT` environment variable
+
+The build quotes the overlay-triplet path when it invokes vcpkg, so checkout
+paths can contain spaces.
 
 ## Configurations and platforms
 
@@ -141,8 +161,16 @@ Manifest features:
 | `full-drivers` | Adds HDF5, NetCDF, KML, SpatiaLite and PostgreSQL to GDAL | Release packages. Much slower to build |
 
 ```powershell
-msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release -p:MwgVcpkgFeatures="tests;full-drivers"
+msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release "-p:MwgVcpkgFeatures=tests%3Bfull-drivers"
 ```
+
+`%3B` passes a literal semicolon through MSBuild's property parser.
+CI uses this feature set for Release artifacts. Core tests built with
+`full-drivers` require HDF5, NetCDF, LIBKML, PostgreSQL, and SpatiaLite support.
+The SpatiaLite test creates a spatial database without an external server.
+Pull requests and pushes to `development` build and test Debug and full-driver
+Release for x64. Pushes to `main` also cover Win32. Each job has a
+180-minute timeout.
 
 ### Runtime data
 
@@ -150,8 +178,10 @@ vcpkg installs `gdal-data` and `proj.db` under
 `vcpkg_installed\<Platform>\<triplet>\share`. Each platform has its own install
 tree because vcpkg removes other triplets from a shared tree, which would break
 alternating Win32 and x64 builds.
-A target in `Directory.Build.targets` copies them into the output folder as
-`gdal-data\` and `proj\`, and `GdalEnvironment` points GDAL and PROJ at them.
+The Core project's target in `Directory.Build.targets` copies them into the
+output folder as `gdal-data\` and `proj\`. Other projects reference Core and
+do not copy the shared data. This prevents competing writes during parallel
+solution builds. `GdalEnvironment` points GDAL and PROJ at these folders.
 No `GDAL_DATA` or `PROJ_LIB` environment variable is needed or set.
 
 ### Binary cache
@@ -168,6 +198,7 @@ $env:VCPKG_BINARY_SOURCES = 'clear;files,\\server\share\vcpkg-cache,readwrite'
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
 Or use Test Explorer in Visual Studio, which picks up the GoogleTest adapter
@@ -176,7 +207,8 @@ automatically.
 For CI, write a JUnit-style report:
 
 ```powershell
-bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml
+bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:core-testresults.xml
+bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresults.xml
 ```
 
 ## Extra build switches
@@ -187,7 +219,7 @@ bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml
 | `MwgVcpkgRoot` | resolved (see above) | vcpkg location |
 | `MwgVcpkgFeatures` | `tests` | Semicolon-separated manifest features |
 | `MwgEnableAsan` | `false` | Adds `/fsanitize=address` |
-| `MwgDeployRuntimeData` | `true` | Copies `gdal-data` and `proj` to the output folder |
+| `MwgDeployRuntimeData` | `true` for Core, `false` otherwise | Copies `gdal-data` and `proj` to the output folder |
 
 ## CMake migration
 
@@ -196,14 +228,20 @@ the MSBuild solution above stays the supported build. The audit of the current
 MSBuild settings and the decisions the CMake build follows are in
 [CMAKE-MIGRATION.md](CMAKE-MIGRATION.md).
 
+To measure flag and binary parity, `build\scripts\Compare-CompileCommands.ps1`
+records a detailed MSBuild log and writes a normalised report to `out\parity\`.
+It finds MSBuild through `MWG_MSBUILD`, `PATH` or `vswhere`, so it also works
+when Visual Studio is not on `PATH` or not installed on `C:`.
+
 ### Building with CMake
 
 The CMake build currently covers `MapWinGIS.Core.dll` and `MapWinGIS.ocx`; the
 tests and samples follow. The OCX needs the **C++ ATL for latest v145 build
 tools** component for each architecture you build, and `midl.exe` needs `cl.exe`
 on `PATH`, so configure and build from a Visual Studio toolchain (CLion) or a
-Developer PowerShell. CMake 3.28 or later and Ninja are required; both ship
-with Visual Studio 2026 and CLion. Run the bootstrap script first, then
+Developer PowerShell. CMake 3.28 or later is required, with either Ninja or the
+Visual Studio generator. Both CMake and Ninja ship with Visual Studio 2026 and
+CLion. Run the bootstrap script first, then
 configure from a VS 2026 Developer PowerShell (or any shell after
 `vcvarsall.bat x64`):
 
@@ -212,6 +250,9 @@ pwsh -File build\scripts\bootstrap-vcpkg.ps1
 cmake --preset x64-debug
 cmake --build --preset x64-debug
 ```
+
+For a Core-only build that does not require MIDL or ATL, configure with
+`-DMWG_BUILD_ACTIVEX=OFF`.
 
 | Preset | Generator | Build directory |
 |---|---|---|
@@ -222,7 +263,8 @@ cmake --build --preset x64-debug
 - Output goes to `<build directory>\bin` (`bin\<Config>` for the Visual Studio
   presets) and import libraries to `lib`, never to the MSBuild `bin\` folder, so
   both builds can be used side by side. MIDL output (`MapWinGIS.ActiveX_i.h`,
-  `_i.c`, `.tlb`) goes to `<build directory>\src\MapWinGIS.ActiveX\midl`.
+  `_i.c`, `.tlb`) goes to `<build directory>\src\MapWinGIS.ActiveX\midl`; the
+  `.tlb` is also copied beside the OCX.
 - To register the CMake-built control for the current user:
   `regsvr32 /n /i:user out\b\x64d\bin\MapWinGIS.ocx` (use
   `%WINDIR%\SysWOW64\regsvr32.exe` for Win32; add `/u` to unregister).
@@ -250,7 +292,7 @@ cmake --build --preset x64-debug
 | `MWG_ENABLE_ASAN` | `OFF` | `MwgEnableAsan` |
 | `MWG_DEPLOY_RUNTIME_DATA` | `ON` | `MwgDeployRuntimeData` |
 | `MWG_BUILD_TESTS` | `ON` | — (adds the `tests` feature) |
-| `MWG_BUILD_SAMPLES` | `ON` | — |
+| `MWG_BUILD_ACTIVEX` | `ON` | — (set `OFF` for a Core-only build) |
 
 Machine-specific settings belong in an uncommitted `CMakeUserPresets.json`
 that inherits from the presets, for example:
@@ -263,11 +305,6 @@ that inherits from the presets, for example:
   ]
 }
 ```
-
-To measure flag and binary parity, `build\scripts\Compare-CompileCommands.ps1`
-records a detailed MSBuild log and writes a normalised report to `out\parity\`.
-It finds MSBuild through `MWG_MSBUILD`, `PATH` or `vswhere`, so it also works
-when Visual Studio is not on `PATH` or not installed on `C:`.
 
 ## Troubleshooting
 

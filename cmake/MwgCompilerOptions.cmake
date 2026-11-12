@@ -31,12 +31,15 @@ function(mwg_apply_common_options target)
 
     set(c_cxx "$<COMPILE_LANGUAGE:C,CXX>")
     set(debug "$<AND:${c_cxx},$<CONFIG:Debug>>")
+    set(debug_x64 "$<AND:$<CONFIG:Debug>,$<EQUAL:${CMAKE_SIZEOF_VOID_P},8>>")
     set(release "$<AND:${c_cxx},$<CONFIG:Release>>")
 
     target_compile_options(${target} PRIVATE
         # WarningLevel, DisableSpecificWarnings. 4251 is safe: one toolset and
         # one CRT for every binary of the product.
-        "$<${c_cxx}:/W4;/WX-;/wd4251;/external:W4>"
+        "$<${c_cxx}:/W4;/wd4251;/external:W4>"
+        "$<$<AND:${c_cxx},${debug_x64}>:/WX>"
+        "$<$<AND:${c_cxx},$<NOT:${debug_x64}>>:/WX->"
         # AdditionalOptions
         "$<${c_cxx}:/utf-8;/Zc:__cplusplus;/Zc:preprocessor;/Zc:throwingNew;/bigobj>"
         # ConformanceMode, SDLCheck, ExceptionHandling and MSBuild defaults
@@ -48,6 +51,7 @@ function(mwg_apply_common_options target)
     )
     if(MWG_ENABLE_ASAN)
         target_compile_options(${target} PRIVATE "$<${c_cxx}:/fsanitize=address>")
+        target_link_options(${target} PRIVATE /INCREMENTAL:NO)
     else()
         # BasicRuntimeChecks; incompatible with AddressSanitizer.
         target_compile_options(${target} PRIVATE "$<${debug}:/RTC1>")

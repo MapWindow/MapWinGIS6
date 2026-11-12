@@ -356,6 +356,23 @@ TEST(VectorRenderScene, AcceptsPolygonZAndPolygonM)
     }
 }
 
+TEST(VectorRenderScene, CountsAllFeaturesDuringTheGeometryTraversal)
+{
+    VectorReadTestDriver driver;
+    driver.unknownCount = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+
+    const auto scene = rendering::CreateVectorRenderScene(*dataset);
+
+    EXPECT_EQ(scene.sourceFeatureCount, 3);
+    EXPECT_EQ(scene.polygons.size(), 1U);
+    EXPECT_EQ(driver.readCalls, 4);
+    EXPECT_EQ(driver.countCalls, 0);
+    EXPECT_EQ(dataset->Layer(0).FeatureCount(), 3);
+    EXPECT_EQ(driver.readCalls, 4);
+    EXPECT_EQ(driver.countCalls, 0);
+}
+
 TEST(VectorRenderScene, LinearizesCurvedPolygonGeometry)
 {
     GdalEnvironment::Initialize();

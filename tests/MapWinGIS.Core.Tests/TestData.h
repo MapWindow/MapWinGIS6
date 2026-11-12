@@ -11,10 +11,55 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <span>
 #include <string>
+
+#include "mapwingis/core/Extent.h"
+
+class GDALDriver;
 
 namespace mwg::test
 {
+    /// Registers a synthetic polygon driver. Destroy opened datasets before
+    /// this helper. Its three features have polygon, null, and empty geometry;
+    /// it can also simulate extent and feature-write failures.
+    class VectorReadTestDriver
+    {
+    public:
+        VectorReadTestDriver();
+        ~VectorReadTestDriver();
+
+        VectorReadTestDriver(const VectorReadTestDriver&) = delete;
+        VectorReadTestDriver& operator=(const VectorReadTestDriver&) = delete;
+
+        static constexpr const char* kPath = "MWG_VECTOR_READ_TEST:features";
+        bool failOnSecondRead = false;
+        bool failExtent = false;
+        bool silentExtentFailure = false;
+        bool warningExtentFailure = false;
+        bool failSetFeature = false;
+        bool simulateShapefile = false;
+        bool failRecomputeExtent = false;
+        bool emptyLayer = false;
+        bool onlyEmptyGeometries = false;
+        bool unknownCount = false;
+        bool ignoredFields = false;
+        bool ignoredGeometry = false;
+        std::string layerName = "features";
+        std::string storedName = "Original";
+        int storedValue = 0;
+        int nextFeature = 0;
+        int readCalls = 0;
+        int countCalls = 0;
+        int extentCalls = 0;
+        int recomputeExtentCalls = 0;
+        std::string recomputeExtentStatement;
+
+    private:
+        std::unique_ptr<GDALDriver> _driver;
+    };
+
     /// Writes a 12-by-8, single-band Byte GeoTIFF in EPSG:4326.
     /// Pixels have the given value. Each pixel spans one degree, with the
     /// top-left corner at (originX, 8) and rows running south.
@@ -68,6 +113,18 @@ namespace mwg::test
         static constexpr double kMaxX = 3.0;
         static constexpr double kMaxY = 1.0;
     };
+
+    /// Writes a GeoPackage with one polygon layer named "rectangles" that has
+    /// one axis-aligned rectangle feature per extent, in the given order, and
+    /// no projection. With no extents the layer is empty and has no extent.
+    /// Used for map and multi-layer tests that need layers at chosen places.
+    std::filesystem::path MakeRectanglesDataset(const std::filesystem::path& directory,
+                                                const std::string& fileName,
+                                                std::span<const Extent> rectangles);
+
+    /// Writes a GeoPackage with two empty polygon layers named "first" and "second".
+    std::filesystem::path MakeTwoLayerDataset(const std::filesystem::path& directory,
+                                              const std::string& fileName);
 
     /// Creates a directory that is deleted when the object goes out of scope.
     class TempDirectory

@@ -19,7 +19,7 @@
 # The options match the MSBuild Midl task: /W1 /char signed /env x64|win32
 # /target "NT60". This IDL declares no non-automation interfaces, so MIDL
 # writes no proxy or dlldata file; they are redirected into the output
-# directory anyway and are not declared as outputs.
+# directory and tracked as byproducts in case the IDL changes.
 
 function(_mwg_find_midl out_var)
     # The MSBuild Midl task uses the SDK's x86 midl.exe; any host build works.
@@ -77,9 +77,12 @@ function(mwg_add_midl_target target)
     set(header "${arg_OUTPUT_DIR}/${name}_i.h")
     set(iid "${arg_OUTPUT_DIR}/${name}_i.c")
     set(tlb "${arg_OUTPUT_DIR}/${name}.tlb")
+    set(proxy "${arg_OUTPUT_DIR}/${name}_p.c")
+    set(dlldata "${arg_OUTPUT_DIR}/dlldata.c")
 
     add_custom_command(
         OUTPUT "${header}" "${iid}" "${tlb}"
+        BYPRODUCTS "${proxy}" "${dlldata}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${arg_OUTPUT_DIR}"
         COMMAND "${midl}" /W1 /nologo /char signed /env ${env} /target NT60
             /I "${idl_dir}"
