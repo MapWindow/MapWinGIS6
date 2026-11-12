@@ -51,13 +51,14 @@ namespace mwg::activex
             int maximumHeight) noexcept;
 
         /**
-         * @brief Draws a scene of simple convex single-ring polygons.
+         * @brief Draws a scene of triangulated polygons.
          *
-         * Draws all layers into one frame, bottom first. Returns S_FALSE
-         * without drawing when any layer contains unsupported geometry or
-         * when no OpenGL context with framebuffer-object support is
-         * available, so callers can fall back to another backend for the
-         * whole frame.
+         * Fills every polygon from the Core-prepared triangle mesh and draws
+         * its outlines from the original rings. Draws all layers into one
+         * frame, bottom first. Returns S_FALSE without drawing when any
+         * polygon lacks a usable fill mesh or when no OpenGL context with
+         * framebuffer-object support is available, so callers can fall back
+         * to another backend for the whole frame.
          */
         [[nodiscard]] HRESULT Draw(
             HDC deviceContext,
@@ -72,6 +73,12 @@ namespace mwg::activex
 
     private:
         friend class testing::OpenGlVectorLayerRendererTestAccess;
+
+        /// True when every polygon of the scene has a usable triangulated
+        /// fill mesh and finite coordinates. Exposed for tests so geometry
+        /// support decisions can be checked without an OpenGL context.
+        [[nodiscard]] static bool IsSceneSupported(
+            const rendering::MapRenderScene& scene) noexcept;
 
         void SimulateContextLoss() noexcept;
 

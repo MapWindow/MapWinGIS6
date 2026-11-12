@@ -17,5 +17,12 @@ namespace mwg::activex::testing
         {
             renderer.SimulateContextLoss();
         }
+
+        /// Checks scene support without activating an OpenGL context.
+        [[nodiscard]] static bool IsSceneSupported(
+            const rendering::MapRenderScene& scene) noexcept
+        {
+            return OpenGlVectorLayerRenderer::IsSceneSupported(scene);
+        }
     };
 }

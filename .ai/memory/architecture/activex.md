@@ -40,7 +40,9 @@ requiring COM activation.
 The control exposes a deliberately small v6 automation API. It does not expose
 the broad MapWinGIS 5 map, layer, shape, event, or editing surface. The current
 render scene is built in source coordinates, without reprojection; backend
-support differs, and OpenGL is restricted to convex single-ring polygons.
+support differs: GDI draws the original rings with an alternate fill rule,
+while OpenGL fills the Core-prepared triangulated meshes and declines scenes
+whose polygons lack a usable mesh so the coordinator falls back to GDI.
 Consult the current implementation and architecture documentation before
 assuming a capability or compatibility guarantee.
 
