@@ -63,6 +63,14 @@ jobs:
             "-p:MwgVcpkgFeatures=$features" `
             -m -v:m
 
+      - name: Measure build parity baseline
+        shell: pwsh
+        run: |
+          pwsh -File build/scripts/Compare-CompileCommands.ps1 `
+            -Configuration ${{ matrix.configuration }} `
+            -Platform ${{ matrix.platform }} `
+            -FailOnLostFlags
+
       - name: Test
         shell: pwsh
         run: |

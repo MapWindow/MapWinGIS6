@@ -428,8 +428,13 @@ FodyWeavers.xsd
 *.msm
 *.msp
 
-# vcpkg installed libraries
+# vcpkg installed libraries (MSBuild: vcpkg_installed/<Platform>, CMake: vcpkg_installed/cmake-<Platform>)
 vcpkg_installed/
+
+# CMake build trees, CLion build directories and machine-specific presets
+out/
+cmake-build-*/
+CMakeUserPresets.json
 
 # C++ language server compilation database
 .mscppls/

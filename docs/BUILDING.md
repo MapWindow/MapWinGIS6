@@ -221,6 +221,18 @@ bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresul
 | `MwgEnableAsan` | `false` | Adds `/fsanitize=address` |
 | `MwgDeployRuntimeData` | `true` for Core, `false` otherwise | Copies `gdal-data` and `proj` to the output folder |
 
+## CMake migration
+
+CMake is being introduced as the primary native build. Until it is complete,
+the MSBuild solution above stays the supported build. The audit of the current
+MSBuild settings and the decisions the CMake build follows are in
+[CMAKE-MIGRATION.md](CMAKE-MIGRATION.md).
+
+To measure flag and binary parity, `build\scripts\Compare-CompileCommands.ps1`
+records a detailed MSBuild log and writes a normalised report to `out\parity\`.
+It finds MSBuild through `MWG_MSBUILD`, `PATH` or `vswhere`, so it also works
+when Visual Studio is not on `PATH` or not installed on `C:`.
+
 ## Troubleshooting
 
 **`Invalid triplet: x64-windows-v145`**
