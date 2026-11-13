@@ -235,14 +235,16 @@ when Visual Studio is not on `PATH` or not installed on `C:`.
 
 ### Building with CMake
 
-The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, and the native
-GoogleTest suite; the samples follow. The OCX needs the **C++ ATL for latest
-v145 build tools** component for each architecture you build, and `midl.exe`
-needs `cl.exe` on `PATH`, so configure and build from a Visual Studio toolchain
-(CLion) or a Developer PowerShell. CMake 3.28 or later is required, with either
-Ninja or the Visual Studio generator. Both CMake and Ninja ship with Visual
-Studio 2026 and CLion. Run the bootstrap script first, then configure from a VS
-2026 Developer PowerShell (or any shell after
+The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, the native
+GoogleTest suite, and the `translate` sample. When `dotnet` and PowerShell 7
+are installed, it also provides targets to build and launch the C# ActiveX
+test host. The OCX needs the **C++ ATL for latest v145 build tools** component
+for each architecture you build. `midl.exe` needs `cl.exe` on `PATH`, so
+configure and build from a Visual Studio toolchain (CLion) or a Developer
+PowerShell. CMake 3.28 or later is required, with either Ninja or the Visual
+Studio generator. Both CMake and Ninja ship with Visual Studio 2026 and CLion.
+Run the bootstrap script first, then configure from a VS 2026 Developer
+PowerShell (or any shell after
 `vcvarsall.bat x64`):
 
 ```powershell
@@ -251,6 +253,20 @@ cmake --preset x64-debug
 cmake --build --preset x64-debug
 ctest --preset x64-debug --output-on-failure
 ```
+
+Build the sample or C# host by target:
+
+```powershell
+cmake --build --preset x64-debug --target MapWinGIS.Samples.Translate
+cmake --build --preset x64-debug --target build_activex_host
+cmake --build --preset x64-debug --target run_activex_host
+cmake --build --preset x64-debug --target run_activex_host_automated
+```
+
+The last two targets launch the host from an interactive Windows session; the
+automated target runs the visible host checks. CMake directs the native sample,
+host, OCX, Core DLL and deployed runtime dependencies into the selected build
+tree's `bin` folder. This keeps them separate from the MSBuild output.
 
 For a Core-only build that does not require MIDL or ATL, configure with
 `-DMWG_BUILD_ACTIVEX=OFF`.

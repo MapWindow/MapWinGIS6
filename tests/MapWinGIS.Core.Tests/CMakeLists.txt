@@ -73,6 +73,7 @@ add_dependencies(MapWinGIS.Core.Tests
     MapWinGIS.ActiveX
     MapWinGIS.RuntimeData
 )
+mwg_deploy_runtime_dlls(MapWinGIS.Core.Tests)
 
 file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/test-results")
 gtest_discover_tests(MapWinGIS.Core.Tests

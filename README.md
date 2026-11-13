@@ -80,6 +80,10 @@ Release configuration, build with `-p:Configuration=Release` and run
 For additional configurations, dependency features, and troubleshooting, see
 [docs/BUILDING.md](docs/BUILDING.md).
 
+The CMake build also provides the native `translate` sample and targets for
+building and running the C# ActiveX test host. See the CMake section in the
+build guide for target names and commands.
+
 CI Release artifacts use the `full-drivers` feature. Their tests require
 HDF5, NetCDF, KML, SpatiaLite, and PostgreSQL support.
 Pull requests build and test both Debug and full-driver Release for x64.

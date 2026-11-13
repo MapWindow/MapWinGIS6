@@ -5,6 +5,8 @@ param(
     [ValidateSet('Win32', 'x64')]
     [string]$Platform = 'x64',
 
+    [string]$BinDirectory,
+
     [switch]$Automated,
 
     [string]$ResultsPath,
@@ -18,14 +20,19 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $PSScriptRoot '..\..\..')
 )
-$outputDirectory = Join-Path $repositoryRoot "bin\$Configuration\$Platform"
+if ([string]::IsNullOrWhiteSpace($BinDirectory)) {
+    $outputDirectory = Join-Path $repositoryRoot "bin\$Configuration\$Platform"
+}
+else {
+    $outputDirectory = [System.IO.Path]::GetFullPath($BinDirectory)
+}
 $controlPath = Join-Path $outputDirectory 'MapWinGIS.ocx'
 $hostPath = Join-Path $outputDirectory 'ActiveXTestHost.exe'
 $corePath = Join-Path $outputDirectory 'MapWinGIS.Core.dll'
 
 foreach ($requiredFile in @($controlPath, $hostPath, $corePath)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
-        throw "Required file was not found: '$requiredFile'. Build the solution for $Configuration|$Platform first."
+        throw "Required file was not found: '$requiredFile'. Build the host and native control for $Configuration|$Platform first."
     }
 }
 

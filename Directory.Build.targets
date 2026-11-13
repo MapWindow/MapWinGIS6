@@ -38,7 +38,7 @@
   </Target>
 
   <Import Project="$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets"
-          Condition="Exists('$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets')" />
+          Condition="'$(MwgCMakeBuild)' != 'true' And Exists('$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets')" />
 
   <!--
     vcpkg's incremental install check only compares vcpkg.json and
@@ -50,7 +50,7 @@
     record, the stamp is deleted to force vcpkg to reinstall the tree.
   -->
   <PropertyGroup>
-    <_MwgVcpkgTrackFeatures Condition="'$(VcpkgEnabled)' == 'true' And '$(VcpkgEnableManifest)' == 'true' And '$(VcpkgManifestInstall)' == 'true'">true</_MwgVcpkgTrackFeatures>
+    <_MwgVcpkgTrackFeatures Condition="'$(MwgCMakeBuild)' != 'true' And '$(VcpkgEnabled)' == 'true' And '$(VcpkgEnableManifest)' == 'true' And '$(VcpkgManifestInstall)' == 'true'">true</_MwgVcpkgTrackFeatures>
     <_MwgVcpkgInstalledFeaturesFile>$(_ZVcpkgMSBuildStampFile).features.txt</_MwgVcpkgInstalledFeaturesFile>
   </PropertyGroup>
 

@@ -82,3 +82,8 @@ if(MWG_BUILD_TESTS)
         message(STATUS "Skipping the native GoogleTest suite: it requires MWG_BUILD_ACTIVEX=ON.")
     endif()
 endif()
+
+if(MWG_BUILD_SAMPLES)
+    add_subdirectory(samples/Cpp)
+    add_subdirectory(samples/CSharp)
+endif()

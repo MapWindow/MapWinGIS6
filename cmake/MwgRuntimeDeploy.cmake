@@ -53,3 +53,21 @@ function(mwg_add_runtime_data_target)
     )
     add_custom_target(MapWinGIS.RuntimeData DEPENDS "${stamp}")
 endfunction()
+
+function(mwg_deploy_runtime_dlls target)
+    set(runtime_dll_list_file
+        "${PROJECT_BINARY_DIR}/runtime-dlls/${target}-$<CONFIG>.txt")
+    file(GENERATE
+        OUTPUT "${runtime_dll_list_file}"
+        CONTENT "$<JOIN:$<TARGET_RUNTIME_DLLS:${target}>,\n>"
+    )
+
+    add_custom_command(TARGET "${target}" POST_BUILD
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMWG_RUNTIME_DLL_LIST_FILE=${runtime_dll_list_file}"
+            "-DMWG_RUNTIME_DIR=$<TARGET_FILE_DIR:${target}>"
+            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MwgCopyRuntimeDlls.cmake"
+        COMMENT "Deploying runtime DLLs for ${target}"
+        VERBATIM
+    )
+endfunction()

@@ -23,7 +23,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\MapWinGIS.ActiveX\MapWinGIS.ActiveX.vcxproj"
-                      ReferenceOutputAssembly="false" />
+                      ReferenceOutputAssembly="false"
+                      Condition="'$(MwgCMakeBuild)' != 'true'" />
   </ItemGroup>
 
   <ItemGroup>

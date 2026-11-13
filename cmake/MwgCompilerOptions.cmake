@@ -71,12 +71,13 @@ function(mwg_apply_common_options target)
         target_compile_definitions(${target} PRIVATE "$<${c_cxx}:_WINDLL>")
     endif()
 
-    # CMake's defaults already add /machine, /debug /INCREMENTAL (Debug) and
-    # /INCREMENTAL:NO (Release).
+    # Set these explicitly because CMake's Ninja defaults do not consistently
+    # match the MSBuild Debug and Release linker settings.
     target_link_options(${target} PRIVATE
         /DYNAMICBASE
         /NXCOMPAT
-        "$<$<CONFIG:Release>:/DEBUG;/OPT:REF;/OPT:ICF;/guard:cf>"
+        "$<$<CONFIG:Debug>:/DEBUG;/INCREMENTAL>"
+        "$<$<CONFIG:Release>:/DEBUG;/INCREMENTAL:NO;/OPT:REF;/OPT:ICF;/guard:cf>"
     )
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         target_link_options(${target} PRIVATE /HIGHENTROPYVA)
