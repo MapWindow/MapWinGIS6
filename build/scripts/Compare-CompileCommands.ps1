@@ -110,6 +110,12 @@ $explainedCompileDifferencesByTarget = @{
         '^/I<builddir>/.*/midl$'               = 'MIDL output directory (D3)'
         '^/I<vcpkg_installed>/[^/]+/include$'  = 'MSBuild vcpkg auto-include; the OCX has no direct vcpkg dependency in CMake'
     }
+    'MapWinGIS.ActiveX.Tests' = [ordered]@{
+        '^/I<intdir>$'                         = 'MIDL output moved from the intermediate directory to <build>/.../midl (D3)'
+        '^/I<repo>/obj/MapWinGIS\.ActiveX/[^/]+/[^/]+$' = 'MSBuild ActiveX intermediate directory containing MIDL headers; CMake uses its MIDL target output'
+        '^/I<builddir>/.*/midl$'               = 'MIDL output directory (D3)'
+        '^/I<vcpkg_installed>/[^/]+/include$'  = 'MSBuild vcpkg auto-include; CMake exposes dependency includes through imported targets'
+    }
 }
 
 # MSBuild project names that differ from the CMake target names.
