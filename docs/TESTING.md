@@ -206,14 +206,14 @@ triangulation included in scene preparation:
 
 | Measurement | Convex grid, 50k polygons | Complex mix, 162.5k meshes |
 |---|---:|---:|
-| Core open dataset | 1.6 ms | 2.2 ms |
-| Core prepare render scene | 2,465.4 ms | 2,733.7 ms |
+| Core open dataset | 1.8 ms | 2.1 ms |
+| Core prepare render scene | 2,505.6 ms | 2,758.7 ms |
 | Mesh storage (vertices+indices) | — | 32.1 MiB |
-| Private memory increase for scene | 87.7 MiB | 85.9 MiB |
-| GDI frame (median) | 86.9 ms | 168.6 ms |
-| OpenGL first frame | 255.5 ms | 47.2 ms |
-| OpenGL frame (median) | 30.0 ms | 42.2 ms |
-| Private memory increase total | 203.0 MiB | 89.9 MiB |
+| Private memory increase for scene | 87.6 MiB | 86.4 MiB |
+| GDI frame (median) | 84.0 ms | 163.9 ms |
+| OpenGL first frame | 291.4 ms | 49.3 ms |
+| OpenGL frame (median) | 28.4 ms | 38.1 ms |
+| Private memory increase total | 203.7 MiB | 94.4 MiB |
 
 The complex mix is 50k concave L-shapes, 50k holed multipart features, and
 12.5k star polygons (162,500 triangulated meshes in total); it ran after the

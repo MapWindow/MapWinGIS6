@@ -244,16 +244,23 @@ namespace
                      {cx + 0.15, cy + 0.15},
                      {cx - 0.15, cy + 0.15},
                      {cx - 0.15, cy - 0.15}});
+            // Keep the satellite inside the gap between adjacent bodies
+            // (bodies extend to +-0.4 on a 1.0 grid) so the multipolygon
+            // components stay disjoint and the geometry remains valid.
             OGRPolygon satellite;
             AddRing(satellite,
-                    {{cx + 0.25, cy + 0.25},
-                     {cx + 0.45, cy + 0.25},
-                     {cx + 0.45, cy + 0.45},
-                     {cx + 0.25, cy + 0.45},
-                     {cx + 0.25, cy + 0.25}});
+                    {{cx + 0.41, cy + 0.41},
+                     {cx + 0.59, cy + 0.41},
+                     {cx + 0.59, cy + 0.59},
+                     {cx + 0.41, cy + 0.59},
+                     {cx + 0.41, cy + 0.41}});
             OGRMultiPolygon multipart;
             multipart.addGeometry(&body);
             multipart.addGeometry(&satellite);
+            if (!multipart.IsValid())
+            {
+                throw std::runtime_error("Cannot build a valid holed baseline multipart");
+            }
             OGRFeature feature(holed->GetLayerDefn());
             if (feature.SetGeometry(&multipart) != OGRERR_NONE ||
                 holed->CreateFeature(&feature) != OGRERR_NONE)

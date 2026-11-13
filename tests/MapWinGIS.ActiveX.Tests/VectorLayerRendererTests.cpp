@@ -474,14 +474,21 @@ TEST(VectorLayerRenderer, GdiFallbackRendersConcaveHoledPolygonFromRings)
     EXPECT_EQ(MapPixel(surface.Get(), viewport, 2.0, 2.0), GetSysColor(COLOR_WINDOW))
         << "interior ring stays unfilled";
 
-    // A later mesh-complete frame selects OpenGL again when available, so the
-    // fallback must not corrupt the coordinator state.
+    // A later mesh-complete frame must select OpenGL again when the backend
+    // is available, so a coordinator that permanently stops trying OpenGL
+    // after one missing-mesh frame cannot pass. Probe availability
+    // independently of the coordinator, as
+    // UsesOpenGlForConvexPolygonWhenAvailable does.
     const mwg::rendering::MapRenderScene meshScene = MakeConvexPolygonScene();
-    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, meshScene, viewport), S_OK);
-    if (renderer.GetActiveBackend() != mwg::activex::VectorRenderBackendKind::Gdi)
+    mwg::activex::OpenGlVectorLayerRenderer openGlProbe;
+    const HRESULT probeResult = openGlProbe.Draw(surface.Get(), bounds, meshScene, viewport);
+    if (probeResult == S_FALSE)
     {
-        EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
     }
+    ASSERT_EQ(probeResult, S_OK);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, meshScene, viewport), S_OK);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
 }
 
 TEST(VectorLayerRenderer, OpenGlSupportRequiresAMeshForEveryPolygon)
