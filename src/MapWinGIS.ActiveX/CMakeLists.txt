@@ -78,9 +78,7 @@ set_source_files_properties(MapWinGIS.ActiveX.rc PROPERTIES
 target_link_libraries(MapWinGIS.ActiveX PRIVATE
     MapWinGIS::Core
     MapWinGIS.ActiveX.Interface.Generated
-    # Explicit Windows libraries (audit). ATL is static: atlbase.h links
-    # atls.lib through #pragma comment, and OpenGlVectorLayerRenderer.cpp links
-    # opengl32.lib the same way.
+    # Explicit Windows dependencies of the COM, registration, and rendering code.
     ole32 oleaut32 uuid user32 gdi32 advapi32 kernel32
 )
 

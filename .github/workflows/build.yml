@@ -68,7 +68,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"platform":["x64"],"configuration":["Debug","Release"]}') }}
+      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || github.event_name == 'pull_request' && '{"include":[{"platform":"x64","configuration":"Debug"},{"platform":"x64","configuration":"Release"},{"platform":"Win32","configuration":"Debug"}]}' || '{"platform":["x64"],"configuration":["Debug","Release"]}') }}
 
     env:
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'

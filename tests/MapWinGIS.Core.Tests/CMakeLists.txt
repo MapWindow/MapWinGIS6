@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 #
-# Native GoogleTest suite for the Core API and ActiveX rendering components.
+# Native GoogleTest suite for the Core API.
 
 find_package(GDAL CONFIG REQUIRED)
 find_package(GTest CONFIG REQUIRED)
@@ -36,44 +36,27 @@ add_executable(MapWinGIS.Core.Tests)
 target_sources(MapWinGIS.Core.Tests PRIVATE
     ${MWG_CORE_TEST_HEADERS}
     ${MWG_CORE_TEST_SOURCES}
-    ${MWG_ACTIVEX_SHARED_SOURCES}
 )
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES
     ${MWG_CORE_TEST_HEADERS}
     ${MWG_CORE_TEST_SOURCES}
 )
-source_group("ActiveX Test Sources" FILES ${MWG_ACTIVEX_SHARED_SOURCES})
-
-target_include_directories(MapWinGIS.Core.Tests PRIVATE
-    "${PROJECT_SOURCE_DIR}/src/MapWinGIS.ActiveX"
-)
-
-target_compile_definitions(MapWinGIS.Core.Tests PRIVATE
-    MWG_ENABLE_RENDERER_TEST_HOOKS
-)
 
 target_link_libraries(MapWinGIS.Core.Tests PRIVATE
     MapWinGIS::Core
-    MapWinGIS.ActiveX.Interface.Generated
     GDAL::GDAL
     GTest::gtest
-    ole32
-    oleaut32
-    uuid
-    gdi32
-    user32
-    opengl32
-    psapi
 )
+
+if("full-drivers" IN_LIST VCPKG_MANIFEST_FEATURES)
+    target_compile_definitions(MapWinGIS.Core.Tests PRIVATE MWG_TEST_FULL_DRIVERS)
+endif()
 
 mwg_apply_common_options(MapWinGIS.Core.Tests)
 target_link_options(MapWinGIS.Core.Tests PRIVATE /SUBSYSTEM:CONSOLE)
 set_target_properties(MapWinGIS.Core.Tests PROPERTIES FOLDER "tests")
 
-add_dependencies(MapWinGIS.Core.Tests
-    MapWinGIS.ActiveX
-    MapWinGIS.RuntimeData
-)
+add_dependencies(MapWinGIS.Core.Tests MapWinGIS.RuntimeData)
 mwg_deploy_runtime_dlls(MapWinGIS.Core.Tests)
 
 file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/test-results")
@@ -83,31 +66,3 @@ gtest_discover_tests(MapWinGIS.Core.Tests
     WORKING_DIRECTORY "${MWG_RUNTIME_DIR}"
     XML_OUTPUT_DIR "${PROJECT_BINARY_DIR}/test-results"
 )
-
-if(MWG_PLATFORM STREQUAL "Win32")
-    set(_mwg_activation_shell
-        "$ENV{WINDIR}/SysWOW64/WindowsPowerShell/v1.0/powershell.exe")
-    if(NOT EXISTS "${_mwg_activation_shell}")
-        unset(_mwg_activation_shell)
-    endif()
-else()
-    find_program(_mwg_activation_shell NAMES pwsh powershell)
-endif()
-
-if(_mwg_activation_shell)
-    add_test(NAME Verify-ActiveXActivation
-        COMMAND "${_mwg_activation_shell}" -NoProfile -File
-            "${CMAKE_CURRENT_SOURCE_DIR}/../MapWinGIS.ActiveX.Tests/Verify-ActiveXActivation.ps1"
-            -Platform "${MWG_PLATFORM}"
-            -BinDirectory "${MWG_RUNTIME_DIR}"
-            -TestExecutable "MapWinGIS.Core.Tests.exe"
-    )
-    set_tests_properties(Verify-ActiveXActivation PROPERTIES
-        LABELS "interactive"
-        WORKING_DIRECTORY "${MWG_RUNTIME_DIR}"
-    )
-else()
-    message(STATUS
-        "Skipping the interactive ActiveX activation CTest entry: no PowerShell process "
-        "matching ${MWG_PLATFORM} was found.")
-endif()

@@ -28,8 +28,10 @@ ctest --preset x64-debug
 ```
 
 The first configure installs GDAL and its dependencies and can take a while;
-later builds reuse the vcpkg binary cache. See [Building with CMake](#building-with-cmake)
-for other presets, Visual Studio, and CLion.
+later builds reuse the vcpkg binary cache. CTest runs the Core suite and, when
+`MWG_BUILD_ACTIVEX` is enabled, the ActiveX suite. See
+[Building with CMake](#building-with-cmake) for other presets, Visual Studio,
+and CLion.
 
 ## Legacy MSBuild build
 
@@ -47,9 +49,10 @@ do not overwrite one another. If `msbuild` is not on `PATH`, see
 
 ### ActiveX activation
 
-The solution builds `MapWinGIS.ocx` beside `MapWinGIS.Core.dll`. To verify
-COM activation without machine-wide registration, run the activation check
-from a PowerShell process that matches the target architecture:
+The solution and CMake build `MapWinGIS.ocx` beside `MapWinGIS.Core.dll` when
+ActiveX is enabled. To verify COM activation without machine-wide registration,
+run the activation check from a PowerShell process that matches the target
+architecture:
 
 ```powershell
 pwsh -File tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
@@ -272,9 +275,11 @@ hardcode a Visual Studio installation path in repository files.
 
 ### Building with CMake
 
-The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, and the Core
-GoogleTest suite. It does not yet build the ActiveX-specific test executable;
-run the legacy ActiveX tests until CMake registers that suite. Set
+The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, and both native
+GoogleTest suites. Core tests remain available when `MWG_BUILD_ACTIVEX=OFF`;
+the ActiveX suite and OCX require ActiveX to be enabled. CTest labels the
+registration-based ActiveX activation check `interactive`, so the standard
+test preset excludes it. Set
 `MWG_BUILD_SAMPLES=ON` to add the `translate` sample and, when .NET and
 PowerShell 7 are installed, targets to build and launch the C# ActiveX test
 host. The OCX needs the **C++ ATL for latest v145 build tools** component for
@@ -316,6 +321,7 @@ Then build individual targets:
 ```powershell
 cmake --build --preset x64-debug --target MapWinGIS.Core
 cmake --build --preset x64-debug --target MapWinGIS.ActiveX
+cmake --build --preset x64-debug --target MapWinGIS.ActiveX.Tests
 cmake --build --preset x64-debug --target MapWinGIS.Samples.Translate
 cmake --build --preset x64-debug --target build_activex_host
 cmake --build --preset x64-debug --target run_activex_host
@@ -503,4 +509,5 @@ The CMake `run_activex_host` targets pass the runtime directory automatically.
 When launching the C# host script directly, pass that directory with
 `-BinDirectory`, for example `-BinDirectory out\b\x64d\bin`. This directory
 override does not enable native ActiveX hosting verification: that check
-requires the legacy `MapWinGIS.ActiveX.Tests.exe` and its hosting test.
+requires `MapWinGIS.ActiveX.Tests.exe` and its hosting test. CMake builds this
+executable when `MWG_BUILD_ACTIVEX` is enabled.

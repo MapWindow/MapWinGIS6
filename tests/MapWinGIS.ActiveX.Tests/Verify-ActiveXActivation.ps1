@@ -40,6 +40,8 @@ $registrationPaths = @(
     'Software\Classes\MapWinGIS6.Control.6'
     'Software\Classes\MapWinGIS6.Control'
 )
+$testReport = Join-Path ([System.IO.Path]::GetTempPath()) (
+    "MapWinGIS.ActiveX.Tests.$([guid]::NewGuid().ToString('N')).xml")
 $existingRegistration = @()
 foreach ($view in @(
         [Microsoft.Win32.RegistryView]::Registry32,
@@ -95,9 +97,19 @@ try {
     $previousHostTest = $env:MWG_TEST_ACTIVEX_HOST
     $env:MWG_TEST_ACTIVEX_HOST = '1'
     try {
-        & $testExecutable '--gtest_filter=ActiveXHosting.ResizesRepaintsAndRecreatesControl'
+        & $testExecutable `
+            '--gtest_filter=ActiveXHosting.ResizesRepaintsAndRecreatesControl' `
+            "--gtest_output=xml:$testReport"
         if ($LASTEXITCODE -ne 0) {
             throw "The ActiveX hosting test failed with exit code $LASTEXITCODE."
+        }
+
+        if (-not (Test-Path -LiteralPath $testReport -PathType Leaf)) {
+            throw 'The ActiveX hosting test did not produce its GoogleTest report.'
+        }
+        [xml]$testResults = Get-Content -LiteralPath $testReport -Raw
+        if ([int]$testResults.DocumentElement.GetAttribute('tests') -lt 1) {
+            throw 'The ActiveX hosting test filter selected no tests.'
         }
     }
     finally {
@@ -109,6 +121,7 @@ try {
     }
 }
 finally {
+    Remove-Item -LiteralPath $testReport -Force -ErrorAction SilentlyContinue
     $unregisterResult = Start-Process -FilePath $registrationTool `
         -ArgumentList @('/s', '/u', '/n', '/i:user', "`"$controlPath`"") `
         -Wait -PassThru
