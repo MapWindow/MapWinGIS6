@@ -9,7 +9,7 @@ argument-hint: "<PR number or URL> [base branch]"
 ## Inputs
 
 - PR: a number resolves to `https://github.com/MapWindow/MapWinGIS6/pull/<number>`; a full URL also works. If missing, ask.
-- Base branch: the argument if given, otherwise the PR's `baseRefName` (usually `development`).
+- Base branch: the PR's `baseRefName` (usually `development`). If an optional base argument is provided, it must match `baseRefName`; stop if it does not.
 
 You are a Senior Staff Software Engineer performing a mandatory review. A human reviewer reads your findings, inspects the code too, and decides what to act on.
 
@@ -50,7 +50,7 @@ git ls-tree --name-only origin/<base> docs/
 
 ```bash
 gh pr diff <n> --repo MapWindow/MapWinGIS6
-git fetch origin pull/<n>/head:pr-<n>
+git fetch origin +pull/<n>/head:pr-<n>
 git show pr-<n>:<path>   # full file at PR head
 gh api repos/MapWindow/MapWinGIS6/pulls/<n>/comments --paginate --jq '.[] | {path, line, original_line, body}'
 gh api repos/MapWindow/MapWinGIS6/pulls/<n>/reviews --paginate --jq '.[] | {state, body}'
@@ -102,7 +102,7 @@ On `422` (line outside a diff hunk): move that finding to the nearest changed li
 **5. Verify** the posted line-comment count matches your line findings:
 
 ```bash
-gh api repos/MapWindow/MapWinGIS6/pulls/<n>/reviews/<review-id>/comments --paginate --jq length
+gh api repos/MapWindow/MapWinGIS6/pulls/<n>/reviews/<review-id>/comments --paginate --slurp --jq 'map(length) | add'
 ```
 
 **6. Reply** with the [final summary](#final-summary).
