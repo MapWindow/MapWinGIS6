@@ -14,6 +14,15 @@ Generated Visual Studio projects set `WindowsTargetPlatformVersion` before
 importing `Directory.Build.props`; its legacy SDK default must not override
 that selection, including in CMake's `VCTargetsPath` probe.
 
+The `cmake-parity` job fails (`-FailOnLostFlags`) when a translation unit is
+compiled by MSBuild but missing from the CMake target — including test
+projects. Adding a source file to a `.vcxproj` therefore requires the same
+addition to the corresponding `CMakeLists.txt` source list (verified on
+PR #71, where `PolygonTriangulationTests.cpp` was listed in
+`MapWinGIS.Core.Tests.vcxproj` but not in its CMake target). The parity
+report (`out/parity/parity-Debug-x64.json` on the runner) names the lost
+TU; the job log only shows the lost count.
+
 ## References
 
 - [CMake presets](../../../CMakePresets.json)

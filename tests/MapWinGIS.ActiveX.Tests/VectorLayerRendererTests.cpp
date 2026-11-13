@@ -441,6 +441,56 @@ TEST(VectorLayerRenderer, FallsBackToGdiWhenAPolygonHasNoFillMesh)
         L"every polygon; this frame was rendered with GDI.");
 }
 
+TEST(VectorLayerRenderer, GdiFallbackRendersConcaveHoledPolygonFromRings)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+
+    // A scene whose only polygon has no triangulated mesh: the coordinator
+    // must fall back to GDI, which fills the concave shape from the original
+    // rings and leaves the concave indentation and the interior ring empty.
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {0.0, 0.0, 10.0, 10.0};
+    layer.sourceFeatureCount = 1;
+    layer.polygons = {{
+        {{0.0, 0.0}, {10.0, 0.0}, {10.0, 4.0}, {4.0, 4.0}, {4.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}},
+        {{1.0, 1.0}, {1.0, 3.0}, {3.0, 3.0}, {3.0, 1.0}, {1.0, 1.0}},
+    }};
+    layer.fillMeshes.push_back(std::nullopt);
+    mwg::rendering::MapRenderScene scene;
+    scene.layers.push_back({mwg::LayerId{1}, std::move(layer)});
+
+    const mwg::Viewport viewport = FitViewport(bounds);
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 2.0), kFill) << "lower arm";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 2.0, 7.0), kFill) << "left arm";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 7.0), GetSysColor(COLOR_WINDOW))
+        << "concave indentation stays unfilled";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 2.0, 2.0), GetSysColor(COLOR_WINDOW))
+        << "interior ring stays unfilled";
+
+    // A later mesh-complete frame must select OpenGL again when the backend
+    // is available, so a coordinator that permanently stops trying OpenGL
+    // after one missing-mesh frame cannot pass. Probe availability
+    // independently of the coordinator, as
+    // UsesOpenGlForConvexPolygonWhenAvailable does.
+    const mwg::rendering::MapRenderScene meshScene = MakeConvexPolygonScene();
+    mwg::activex::OpenGlVectorLayerRenderer openGlProbe;
+    const HRESULT probeResult = openGlProbe.Draw(surface.Get(), bounds, meshScene, viewport);
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, meshScene, viewport), S_OK);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
+}
+
 TEST(VectorLayerRenderer, OpenGlSupportRequiresAMeshForEveryPolygon)
 {
     const mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();

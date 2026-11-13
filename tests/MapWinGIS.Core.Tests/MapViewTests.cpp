@@ -14,12 +14,16 @@
 
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <ogrsf_frmts.h>
+
 #include "TestData.h"
 #include "mapwingis/core/Error.h"
+#include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/map/MapView.h"
 #include "mapwingis/vector/VectorDataset.h"
 
@@ -46,6 +50,56 @@ namespace
             const std::string fileName = "layer-" + std::to_string(_datasetCount++) + ".gpkg";
             return VectorDataset::Open(
                 MakeRectanglesDataset(_directory.Path(), fileName, rectangles));
+        }
+
+        /// Opens a single-feature multipart layer whose first component is a
+        /// concave L-shaped polygon and whose second is a rectangle with a
+        /// square hole, so scene-lifetime checks cover triangulated complex
+        /// geometry rather than rectangles only.
+        std::shared_ptr<VectorDataset> OpenComplexPolygons()
+        {
+            GdalEnvironment::Initialize();
+            const std::string fileName =
+                "complex-" + std::to_string(_datasetCount++) + ".gpkg";
+            const std::filesystem::path path = _directory.Path() / fileName;
+
+            GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+            if (driver == nullptr)
+            {
+                throw std::runtime_error("GPKG driver is not available");
+            }
+            const std::u8string utf8 = path.u8string();
+            GDALDatasetUniquePtr dataset(driver->Create(
+                reinterpret_cast<const char*>(utf8.c_str()), 0, 0, 0, GDT_Unknown, nullptr));
+            if (dataset == nullptr)
+            {
+                throw std::runtime_error("Cannot create the complex polygon dataset");
+            }
+            OGRLayer* layer = dataset->CreateLayer("complex", nullptr, wkbMultiPolygon, nullptr);
+            if (layer == nullptr)
+            {
+                throw std::runtime_error("Cannot create the complex polygon layer");
+            }
+
+            const char* wkt =
+                "MULTIPOLYGON (((0 0, 10 0, 10 4, 4 4, 4 10, 0 10, 0 0)), "
+                "((20 0, 30 0, 30 10, 20 10, 20 0), (23 3, 23 7, 27 7, 27 3, 23 3)))";
+            OGRGeometry* geometry = nullptr;
+            if (OGRGeometryFactory::createFromWkt(&wkt, nullptr, &geometry) != OGRERR_NONE ||
+                geometry == nullptr)
+            {
+                throw std::runtime_error("Cannot parse the complex polygon WKT");
+            }
+            OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
+            const OGRErr geometryResult = feature->SetGeometry(geometry);
+            OGRGeometryFactory::destroyGeometry(geometry);
+            if (geometryResult != OGRERR_NONE || layer->CreateFeature(feature.get()) != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot write the complex polygon feature");
+            }
+
+            dataset.reset();
+            return VectorDataset::Open(path);
         }
 
         TempDirectory _directory;
@@ -286,6 +340,59 @@ TEST_F(MapViewTest, PreparedLayersRetainTheirGeometryUntilInvalidated)
     EXPECT_TRUE(view.InvalidateScene());
     EXPECT_EQ(view.Scene().layers.size(), 2U);
     EXPECT_EQ(driver.readCalls, 16);
+}
+
+TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
+{
+    _view.AddLayer(OpenComplexPolygons());
+    ASSERT_TRUE(_view.Resize(300, 200));
+
+    const rendering::MapRenderScene& scene = _view.Scene();
+    ASSERT_EQ(scene.layers.size(), 1U);
+    const rendering::VectorRenderScene& layerScene = scene.layers.front().scene;
+    ASSERT_EQ(layerScene.polygons.size(), 2U);
+    ASSERT_EQ(layerScene.fillMeshes.size(), 2U);
+    // Both the concave component and the holed component are triangulated.
+    ASSERT_TRUE(layerScene.fillMeshes[0].has_value());
+    ASSERT_TRUE(layerScene.fillMeshes[1].has_value());
+    const void* meshStorage = layerScene.fillMeshes.data();
+    const void* holedMeshVertices = layerScene.fillMeshes[1]->vertices.data();
+    const std::size_t holedMeshIndices = layerScene.fillMeshes[1]->indices.size();
+    const std::size_t holedPolygonRings = layerScene.polygons[1].size();
+    ASSERT_EQ(holedPolygonRings, 2U);
+
+    // Resizing, zooming, and panning change the viewport only: the scene and
+    // its triangulated meshes stay alive and are not rebuilt.
+    ASSERT_TRUE(_view.Resize(640, 480));
+    EXPECT_EQ(&_view.Scene(), &scene);
+    EXPECT_EQ(_view.Scene().layers.front().scene.fillMeshes.data(), meshStorage);
+    EXPECT_EQ(_view.Scene().layers.front().scene.fillMeshes[1]->vertices.data(),
+              holedMeshVertices);
+
+    ASSERT_TRUE(_view.ZoomIn());
+    ASSERT_TRUE(_view.ZoomOut());
+    ASSERT_TRUE(_view.ZoomAt(ScreenPoint{150.0, 100.0}, 2.0));
+    ASSERT_TRUE(_view.Pan(1.0, -0.5));
+    EXPECT_EQ(&_view.Scene(), &scene);
+    const rendering::VectorRenderScene& navigated = _view.Scene().layers.front().scene;
+    EXPECT_EQ(navigated.fillMeshes[1]->vertices.data(), holedMeshVertices);
+    EXPECT_EQ(navigated.fillMeshes[1]->indices.size(), holedMeshIndices);
+    EXPECT_EQ(navigated.polygons[1].size(), holedPolygonRings);
+
+    // Map changes rebuild the scene; the rebuilt scene triangulates the
+    // complex polygon again and keeps its original rings for outlines and GDI.
+    const LayerId second = _view.AddLayer(OpenRectangles({{100.0, 0.0, 110.0, 10.0}}));
+    ASSERT_EQ(_view.Scene().layers.size(), 2U);
+    const rendering::VectorRenderScene& rebuilt = _view.Scene().layers.front().scene;
+    ASSERT_EQ(rebuilt.polygons.size(), 2U);
+    ASSERT_EQ(rebuilt.fillMeshes.size(), 2U);
+    EXPECT_TRUE(rebuilt.fillMeshes[0].has_value());
+    EXPECT_TRUE(rebuilt.fillMeshes[1].has_value());
+    EXPECT_EQ(rebuilt.polygons[1].size(), holedPolygonRings);
+
+    EXPECT_TRUE(_view.RemoveLayer(second));
+    ASSERT_EQ(_view.Scene().layers.size(), 1U);
+    EXPECT_TRUE(_view.Scene().layers.front().scene.fillMeshes[1].has_value());
 }
 
 TEST_F(MapViewTest, PreparedEmptyLayerPreservesExistingAndStaleScenes)
