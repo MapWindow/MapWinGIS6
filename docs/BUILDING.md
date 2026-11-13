@@ -426,12 +426,15 @@ that inherits from the presets, for example:
    x86 toolchain.
 
 Build `MapWinGIS.Core`, `MapWinGIS.ActiveX`, and `MapWinGIS.Core.Tests` from
-CLion's CMake targets. To expose the sample and C# host targets, set
-`MWG_BUILD_SAMPLES=ON` in the selected CMake profile. CLion's GoogleTest
+CLion's CMake targets. To expose the sample and C# host targets, add
+`-DMWG_BUILD_SAMPLES=ON` to the **CMake options** field in the selected profile
+(**Settings | Build, Execution, Deployment | CMake**). CLion's GoogleTest
 integration can run, filter, and debug individual cases. The C# host can be
 built and launched through `build_activex_host` and `run_activex_host`;
-CLion's native debugger does not debug the managed C# code. See
-[Testing](TESTING.md#cmake-and-clion) for test-running details.
+these targets automatically ensure `MapWinGIS.ActiveX` and runtime data
+dependencies are up to date. CLion's native debugger does not debug the
+managed C# code. See [Testing](TESTING.md#cmake-and-clion) for test-running
+details.
 
 ### Using CMake in Visual Studio
 
@@ -475,10 +478,14 @@ Use the short preset build directories under `out\b`. If Windows still rejects
 long paths, enable the Windows `LongPathsEnabled` policy and restart the
 terminal before configuring again.
 
-**MIDL cannot find `cl.exe`**
+**MIDL cannot find `cl.exe` or CLion fails to detect the Visual Studio toolset**
 Ninja needs an MSVC environment. Assign the matching Visual Studio toolchain
-to the CLion profile, or configure from a VS 2026 Developer PowerShell. Ensure
-`cl.exe` is on `PATH` before rerunning CMake.
+to the CLion profile, or configure from a VS 2026 Developer PowerShell. If
+Visual Studio is installed on a non-standard drive or path (for example,
+`D:\Program Files\Microsoft Visual Studio\18\Community`), ensure the Visual
+Studio toolchain in **Settings | Build, Execution, Deployment | Toolchains**
+points directly to that installation directory rather than relying on automatic
+discovery. Ensure `cl.exe` is on `PATH` before rerunning CMake.
 
 **ATL headers or libraries are missing**
 Install **C++ ATL for latest v145 build tools** in Visual Studio Installer for
