@@ -415,6 +415,10 @@ TEST(VectorLayerRenderer, OpenGlRendersPolygonWithInteriorRing)
 
     mwg::activex::VectorLayerRenderer renderer;
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), S_OK);
+    if (renderer.GetActiveBackend() != mwg::activex::VectorRenderBackendKind::OpenGL)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
     EXPECT_EQ(GetPixel(surface.Get(), 30, 50), kFill);
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), GetSysColor(COLOR_WINDOW));
 }
