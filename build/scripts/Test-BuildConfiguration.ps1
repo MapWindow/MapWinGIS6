@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Tests dependency argument quoting and single-owner runtime deployment.
+    Tests SDK selection, dependency argument quoting and single-owner runtime deployment.
 #>
 [CmdletBinding()]
 param(
@@ -43,6 +43,26 @@ $commandLine | Select-Object -Skip $start | Set-Content (Join-Path $PSScriptRoot
 '@
     Set-Content "$temp\RuntimeDataOwner.proj" $project
     Set-Content "$temp\MapWinGIS.ActiveX.proj" $project
+    $sdkProject = @'
+<Project>
+  <PropertyGroup>
+    <WindowsTargetPlatformVersion Condition="'$(TestGeneratedWindowsSdk)' != ''">$(TestGeneratedWindowsSdk)</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="Directory.Build.props" />
+</Project>
+'@
+    Set-Content "$temp\SdkSelection.proj" $sdkProject
+    foreach ($case in @(
+        @{ Expected = '10.0.28000.0'; Arguments = @() },
+        @{ Expected = '10.0'; Arguments = @('-p:MwgWindowsSdk=10.0') },
+        @{ Expected = '10.0.26100.0'; Arguments = @('-p:TestGeneratedWindowsSdk=10.0.26100.0') }
+    )) {
+        $sdk = & $MSBuild "$temp\SdkSelection.proj" -nologo -getProperty:WindowsTargetPlatformVersion @($case.Arguments)
+        if ($LASTEXITCODE -ne 0 -or $sdk -ne $case.Expected) {
+            throw "SDK selection failed: expected $($case.Expected), got $sdk."
+        }
+    }
+
     $powerShell = (Get-Process -Id $PID).Path
     & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:CaptureArguments "-p:MwgTestPowerShell=$powerShell" '-p:MwgVcpkgFeatures=tests%3Bfull-drivers'
     if ($LASTEXITCODE -ne 0) { throw 'Dependency argument capture failed.' }

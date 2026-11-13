@@ -5,6 +5,7 @@
 | Requirement | Version | Notes |
 |---|---|---|
 | Visual Studio 2026 | 18.10 or later | Workload **Desktop development with C++** |
+| CMake | 3.28 or later | Bundled with Visual Studio 2026 |
 | MSVC toolset | v145 (14.51 or later) | Installed with the workload |
 | Windows SDK | 10.0.28000.0 | Override with `/p:MwgWindowsSdk=10.0` to use the newest installed instead |
 | Git | any recent version | Needed to clone vcpkg |
@@ -239,13 +240,14 @@ The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, the native
 GoogleTest suite, and the `translate` sample. When `dotnet` and PowerShell 7
 are installed, it also provides targets to build and launch the C# ActiveX
 test host. The OCX needs the **C++ ATL for latest v145 build tools** component
-for each architecture you build. `midl.exe` needs `cl.exe` on `PATH`, so
-configure and build from a Visual Studio toolchain (CLion) or a Developer
-PowerShell. CMake 3.28 or later is required, with either Ninja or the Visual
-Studio generator. Both CMake and Ninja ship with Visual Studio 2026 and CLion.
-Run the bootstrap script first, then configure from a VS 2026 Developer
-PowerShell (or any shell after
-`vcvarsall.bat x64`):
+for each architecture you build. For Ninja, `midl.exe` needs `cl.exe` on
+`PATH`, so use a Visual Studio toolchain (CLion) or a Developer PowerShell.
+The Visual Studio generator uses the selected SDK's MIDL compiler and the
+compiler environment supplied by MSBuild. CMake 3.28 or later is required;
+use the CMake version bundled with Visual Studio 2026 for its Visual Studio 18
+2026 generator. Both CMake and Ninja ship with Visual Studio 2026 and CLion.
+Run the bootstrap script first. For Ninja presets, configure from a VS 2026
+Developer PowerShell or any shell after `vcvarsall.bat x64`:
 
 ```powershell
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
@@ -322,6 +324,24 @@ that inherits from the presets, for example:
   ]
 }
 ```
+
+### Using CMake in Visual Studio
+
+The CMake presets support Visual Studio 2026's **Open Folder** workflow. First
+run the vcpkg bootstrap command above, then open the repository root folder in
+Visual Studio and select `vs2026-x64` or `vs2026-x86` as the configure preset.
+Select Debug or Release with the matching build preset, such as
+`vs2026-x64-debug`. Build targets from the CMake Targets view and run discovered
+GoogleTest cases from Test Explorer. The `MapWinGIS.Core.Tests` executable can
+also be selected for debugging. The `MapWinGIS.Samples.Translate` target is
+available when configured with `-DMWG_BUILD_SAMPLES=ON`.
+
+The `.slnx` and `.vcxproj` files remain supported during this transition.
+MSBuild writes to `bin\<Configuration>\<Platform>`, while CMake writes under
+`out\b`; builds from the two systems do not overwrite each other's output.
+Do not remove the legacy project files until CMake parity has been demonstrated
+and the migration decision gate in [CMAKE-MIGRATION.md](CMAKE-MIGRATION.md) is
+reviewed.
 
 ## Troubleshooting
 

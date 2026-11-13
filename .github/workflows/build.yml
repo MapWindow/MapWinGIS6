@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cmake:
+  cmake-parity:
     runs-on: windows-2025
     timeout-minutes: 180
 
@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-x64-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake', 'Directory.Build.props') }}
+          key: vcpkg-binary-${{ runner.os }}-x64-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake', 'Directory.Build.props', 'CMakePresets.json', 'CMakeLists.txt', 'cmake/**') }}
           restore-keys: |
             vcpkg-binary-${{ runner.os }}-x64-
 
@@ -62,6 +62,82 @@ jobs:
             -FailOnLostFlags `
             -FailOnNewWarnings
 
+  cmake-vs:
+    runs-on: windows-2025
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"platform":["x64"],"configuration":["Debug","Release"]}') }}
+
+    env:
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
+      MWG_WINDOWS_SDK: '10.0'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Record runner image version
+        id: runner_image
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@v6
+        with:
+          path: vcpkg-binary-cache
+          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake', 'Directory.Build.props', 'CMakePresets.json', 'CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: ./build/scripts/bootstrap-vcpkg.ps1
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          $platform = '${{ matrix.platform }}'
+          $configuration = '${{ matrix.configuration }}'
+          $architecture = if ($platform -eq 'x64') { 'x64' } else { 'x86' }
+          $configurePreset = "vs2026-$architecture"
+          $buildPreset = "$configurePreset-$($configuration.ToLowerInvariant())"
+          $features = if ($configuration -eq 'Release') { 'tests;full-drivers' } else { 'tests' }
+          cmake --preset $configurePreset `
+            "-DMWG_WINDOWS_SDK=$env:MWG_WINDOWS_SDK" `
+            "-DVCPKG_MANIFEST_FEATURES=$features"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content -Path $env:GITHUB_ENV -Value "MWG_CMAKE_BUILD_PRESET=$buildPreset"
+
+      - name: Build CMake preset
+        shell: pwsh
+        run: |
+          cmake --build --preset $env:MWG_CMAKE_BUILD_PRESET --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test CMake preset
+        shell: pwsh
+        run: |
+          ctest --preset $env:MWG_CMAKE_BUILD_PRESET --output-on-failure -LE interactive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: testresults-cmake-${{ matrix.platform }}-${{ matrix.configuration }}
+          path: out/b/${{ matrix.platform == 'x64' && 'vs-x64' || 'vs-x86' }}/test-results/*.xml
+          if-no-files-found: warn
+
+      - name: Upload Release binaries
+        if: matrix.configuration == 'Release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MapWinGIS.CMake-${{ matrix.platform }}
+          path: out/b/${{ matrix.platform == 'x64' && 'vs-x64' || 'vs-x86' }}/bin/Release/
+          if-no-files-found: error
+
   build:
     runs-on: windows-2025
     timeout-minutes: 180
@@ -88,7 +164,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake', 'Directory.Build.props') }}
+          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake', 'Directory.Build.props', 'CMakePresets.json', 'CMakeLists.txt', 'cmake/**') }}
           restore-keys: |
             vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
 

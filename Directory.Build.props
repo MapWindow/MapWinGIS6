@@ -18,7 +18,8 @@
     <!-- Pinned for reproducibility. Override with /p:MwgWindowsSdk=10.0 to use
          whatever is newest on the machine (useful on CI images). -->
     <MwgWindowsSdk Condition="'$(MwgWindowsSdk)' == ''">10.0.28000.0</MwgWindowsSdk>
-    <WindowsTargetPlatformVersion>$(MwgWindowsSdk)</WindowsTargetPlatformVersion>
+    <!-- CMake's Visual Studio generator sets its selected SDK before this import. -->
+    <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == ''">$(MwgWindowsSdk)</WindowsTargetPlatformVersion>
   </PropertyGroup>
 
   <!-- Output layout -->

@@ -10,6 +10,6 @@ documentation.
 
 - [windows.md](windows.md) — supported toolchain, CI build matrix, and
   platform-specific requirements.
-- [cmake.md](cmake.md) — current CMake project status.
+- [cmake.md](cmake.md) — CMake generators, presets, and CI integration.
 - [dependencies.md](dependencies.md) — vcpkg feature tracking and runtime data
   deployment details.

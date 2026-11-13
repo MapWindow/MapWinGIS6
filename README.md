@@ -40,6 +40,7 @@ release the loaded datasets before switching or refreshing them.
 
 - Windows
 - Visual Studio 2026 (18.10 or later) with the **Desktop development with C++** workload, including MSVC v145 and Windows SDK 10.0.28000.0
+- CMake 3.28 or later; use the CMake version bundled with Visual Studio 2026 for its `Visual Studio 18 2026` generator
 - .NET 10 SDK to build the C# ActiveX test host
 - Git and PowerShell 7 (`pwsh`)
 - About 15 GB of free disk space for dependencies and build outputs
@@ -61,6 +62,12 @@ configuration are needed by hand.
 
 Alternatively, after bootstrapping vcpkg, open `MapWinGIS6.slnx` in Visual
 Studio and build the `Debug | x64` configuration.
+
+Visual Studio 2026 can also open the repository folder as a CMake project.
+Select the `vs2026-x64` configure preset, then build and test with the matching
+`vs2026-x64-debug` preset. The existing `.slnx` remains available during the
+transition; both build systems keep their outputs separate. See
+[docs/BUILDING.md](docs/BUILDING.md#using-cmake-in-visual-studio) for details.
 
 ### Run the C++ tests
 
