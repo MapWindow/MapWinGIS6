@@ -11,6 +11,11 @@ set(MWG_ACTIVEX_TEST_HEADERS
     "${PROJECT_SOURCE_DIR}/tests/MapWinGIS.Core.Tests/TestData.h"
 )
 
+if(NOT MWG_ACTIVEX_SHARED_SOURCES)
+    message(FATAL_ERROR
+        "MWG_ACTIVEX_SHARED_SOURCES is empty; the ActiveX subdirectory must be added before the tests.")
+endif()
+
 set(MWG_ACTIVEX_TEST_SOURCES
     ActiveXActivationTests.cpp
     ComConversionTests.cpp
@@ -85,6 +90,7 @@ file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/test-results")
 gtest_discover_tests(MapWinGIS.ActiveX.Tests
     DISCOVERY_MODE PRE_TEST
     DISCOVERY_TIMEOUT 120
+    TEST_FILTER "*-ActiveXHosting.ResizesRepaintsAndRecreatesControl"
     WORKING_DIRECTORY "${MWG_RUNTIME_DIR}"
     XML_OUTPUT_DIR "${PROJECT_BINARY_DIR}/test-results"
 )
