@@ -5,28 +5,45 @@
 | Requirement | Version | Notes |
 |---|---|---|
 | Visual Studio 2026 | 18.10 or later | Workload **Desktop development with C++** |
-| CMake | 3.28 or later | Bundled with Visual Studio 2026 |
+| CMake | 3.28 or later | Use the Visual Studio 2026-bundled version for its generator |
+| Ninja | Current | Required by the Ninja presets and CLion profiles |
 | MSVC toolset | v145 (14.51 or later) | Installed with the workload |
 | Windows SDK | 10.0.28000.0 | Override with `/p:MwgWindowsSdk=10.0` to use the newest installed instead |
+| ATL | C++ ATL for latest v145 build tools | Install for each architecture used (x64 and/or x86); MFC is not required |
 | Git | any recent version | Needed to clone vcpkg |
+| .NET SDK | 10 | Required for the C# ActiveX test host |
+| PowerShell | 7 (`pwsh`) | Required by the bootstrap and host scripts |
 | Disk space | about 15 GB | vcpkg sources, build trees and binaries |
 
-The ActiveX project uses ATL and statically links it. MFC is not required.
-The C# test host requires the .NET 10 SDK and the Windows Forms desktop
-runtime.
+The ActiveX project uses ATL and statically links it.
 
-## First build
+## First build with CMake
 
 ```powershell
-# 1. Get vcpkg. Clones into ..\vcpkg next to this repository by default.
+# From a VS 2026 Developer PowerShell: bootstrap, configure, build, and test x64 Debug.
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
+cmake --preset x64-debug
+cmake --build --preset x64-debug
+ctest --preset x64-debug --output-on-failure -LE interactive
+```
 
-# 2. Build. The first build compiles GDAL and its dependencies from source and
-#    takes a while; later builds reuse the vcpkg binary cache.
+The first configure installs GDAL and its dependencies and can take a while;
+later builds reuse the vcpkg binary cache. See [Building with CMake](#building-with-cmake)
+for other presets, Visual Studio, and CLion.
+
+## Legacy MSBuild build
+
+The `.slnx` and `.vcxproj` files remain supported during the CMake transition
+and are built in parallel in CI. After bootstrapping vcpkg, use:
+
+```powershell
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 ```
 
-Or just open `MapWinGIS6.slnx` in Visual Studio after step 1 and build.
+Or open `MapWinGIS6.slnx` in Visual Studio. The legacy build writes to
+`bin\<Configuration>\<Platform>`; CMake writes under `out\b`, so their outputs
+do not overwrite one another. If `msbuild` is not on `PATH`, see
+[Finding MSBuild](#finding-msbuild-for-the-legacy-build).
 
 ### ActiveX activation
 
@@ -224,46 +241,87 @@ bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresul
 
 ## CMake migration
 
-CMake is being introduced as the primary native build. Until it is complete,
-the MSBuild solution above stays the supported build. The audit of the current
-MSBuild settings and the decisions the CMake build follows are in
+CMake is the primary native build. The `.slnx` and `.vcxproj` files remain
+supported during the transition, and CI validates both build systems. The
+audit of the MSBuild settings and the decisions followed by CMake are in
 [CMAKE-MIGRATION.md](CMAKE-MIGRATION.md).
 
 To measure flag and binary parity, `build\scripts\Compare-CompileCommands.ps1`
 records a detailed MSBuild log and writes a normalised report to `out\parity\`.
-It finds MSBuild through `MWG_MSBUILD`, `PATH` or `vswhere`, so it also works
-when Visual Studio is not on `PATH` or not installed on `C:`.
+It finds MSBuild through `MWG_MSBUILD`, `PATH`, or `vswhere`, including Visual
+Studio installations outside the default `C:\Program Files` location.
+
+### Finding MSBuild for the legacy build
+
+MSBuild is not normally on `PATH` in a plain PowerShell or CLion terminal. Use
+a Visual Studio Developer PowerShell, set `MWG_MSBUILD` for the parity script,
+or locate the executable with `vswhere`:
+
+```powershell
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$msbuild = & $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild `
+    -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+if (-not $msbuild) { throw 'MSBuild was not found. Install the Visual Studio MSBuild component.' }
+& $msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
+```
+
+The parity script checks `MWG_MSBUILD`, then `PATH`, then `vswhere`. Do not
+hardcode a Visual Studio installation path in repository files.
 
 ### Building with CMake
 
-The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, the native
-GoogleTest suite, and the `translate` sample. When `dotnet` and PowerShell 7
-are installed, it also provides targets to build and launch the C# ActiveX
-test host. The OCX needs the **C++ ATL for latest v145 build tools** component
-for each architecture you build. For Ninja, `midl.exe` needs `cl.exe` on
-`PATH`, so use a Visual Studio toolchain (CLion) or a Developer PowerShell.
-The Visual Studio generator uses the selected SDK's MIDL compiler and the
-compiler environment supplied by MSBuild. CMake 3.28 or later is required;
-use the CMake version bundled with Visual Studio 2026 for its Visual Studio 18
-2026 generator. Both CMake and Ninja ship with Visual Studio 2026 and CLion.
-Run the bootstrap script first. For Ninja presets, configure from a VS 2026
-Developer PowerShell or any shell after `vcvarsall.bat x64`:
+The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, and the native
+GoogleTest suite. Set `MWG_BUILD_SAMPLES=ON` to add the `translate` sample and,
+when .NET and PowerShell 7 are installed, targets to build and launch the C#
+ActiveX test host. The OCX needs the **C++ ATL for latest v145 build tools**
+component for each architecture you build. CMake 3.28 or later is required;
+use the Visual Studio 2026-bundled CMake for the Visual Studio 18 2026
+generator. Run the vcpkg bootstrap first. Ninja presets need an MSVC
+environment: use a Visual Studio toolchain in CLion or configure from a VS
+2026 Developer PowerShell. With the Ninja generator, MIDL also needs `cl.exe`
+on `PATH`.
 
 ```powershell
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 cmake --preset x64-debug
 cmake --build --preset x64-debug
-ctest --preset x64-debug --output-on-failure
+ctest --preset x64-debug --output-on-failure -LE interactive
 ```
 
-Build the sample or C# host by target:
+The root `CMakeLists.txt` resolves the vcpkg root before `project()` in this
+order: `MWG_VCPKG_ROOT` (cache variable or environment variable), the sibling
+`..\vcpkg` directory, then `VCPKG_ROOT`. Set `MWG_VCPKG_ROOT` to override the
+location. A `CMAKE_TOOLCHAIN_FILE` supplied by a preset or command line takes
+precedence over automatic resolution. If no root is found, run the bootstrap
+script above.
+
+The CMake build uses a separate vcpkg install tree per platform under
+`vcpkg_installed\cmake-x64` or `vcpkg_installed\cmake-Win32`. Debug and Release
+share the platform tree; it is separate from the MSBuild install. vcpkg
+reconfigures the tree using `VCPKG_MANIFEST_FEATURES` on every CMake configure.
+Feature changes take effect after reconfiguring. In CLion, use **Tools | CMake
+| Reset Cache and Reload Project** if a cached preset value is stale.
+
+Sample and C# host targets are optional. Enable them when configuring:
 
 ```powershell
+cmake --preset x64-debug -DMWG_BUILD_SAMPLES=ON
+```
+
+Then build individual targets:
+
+```powershell
+cmake --build --preset x64-debug --target MapWinGIS.Core
+cmake --build --preset x64-debug --target MapWinGIS.ActiveX
 cmake --build --preset x64-debug --target MapWinGIS.Samples.Translate
 cmake --build --preset x64-debug --target build_activex_host
 cmake --build --preset x64-debug --target run_activex_host
 cmake --build --preset x64-debug --target run_activex_host_automated
 ```
+
+The sample executable is `out\b\x64d\bin\translate.exe`. The C# host targets
+need .NET 10; the two run targets also need PowerShell 7 and an interactive
+desktop session.
 
 The last two targets launch the host from an interactive Windows session; the
 automated target runs the visible host checks. CMake directs the native sample,
@@ -287,9 +345,9 @@ For a Core-only build that does not require MIDL or ATL, configure with
 - To register the CMake-built control for the current user:
   `regsvr32 /n /i:user out\b\x64d\bin\MapWinGIS.ocx` (use
   `%WINDIR%\SysWOW64\regsvr32.exe` for Win32; add `/u` to unregister).
-- The vcpkg root is found in the same order as above. CMake uses its own install
-  tree, `vcpkg_installed\cmake-<Platform>`, shared by Debug and Release; the
-  binary cache makes it cheap.
+- CMake uses its own install tree, `vcpkg_installed\cmake-<Platform>`, shared
+  by Debug and Release and separate from the MSBuild tree; the binary cache
+  makes it cheap.
 - Manifest features come from `VCPKG_MANIFEST_FEATURES` (presets: `tests`). A
   change takes effect on the next configure; in CLion use
   **Tools | CMake | Reset Cache and Reload Project** when a cached value is stale.
@@ -312,6 +370,7 @@ For a Core-only build that does not require MIDL or ATL, configure with
 | `MWG_DEPLOY_RUNTIME_DATA` | `ON` | `MwgDeployRuntimeData` |
 | `MWG_BUILD_TESTS` | `ON` | — (adds the `tests` feature) |
 | `MWG_BUILD_ACTIVEX` | `ON` | — (set `OFF` for a Core-only build) |
+| `MWG_BUILD_SAMPLES` | `OFF` | — |
 
 Machine-specific settings belong in an uncommitted `CMakeUserPresets.json`
 that inherits from the presets, for example:
@@ -324,6 +383,44 @@ that inherits from the presets, for example:
   ]
 }
 ```
+
+### Using CMake in CLion
+
+1. Install CLion with CMake and Ninja available. Bootstrap vcpkg and run one
+   command-line configure before the first CLion reload:
+
+   ```powershell
+   pwsh -File build\scripts\bootstrap-vcpkg.ps1
+   cmake --preset x64-debug
+   ```
+
+   This starts the first GDAL build in a visible command window instead of
+   leaving CLion apparently idle during its reload.
+2. Open the repository root folder in CLion as a CMake project. Select the
+   root `CMakeLists.txt`; do not open `.mscppls\compile_commands.json` as the
+   project. That database is produced by the legacy MSBuild tooling and is not
+   the CMake project.
+3. In **Settings | Build, Execution, Deployment | Toolchains**, add a Visual
+   Studio toolchain for each architecture. Use `amd64` for x64 and `x86` or
+   `amd64_x86` for Win32. The toolchain must provide the MSVC compiler
+   environment and `cl.exe` on `PATH` for MIDL.
+4. In **Settings | Build, Execution, Deployment | CMake**, use the configure
+   profiles imported from `CMakePresets.json`. Assign the matching Visual
+   Studio toolchain to each profile. The preset's `architecture` field informs
+   Visual Studio but does not select CLion's toolchain architecture. Disable
+   CLion's extra default profiles, such as `RelWithDebInfo` and `MinSizeRel`;
+   only Debug and Release are supported.
+5. Reload the project and select the profile for the desired architecture and
+   configuration. For x86, use `x86-debug` or `x86-release` with the matching
+   x86 toolchain.
+
+Build `MapWinGIS.Core`, `MapWinGIS.ActiveX`, and `MapWinGIS.Core.Tests` from
+CLion's CMake targets. To expose the sample and C# host targets, set
+`MWG_BUILD_SAMPLES=ON` in the selected CMake profile. CLion's GoogleTest
+integration can run, filter, and debug individual cases. The C# host can be
+built and launched through `build_activex_host` and `run_activex_host`;
+CLion's native debugger does not debug the managed C# code. See
+[Testing](TESTING.md#cmake-and-clion) for test-running details.
 
 ### Using CMake in Visual Studio
 
@@ -357,3 +454,32 @@ off. Rebuild after running the bootstrap script.
 The triplets pin `VCPKG_PLATFORM_TOOLSET v145`. If an older Visual Studio is
 still selected, check that the VS 2026 C++ workload is installed and delete
 `vcpkg_installed\` before rebuilding.
+
+**CMake reports a stale preset value or missing manifest feature**
+Reconfigure after changing `VCPKG_MANIFEST_FEATURES` or another cached value.
+In CLion, select **Tools | CMake | Reset Cache and Reload Project**.
+
+**vcpkg fails because a build path is too long**
+Use the short preset build directories under `out\b`. If Windows still rejects
+long paths, enable the Windows `LongPathsEnabled` policy and restart the
+terminal before configuring again.
+
+**MIDL cannot find `cl.exe`**
+Ninja needs an MSVC environment. Assign the matching Visual Studio toolchain
+to the CLion profile, or configure from a VS 2026 Developer PowerShell. Ensure
+`cl.exe` is on `PATH` before rerunning CMake.
+
+**ATL headers or libraries are missing**
+Install **C++ ATL for latest v145 build tools** in Visual Studio Installer for
+each target architecture. The x86 ATL component is needed for Win32 builds;
+the x64 component alone is not enough.
+
+**Ninja reports a Windows SDK mismatch**
+Ninja takes the SDK from the vcvars environment and cannot pin it. Set the
+Visual Studio toolchain's Windows SDK version to `MWG_WINDOWS_SDK`, or use
+`-DMWG_WINDOWS_SDK=10.0` to accept the newest installed SDK.
+
+**A CMake-built activation script cannot find the OCX or test executable**
+Pass the CMake runtime directory with `-BinDirectory`, for example
+`-BinDirectory out\b\x64d\bin`. The default remains `bin\<Configuration>\<Platform>`
+for MSBuild users.

@@ -33,19 +33,44 @@ The CMake test target uses the same GoogleTest sources and fixtures:
 ```powershell
 cmake --preset x64-debug
 cmake --build --preset x64-debug
-ctest --preset x64-debug --output-on-failure
+ctest --preset x64-debug --output-on-failure -LE interactive
 ```
 
-`gtest_discover_tests()` discovers individual cases before CTest runs them.
-Each test runs from the build's runtime directory, which contains the OCX,
-dependent DLLs, and GDAL/PROJ data. GoogleTest writes per-test XML files under
-`test-results` in the build directory. CTest can also write a single JUnit
-report with `ctest --test-dir out/b/x64d --output-junit out/b/x64d/ctest.xml`.
+`gtest_discover_tests()` registers individual cases for CTest. Each test runs
+from the build's runtime directory, which contains the OCX, dependent DLLs,
+and GDAL/PROJ data. GoogleTest writes per-test XML files under `test-results`
+in the build directory. The preset excludes tests labelled `interactive`,
+which change per-user COM registration or require a desktop. CTest can also
+write a single JUnit report:
+
+```powershell
+ctest --test-dir out\b\x64d --output-on-failure -LE interactive `
+    --output-junit out\b\x64d\ctest.xml
+```
 
 To run one case from CTest, match its fully qualified GoogleTest name:
 
 ```powershell
-ctest --test-dir out/b/x64d -R 'VectorDatasetTest.ReportsTheDriverAndPath' --output-on-failure
+ctest --test-dir out\b\x64d -R 'VectorDatasetTest.ReportsTheDriverAndPath' --output-on-failure
+```
+
+### CMake and CLion
+
+Use the imported `CMakePresets.json` profile for the desired
+architecture/configuration. CMake registers individual GoogleTest cases for
+IDE discovery; CLion's GoogleTest integration can display them after reload.
+Run or debug a test from the test tree, and use the GoogleTest filter field to
+run a subset. The executable and its runtime dependencies are colocated, so
+CLion can launch it directly without a CTest environment setting.
+
+From the command line, CTest can run a GoogleTest filter by selecting matching
+registered test names with `-R`. To pass a GoogleTest filter directly to the
+test executable, run it from its CMake runtime directory:
+
+```powershell
+Push-Location out\b\x64d\bin
+.\MapWinGIS.Core.Tests.exe '--gtest_filter=VectorDatasetTest.*'
+Pop-Location
 ```
 
 ## ActiveX host integration checks
@@ -75,7 +100,7 @@ registration and is excluded from the CTest presets and CI; run it explicitly
 from an interactive desktop when needed:
 
 ```powershell
-ctest --test-dir out/b/x64d -R '^Verify-ActiveXActivation$' --output-on-failure
+ctest --test-dir out\b\x64d -R '^Verify-ActiveXActivation$' --output-on-failure
 ```
 
 ## Build configuration tests
