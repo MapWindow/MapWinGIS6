@@ -5,6 +5,13 @@ dependencies, and GoogleTest is supplied by the `tests` feature. The optional
 `full-drivers` feature adds a larger set of GDAL drivers. The manifest baseline
 and GDAL minimum version must be considered together when updating GDAL.
 
+GDAL 3.12 renamed the OGR geometry accessors to snake_case (`get_Area()`,
+`get_Length()`); the old camelCase names such as `getArea()` are removed.
+`get_Area()` is not on the `OGRGeometry` base at all (only on `OGRCurve` and
+`OGRSurface`), and a disjoint polygon `Intersection()` returns `POLYGON EMPTY`,
+which still reports dimension 2 — check `IsEmpty()` before using `getDimension()`
+or a surface cast on intersection results.
+
 MSBuild resolves vcpkg from the `MwgVcpkgRoot` property, `MWG_VCPKG_ROOT`,
 the sibling `..\vcpkg` directory, then `VCPKG_ROOT`. It installs to a
 platform-specific tree because vcpkg can remove another triplet from a shared

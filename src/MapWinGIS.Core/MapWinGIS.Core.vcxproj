@@ -67,6 +67,7 @@
     <ClInclude Include="include\mapwingis\vector\FieldInfo.h" />
     <ClInclude Include="include\mapwingis\vector\VectorDataset.h" />
     <ClInclude Include="include\mapwingis\rendering\MapRenderScene.h" />
+    <ClInclude Include="include\mapwingis\rendering\PolygonTriangulation.h" />
     <ClInclude Include="include\mapwingis\rendering\VectorRenderScene.h" />
     <ClInclude Include="src\internal\GdalExecution.h" />
     <ClInclude Include="src\internal\GdalProgressAdapterAccess.h" />
@@ -88,6 +89,7 @@
     <ClCompile Include="src\map\Viewport.cpp" />
     <ClCompile Include="src\vector\VectorDataset.cpp" />
     <ClCompile Include="src\rendering\MapRenderScene.cpp" />
+    <ClCompile Include="src\rendering\PolygonTriangulation.cpp" />
     <ClCompile Include="src\rendering\VectorRenderScene.cpp" />
   </ItemGroup>
 

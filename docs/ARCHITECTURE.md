@@ -288,7 +288,11 @@ Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. For each
 visible map layer, Core sequentially reads Polygon, MultiPolygon,
 CurvePolygon, and MultiSurface features into an owned vector scene,
-linearizing curved geometries. `ViewTransform` captures the `Viewport` once
+linearizing curved geometries. Scene creation also triangulates every polygon
+into an indexed, backend-neutral triangle mesh with the constrained Delaunay
+triangulation of GDAL/OGR and GEOS, retained per polygon so a backend never
+triangulates per frame; a polygon that cannot be triangulated keeps its rings
+and has no mesh. `ViewTransform` captures the `Viewport` once
 per frame so both backends transform every vertex of every layer with the
 same arithmetic as `Viewport::MapToScreen`; GDI draws a screen position in
 the pixel that contains it (`ToPixel`). One backend draws the whole frame.

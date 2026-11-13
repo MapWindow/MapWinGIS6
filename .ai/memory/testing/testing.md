@@ -24,6 +24,13 @@ The C# host calls ActiveX methods late-bound. An invalid layer ID surfaces as
 The host assertion accepts this mapping as well as `COMException`; see
 `samples/CSharp/ActiveXTestHost/MainForm.cs`.
 
+GeoPackage fixture layers need an explicit geometry type: a layer created with
+`wkbUnknown` maps to `ShapeType::NullShape` and is rejected as non-polygonal by
+scene creation, while `wkbMultiPolygon` layers map to `ShapeType::Polygon` and
+accept multipart WKT. The GPKG driver also writes self-intersecting polygon WKT
+without validation, so invalid-geometry behavior is testable through a generated
+GeoPackage.
+
 ## References
 
 - [Testing guide](../../../docs/TESTING.md)

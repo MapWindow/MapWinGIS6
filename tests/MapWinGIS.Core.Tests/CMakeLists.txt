@@ -24,6 +24,7 @@ set(MWG_CORE_TEST_SOURCES
     MapRenderSceneTests.cpp
     MapTests.cpp
     MapViewTests.cpp
+    PolygonTriangulationTests.cpp
     TestData.cpp
     VectorDatasetTests.cpp
     VectorLayerTests.cpp

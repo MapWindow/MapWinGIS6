@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "mapwingis/core/Api.h"
@@ -35,6 +36,20 @@ namespace mwg
         /// A polygon and its rings. The first ring is the exterior boundary.
         using Polygon = std::vector<Ring>;
 
+        /// A backend-neutral triangulated 2D fill mesh for one polygon.
+        ///
+        /// Vertices stay in the source layer's coordinate system. Indices
+        /// occur in groups of three that each describe one triangle; every
+        /// index references a valid vertex. Triangles produced by
+        /// TriangulatePolygon share vertices through the index buffer and
+        /// have consistent counter-clockwise winding. The representation
+        /// contains no graphics-API, Windows, COM, ATL, or MFC types.
+        struct MWG_CORE_API TriangleMesh
+        {
+            std::vector<Point> vertices;
+            std::vector<std::uint32_t> indices;
+        };
+
         /// Owned polygon geometry and its source-coordinate bounds.
         struct MWG_CORE_API VectorRenderScene
         {
@@ -42,6 +57,13 @@ namespace mwg
             /// Feature count of the layer used to create this scene.
             std::int64_t sourceFeatureCount = 0;
             std::vector<Polygon> polygons;
+            /// Triangulated fill meshes prepared once when the scene is
+            /// created, aligned with polygons: fillMeshes[i] belongs to
+            /// polygons[i]. An entry is std::nullopt when that polygon could
+            /// not be triangulated; its rings in polygons remain available
+            /// for outline drawing and for backends that draw rings directly,
+            /// such as GDI.
+            std::vector<std::optional<TriangleMesh>> fillMeshes;
         };
 
         /// Copies polygon geometry from a layer into backend-neutral scene data.
