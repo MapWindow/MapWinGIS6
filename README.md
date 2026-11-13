@@ -39,62 +39,76 @@ release the loaded datasets before switching or refreshing them.
 ### Prerequisites
 
 - Windows
-- Visual Studio 2026 (18.10 or later) with the **Desktop development with C++** workload, including MSVC v145 and Windows SDK 10.0.28000.0
-- CMake 3.28 or later; use the CMake version bundled with Visual Studio 2026 for its `Visual Studio 18 2026` generator
-- .NET 10 SDK to build the C# ActiveX test host
-- Git and PowerShell 7 (`pwsh`)
+- Visual Studio 2026 (18.10 or later) with the **Desktop development with C++** workload, MSVC v145, and Windows SDK 10.0.28000.0
+- The **C++ ATL for latest v145 build tools** component for each architecture to build (x64 and/or x86)
+- CMake 3.28 or later; use Visual Studio 2026's bundled CMake for the `Visual Studio 18 2026` generator
+- Ninja for the CLion and command-line presets
+- .NET 10 SDK and PowerShell 7 (`pwsh`) to build and run the C# ActiveX test host
+- Git
 - About 15 GB of free disk space for dependencies and build outputs
 
-### First build
+### First build with CMake
 
-From the repository root, bootstrap vcpkg and build the solution:
+From a Visual Studio 2026 Developer PowerShell in the repository root,
+bootstrap vcpkg and build and test the x64 Debug preset. The Ninja generator
+uses the compiler and Windows SDK environment from the Developer shell:
 
 ```powershell
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
+cmake --preset x64-debug
+cmake --build --preset x64-debug
+ctest --preset x64-debug
+```
+
+The first configure installs GDAL and its dependencies through vcpkg and can
+take a while; later builds reuse the local binary cache. CMake outputs go under
+`out\b`, separate from the legacy MSBuild output.
+
+The `.slnx` and `.vcxproj` projects remain available during the build-system
+transition. To use the legacy MSBuild build, bootstrap vcpkg and run:
+
+```powershell
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
 ```
 
-The bootstrap script clones and initializes vcpkg in a sibling `vcpkg` folder
-unless an existing vcpkg installation is configured. The first build uses
-vcpkg to compile GDAL and its dependencies, so it can take a while; subsequent
-builds use the local binary cache. No dependency downloads or environment
-configuration are needed by hand.
-
-Alternatively, after bootstrapping vcpkg, open `MapWinGIS6.slnx` in Visual
-Studio and build the `Debug | x64` configuration.
-
-Visual Studio 2026 can also open the repository folder as a CMake project.
-Select the `vs2026-x64` configure preset, then build and test with the matching
-`vs2026-x64-debug` preset. The existing `.slnx` remains available during the
-transition; both build systems keep their outputs separate. See
-[docs/BUILDING.md](docs/BUILDING.md#using-cmake-in-visual-studio) for details.
+Visual Studio 2026 can open the repository folder as a CMake project. Select
+the `vs2026-x64` configure preset and the matching `vs2026-x64-debug` build
+preset. See [docs/BUILDING.md](docs/BUILDING.md) for Visual Studio, CLion,
+command-line, and legacy MSBuild setup.
 
 ### Run the C++ tests
 
-The solution build includes both GoogleTest projects by default. After
-building, run the test executables from the repository root:
+CTest runs the CMake-built test cases:
+
+```powershell
+ctest --preset x64-debug
+```
+
+For the legacy MSBuild build, run its test executables from the repository root:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
 bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
-You can also run the tests through Visual Studio's Test Explorer. For the
-Release configuration, build with `-p:Configuration=Release` and run
+Visual Studio's CMake project exposes discovered tests in Test Explorer. The
+legacy `.slnx` tests also remain available through Test Explorer. For a legacy
+Release build, run
 `bin\Release\x64\MapWinGIS.Core.Tests.exe` and
 `bin\Release\x64\MapWinGIS.ActiveX.Tests.exe`.
 
 For additional configurations, dependency features, and troubleshooting, see
 [docs/BUILDING.md](docs/BUILDING.md).
 
-The CMake build also provides the native `translate` sample and targets for
-building and running the C# ActiveX test host. See the CMake section in the
-build guide for target names and commands.
+The CMake build can also include the native `translate` sample and targets for
+building and running the C# ActiveX test host. Configure with
+`-DMWG_BUILD_SAMPLES=ON` to enable them; see the CMake section in the build
+guide for target names and commands.
 
 CI Release artifacts use the `full-drivers` feature. Their tests require
 HDF5, NetCDF, KML, SpatiaLite, and PostgreSQL support.
-Pull requests build and test both Debug and full-driver Release for x64.
-Each CI build has a 180-minute timeout.
+Pull requests build and test Debug and full-driver Release for x64 using both
+CMake and MSBuild. Each CI build has a 180-minute timeout.
 
 After vector geometry edits, call `VectorDataset::Flush()` before closing to
 persist exact Shapefile and GeoPackage bounds. The flush batches stored-extent

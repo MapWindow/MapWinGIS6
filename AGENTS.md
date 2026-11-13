@@ -35,6 +35,7 @@ complexity or limiting improvements. Do not transliterate the legacy code.
 
 | Path | Contents |
 |---|---|
+| `CMakeLists.txt`, `CMakePresets.json`, `cmake/` | Primary native CMake build and reusable modules |
 | `src/MapWinGIS.Core/` | Core engine. Public headers in `include/mapwingis/`, implementation in `src/`, grouped by area (`core`, `gdal`, `vector`, ...) |
 | `tests/MapWinGIS.Core.Tests/` | Core GoogleTest unit tests and shared fixtures in `TestData.h/.cpp` |
 | `tests/MapWinGIS.ActiveX.Tests/` | ActiveX implementation and COM-hosting GoogleTest unit tests |
@@ -45,14 +46,25 @@ complexity or limiting improvements. Do not transliterate the legacy code.
 
 ```powershell
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
+cmake --preset x64-debug
+cmake --build --preset x64-debug
+ctest --preset x64-debug
+```
+
+Until CMake registers the ActiveX tests, also build the legacy solution and run
+its ActiveX suite:
+
+```powershell
 msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
-bin\Debug\x64\MapWinGIS.Core.Tests.exe
 bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
-Every task must leave the tree in this state: `Debug | x64` builds with no
-new Level 4 warnings and all tests pass. Full build details, vcpkg features
-and switches: [docs/BUILDING.md](docs/BUILDING.md).
+Every task must leave the tree in this state: CMake `Debug | x64` builds with
+no new Level 4 warnings and all non-interactive tests pass. The legacy
+`.slnx`/MSBuild build remains available during the transition; use it when
+changing or validating that build integration. Full build details, CLion and
+Visual Studio setup, vcpkg features, and switches:
+[docs/BUILDING.md](docs/BUILDING.md).
 
 ## Ground rules
 

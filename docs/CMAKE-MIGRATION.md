@@ -389,3 +389,32 @@ Measured for Debug and Release, x64 and Win32 (Ninja presets):
   passed all 14 checks. The legacy MSBuild host project also built.
 - CLion's host run configuration and launching the sample from CLion were not
   checked interactively.
+
+## Legacy build decision gate
+
+**Decision:** retain the `.slnx` and `.vcxproj` files during the transition.
+Do not remove them automatically when Phase 6 documentation is complete.
+
+**Target review date:** 2027-01-15. Revisit this date if the required CI
+observation period has not finished by then.
+
+Review removal only after all of the following are true:
+
+- Phase 1–5 acceptance criteria are met and their results are recorded.
+- Both CMake and MSBuild CI jobs have been green for at least four consecutive
+  weeks.
+- No open issues remain that are tagged or identified as CMake parity gaps.
+- The build and test documentation reflects the supported workflows and the
+  limitations that remain.
+
+The gate is not met yet. The Phase 5 pull request's GitHub Actions results and
+interactive Visual Studio checks (IntelliSense, debugging, and Test Explorer)
+remain unverified. CLion's preset loading, individual-test debugging, and
+sample/host launching also need interactive verification. Ninja cannot pin the
+MSVC toolset or Windows SDK, and CLion's native debugger does not debug the
+managed C# host. GUI and registry-changing checks require an interactive
+Windows session and remain excluded from headless CI.
+
+At the review, record the decision, review date, evidence, and any remaining
+limitations. Removing the legacy project files requires a separate,
+deliberate change after the gate passes.
