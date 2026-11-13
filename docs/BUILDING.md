@@ -235,20 +235,21 @@ when Visual Studio is not on `PATH` or not installed on `C:`.
 
 ### Building with CMake
 
-The CMake build currently covers `MapWinGIS.Core.dll` and `MapWinGIS.ocx`; the
-tests and samples follow. The OCX needs the **C++ ATL for latest v145 build
-tools** component for each architecture you build, and `midl.exe` needs `cl.exe`
-on `PATH`, so configure and build from a Visual Studio toolchain (CLion) or a
-Developer PowerShell. CMake 3.28 or later is required, with either Ninja or the
-Visual Studio generator. Both CMake and Ninja ship with Visual Studio 2026 and
-CLion. Run the bootstrap script first, then
-configure from a VS 2026 Developer PowerShell (or any shell after
+The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, and the native
+GoogleTest suite; the samples follow. The OCX needs the **C++ ATL for latest
+v145 build tools** component for each architecture you build, and `midl.exe`
+needs `cl.exe` on `PATH`, so configure and build from a Visual Studio toolchain
+(CLion) or a Developer PowerShell. CMake 3.28 or later is required, with either
+Ninja or the Visual Studio generator. Both CMake and Ninja ship with Visual
+Studio 2026 and CLion. Run the bootstrap script first, then configure from a VS
+2026 Developer PowerShell (or any shell after
 `vcvarsall.bat x64`):
 
 ```powershell
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 cmake --preset x64-debug
 cmake --build --preset x64-debug
+ctest --preset x64-debug --output-on-failure
 ```
 
 For a Core-only build that does not require MIDL or ATL, configure with

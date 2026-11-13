@@ -3,7 +3,11 @@ param(
     [string]$Configuration = 'Debug',
 
     [ValidateSet('Win32', 'x64')]
-    [string]$Platform = 'x64'
+    [string]$Platform = 'x64',
+
+    [string]$BinDirectory = '',
+
+    [string]$TestExecutable = 'MapWinGIS.ActiveX.Tests.exe'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,9 +17,14 @@ if ([IntPtr]::Size -ne $expectedPointerSize) {
     throw "Run this script in a $Platform PowerShell process to match the control."
 }
 
-$controlPath = [System.IO.Path]::GetFullPath(
-    (Join-Path $PSScriptRoot "..\..\bin\$Configuration\$Platform\MapWinGIS.ocx")
-)
+$binDirectory = if ([string]::IsNullOrWhiteSpace($BinDirectory)) {
+    Join-Path $PSScriptRoot "..\..\bin\$Configuration\$Platform"
+} else {
+    $BinDirectory
+}
+$binDirectory = [System.IO.Path]::GetFullPath($binDirectory)
+
+$controlPath = Join-Path $binDirectory 'MapWinGIS.ocx'
 if (-not (Test-Path -LiteralPath $controlPath -PathType Leaf)) {
     throw "The ActiveX control was not found at '$controlPath'. Build the solution first."
 }
@@ -78,9 +87,7 @@ try {
     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($control)
     $control = $null
 
-    $testExecutable = [System.IO.Path]::GetFullPath(
-        (Join-Path $PSScriptRoot "..\..\bin\$Configuration\$Platform\MapWinGIS.ActiveX.Tests.exe")
-    )
+    $testExecutable = Join-Path $binDirectory $TestExecutable
     if (-not (Test-Path -LiteralPath $testExecutable -PathType Leaf)) {
         throw "The ActiveX hosting test executable was not found at '$testExecutable'. Build the solution first."
     }

@@ -102,13 +102,13 @@ $explainedLinkDifferences = [ordered]@{
 # the target where each difference is expected.
 $explainedCompileDifferencesByTarget = @{
     'MapWinGIS.Core' = [ordered]@{
-        '^/I<vcpkg_installed>/[^/]+/include/geos$' = 'Interface include directory of GEOS::geos_c'
-        '^/DGDAL_DEBUG$'                          = 'Interface definition of the debug GDAL::GDAL'
+        '^/I<vcpkg_installed>/[^/]+/include/geos$'            = 'Interface include directory of GEOS::geos_c'
+        '^/DGDAL_DEBUG$'                                      = 'Interface definition of the debug GDAL::GDAL'
     }
     'MapWinGIS.ActiveX' = [ordered]@{
-        '^/I<intdir>$'                        = 'MIDL output moved from the intermediate directory to <build>/.../midl (D3)'
-        '^/I<builddir>/.*/midl$'              = 'MIDL output directory (D3)'
-        '^/I<vcpkg_installed>/[^/]+/include$' = 'MSBuild vcpkg auto-include; the OCX has no direct vcpkg dependency in CMake'
+        '^/I<intdir>$'                         = 'MIDL output moved from the intermediate directory to <build>/.../midl (D3)'
+        '^/I<builddir>/.*/midl$'               = 'MIDL output directory (D3)'
+        '^/I<vcpkg_installed>/[^/]+/include$'  = 'MSBuild vcpkg auto-include; the OCX has no direct vcpkg dependency in CMake'
     }
 }
 

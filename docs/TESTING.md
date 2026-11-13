@@ -1,8 +1,10 @@
 # Testing
 
-- Framework: GoogleTest, provided by the vcpkg `tests` feature (enabled by
-  default through `MwgVcpkgFeatures`).
-- Core test project: `tests/MapWinGIS.Core.Tests`, built with the solution.
+- Framework: GoogleTest from the vcpkg `tests` feature (enabled by default
+  through the MSBuild `MwgVcpkgFeatures` setting and when `MWG_BUILD_TESTS` is
+  on for CMake).
+- Core test project: `tests/MapWinGIS.Core.Tests`, built with the solution or
+  CMake.
 - ActiveX test project: `tests/MapWinGIS.ActiveX.Tests`, built with the solution.
 - ActiveX implementation units shared by the OCX and its tests are built as
   `MapWinGIS.ActiveX.Impl.lib`.
@@ -24,7 +26,59 @@ bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresul
 Also runnable from Visual Studio Test Explorer (GoogleTest adapter picks it
 up automatically).
 
-Run the build configuration tests from a Visual Studio developer shell:
+### CMake and CTest
+
+The CMake test target uses the same GoogleTest sources and fixtures:
+
+```powershell
+cmake --preset x64-debug
+cmake --build --preset x64-debug
+ctest --preset x64-debug --output-on-failure
+```
+
+`gtest_discover_tests()` discovers individual cases before CTest runs them.
+Each test runs from the build's runtime directory, which contains the OCX,
+dependent DLLs, and GDAL/PROJ data. GoogleTest writes per-test XML files under
+`test-results` in the build directory. CTest can also write a single JUnit
+report with `ctest --test-dir out/b/x64d --output-junit out/b/x64d/ctest.xml`.
+
+To run one case from CTest, match its fully qualified GoogleTest name:
+
+```powershell
+ctest --test-dir out/b/x64d -R 'VectorDatasetTest.ReportsTheDriverAndPath' --output-on-failure
+```
+
+## ActiveX host integration checks
+
+### Registered native control check
+
+The native verification script registers the control for the current user,
+creates it through its ProgID, checks the automation boundary, and removes
+the per-user registration. It checks both per-user registry views first and
+refuses to run if the control's CLSID or either ProgID is already registered.
+Run it from a PowerShell process that matches the target architecture:
+
+```powershell
+pwsh -File tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1 -Configuration Debug -Platform x64
+```
+
+For a CMake build, pass its runtime directory:
+
+```powershell
+pwsh -File tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1 `
+    -Platform x64 -BinDirectory out\b\x64d\bin -TestExecutable MapWinGIS.Core.Tests.exe
+```
+
+CTest registers this registration-based check with the `interactive` label
+when a matching PowerShell process is available. It changes the per-user COM
+registration and is excluded from the CTest presets and CI; run it explicitly
+from an interactive desktop when needed:
+
+```powershell
+ctest --test-dir out/b/x64d -R '^Verify-ActiveXActivation$' --output-on-failure
+```
+
+## Build configuration tests
 
 ```powershell
 pwsh -File build\scripts\Test-BuildConfiguration.ps1
@@ -37,13 +91,13 @@ output folder. CI runs them before the solution build. Builds with
 `full-drivers` also test the release driver set in `GdalEnvironment` tests.
 Pull requests run both Debug and full-driver Release tests for x64.
 
-## ActiveX host integration checks
-
 The native `MapWinGIS.ActiveX.Tests` project covers COM activation, registered
 control rendering through GDI and OpenGL, and GDAL progress/completion events.
 Its registered-control host test also sends a wheel zoom and captured drag to
 the hosted control and verifies their viewport effects. Run this opt-in test
 with `tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1`.
+
+### C# ActiveX test host
 
 The .NET 10 WinForms host exercises the real ActiveX control through `AxHost`
 using registration-free COM activation from its embedded application

@@ -1017,6 +1017,7 @@ TEST(GdalAlgorithmRunner, ConvertsGeoTiffEquivalentlyFromTypedAndCommandLineArgu
 
 TEST(GdalAlgorithmRunner, CallerOwnedPersistentOutputRemainsOpenAndIsReturned)
 {
+    RegisterTestAlgorithms();
     GdalEnvironment::Initialize();
     GdalEnvironment::QuietScope quiet;
     test::TempDirectory directory;
