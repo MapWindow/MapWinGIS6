@@ -9,6 +9,12 @@ The ActiveX project statically links ATL. MFC is not required. The C# ActiveX
 host requires the .NET 10 SDK and an interactive Windows desktop for its
 automated UI and pixel checks.
 
+On the primary development machine the v145 toolset is only installed with
+Visual Studio 18 Community at `D:\Program Files\Microsoft Visual Studio\18\
+Community`; its MSBuild (`MSBuild\Current\Bin\MSBuild.exe`) is the one that
+can build this repository. The VS 2022 BuildTools under
+`C:\Program Files (x86)` only have v170 and fail with MSB8020.
+
 ## CI scope
 
 `.github/workflows/build.yml` runs both CMake and MSBuild jobs. Pull requests

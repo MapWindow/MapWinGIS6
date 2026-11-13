@@ -23,6 +23,9 @@
 #include "VectorLayerRenderer.h"
 #include "ViewTransform.h"
 
+#include "mapwingis/core/Error.h"
+#include "mapwingis/rendering/PolygonTriangulation.h"
+
 namespace
 {
     class BitmapSurface final
@@ -107,7 +110,29 @@ namespace
                {rectangle.xMin, rectangle.yMin}}}}};
     }
 
+    /// Triangulates every polygon of a layer scene, mirroring how Core
+    /// prepares meshes when the scene is created. Polygons that cannot be
+    /// triangulated keep a null mesh so fallback behavior stays testable.
+    void TriangulateScene(mwg::rendering::VectorRenderScene& scene)
+    {
+        scene.fillMeshes.clear();
+        scene.fillMeshes.reserve(scene.polygons.size());
+        for (const mwg::rendering::Polygon& polygon : scene.polygons)
+        {
+            std::optional<mwg::rendering::TriangleMesh> mesh;
+            try
+            {
+                mesh = mwg::rendering::TriangulatePolygon(polygon);
+            }
+            catch (const mwg::CoreError&)
+            {
+            }
+            scene.fillMeshes.push_back(std::move(mesh));
+        }
+    }
+
     /// A map scene with these layers, bottom first, with identities 1, 2, ...
+    /// Every polygon gets its Core triangulation mesh.
     [[nodiscard]] mwg::rendering::MapRenderScene MakeMapScene(
         std::vector<mwg::rendering::VectorRenderScene> layers)
     {
@@ -115,6 +140,7 @@ namespace
         std::uint64_t id = 0;
         for (mwg::rendering::VectorRenderScene& layer : layers)
         {
+            TriangulateScene(layer);
             scene.layers.push_back({mwg::LayerId{++id}, std::move(layer)});
         }
         return scene;
@@ -242,18 +268,51 @@ TEST(VectorLayerRenderer, OpenGlRecreatesLostContextOnLaterDraw)
     EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
 }
 
-TEST(VectorLayerRenderer, OpenGlRejectsConcaveCornerHiddenByDuplicateVertex)
+TEST(VectorLayerRenderer, OpenGlRendersConcavePolygonWithDuplicateVertex)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
+    const RECT bounds{0, 0, 120, 100};
+
+    // Concave corner with a consecutive duplicate vertex; Core
+    // triangulation tolerates the duplicate and produces the fill mesh.
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    FirstPolygon(scene).front() = {
+        {0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}, {5.0, 5.0}, {5.0, 5.0}, {0.0, 10.0}, {0.0, 0.0}};
+    TriangulateScene(scene.layers.front().scene);
+
+    const mwg::Viewport viewport = FitViewport(bounds);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT result = renderer.Draw(surface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 3.0, 3.0), kFill) << "inside the body";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 3.0, 9.0), GetSysColor(COLOR_WINDOW))
+        << "concave notch stays unfilled";
+}
+
+TEST(VectorLayerRenderer, OpenGlRejectsPolygonWithoutFillMesh)
 {
     BitmapSurface surface(120, 100);
     ASSERT_TRUE(surface.IsValid());
     const RECT bounds{0, 0, 120, 100};
 
+    // A triangulation failure leaves the mesh empty while the original
+    // rings remain; OpenGL must decline the frame instead of approximating
+    // the fill so the coordinator falls back to GDI.
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
-    FirstPolygon(scene).front() = {
-        {0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}, {5.0, 5.0}, {5.0, 5.0}, {0.0, 10.0}, {0.0, 0.0}};
+    scene.layers.front().scene.fillMeshes.front().reset();
 
     mwg::activex::OpenGlVectorLayerRenderer renderer;
     EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), S_FALSE);
+    EXPECT_EQ(
+        renderer.GetLastFailureReason(),
+        L"The OpenGL backend requires a triangulated fill mesh for "
+        L"every polygon; this frame was rendered with GDI.");
 }
 
 TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
@@ -271,17 +330,20 @@ TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
     EXPECT_EQ(
         renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds, {-3.0, -3.0, 3.0, 3.0})),
         S_FALSE);
+    EXPECT_EQ(
+        renderer.GetLastFailureReason(),
+        L"The OpenGL backend requires a triangulated fill mesh for "
+        L"every polygon; this frame was rendered with GDI.");
 }
 
-TEST(VectorLayerRenderer, OpenGlRejectsTheFrameWhenAnyLayerIsUnsupported)
+TEST(VectorLayerRenderer, OpenGlRejectsTheFrameWhenAnyLayerHasNoFillMesh)
 {
     BitmapSurface surface(120, 100);
     ASSERT_TRUE(surface.IsValid());
     const RECT bounds{0, 0, 120, 100};
 
     mwg::rendering::MapRenderScene scene = MakeTwoLayerScene();
-    scene.layers.back().scene.polygons.front().push_back(
-        {{8.5, 3.5}, {8.5, 4.5}, {9.5, 4.5}, {9.5, 3.5}, {8.5, 3.5}});
+    scene.layers.back().scene.fillMeshes.front().reset();
 
     mwg::activex::OpenGlVectorLayerRenderer renderer;
     EXPECT_EQ(
@@ -289,8 +351,8 @@ TEST(VectorLayerRenderer, OpenGlRejectsTheFrameWhenAnyLayerIsUnsupported)
         S_FALSE);
     EXPECT_EQ(
         renderer.GetLastFailureReason(),
-        L"The OpenGL preview backend supports only convex, hole-free "
-        L"polygons; this frame was rendered with GDI.");
+        L"The OpenGL backend requires a triangulated fill mesh for "
+        L"every polygon; this frame was rendered with GDI.");
 }
 
 TEST(VectorLayerRenderer, FailsWithoutDrawingNonFiniteCoordinates)
@@ -303,6 +365,7 @@ TEST(VectorLayerRenderer, FailsWithoutDrawingNonFiniteCoordinates)
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
     scene.layers.front().scene.polygons.push_back(
         {{{1.0, 1.0}, {std::numeric_limits<double>::quiet_NaN(), 5.0}, {9.0, 9.0}, {1.0, 1.0}}});
+    TriangulateScene(scene.layers.front().scene);
 
     mwg::activex::VectorLayerRenderer renderer;
     EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), E_INVALIDARG);
@@ -322,6 +385,7 @@ TEST(VectorLayerRenderer, SkipsOnlyTheLayerThatCannotBeDrawn)
     mwg::rendering::MapRenderScene scene = MakeTwoLayerScene();
     scene.layers.front().scene.polygons.push_back(
         {{{0.0, 0.0}, {std::numeric_limits<double>::infinity(), 1.0}, {1.0, 1.0}, {0.0, 0.0}}});
+    TriangulateScene(scene.layers.front().scene);
     const mwg::Viewport viewport = FitViewport(bounds, kTwoLayerExtent);
 
     mwg::activex::VectorLayerRenderer renderer;
@@ -337,33 +401,273 @@ TEST(VectorLayerRenderer, SkipsOnlyTheLayerThatCannotBeDrawn)
     EXPECT_EQ(MapPixel(surface.Get(), viewport, 9.0, 4.0), kFill);
 }
 
-TEST(VectorLayerRenderer, UsesGdiForPolygonWithInteriorRing)
+TEST(VectorLayerRenderer, OpenGlRendersPolygonWithInteriorRing)
 {
     BitmapSurface surface(120, 100);
     ASSERT_TRUE(surface.IsValid());
     ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
     const RECT bounds{0, 0, 120, 100};
-    ASSERT_NE(
-        FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)),
-        0);
+
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    FirstPolygon(scene).push_back(
+        {{3.0, 3.0}, {3.0, 7.0}, {7.0, 7.0}, {7.0, 3.0}, {3.0, 3.0}});
+    TriangulateScene(scene.layers.front().scene);
+
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), S_OK);
+    if (renderer.GetActiveBackend() != mwg::activex::VectorRenderBackendKind::OpenGL)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    EXPECT_EQ(GetPixel(surface.Get(), 30, 50), kFill);
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), GetSysColor(COLOR_WINDOW));
+}
+
+TEST(VectorLayerRenderer, FallsBackToGdiWhenAPolygonHasNoFillMesh)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    scene.layers.front().scene.fillMeshes.front().reset();
+
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), S_OK);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_EQ(
+        renderer.GetDiagnostic(),
+        L"The OpenGL backend requires a triangulated fill mesh for "
+        L"every polygon; this frame was rendered with GDI.");
+}
+
+TEST(VectorLayerRenderer, OpenGlSupportRequiresAMeshForEveryPolygon)
+{
+    const mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    EXPECT_TRUE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(scene));
+
+    // No meshes at all.
+    mwg::rendering::MapRenderScene withoutMeshes = MakeConvexPolygonScene();
+    withoutMeshes.layers.front().scene.fillMeshes.clear();
+    EXPECT_FALSE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
+            withoutMeshes));
+
+    // A triangulation failure for one polygon rejects the whole frame.
+    mwg::rendering::MapRenderScene nullMesh = MakeConvexPolygonScene();
+    nullMesh.layers.front().scene.fillMeshes.front().reset();
+    EXPECT_FALSE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(nullMesh));
+
+    // Non-finite coordinates stay unsupported regardless of the mesh.
+    mwg::rendering::MapRenderScene nonFinite = MakeConvexPolygonScene();
+    FirstPolygon(nonFinite).front().front().x = std::numeric_limits<double>::infinity();
+    EXPECT_FALSE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(nonFinite));
+}
+
+TEST(VectorLayerRenderer, OpenGlSupportsConcaveMultipartAndHoledScenes)
+{
+    mwg::rendering::VectorRenderScene multipart;
+    multipart.extent = {0.0, 0.0, 10.0, 10.0};
+    multipart.sourceFeatureCount = 2;
+    multipart.polygons = {
+        // L-shaped concave polygon.
+        {{{0.0, 0.0}, {10.0, 0.0}, {10.0, 4.0}, {4.0, 4.0}, {4.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}}},
+        // Rectangle with two interior rings.
+        {{{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}},
+         {{2.0, 2.0}, {2.0, 4.0}, {4.0, 4.0}, {4.0, 2.0}, {2.0, 2.0}},
+         {{6.0, 6.0}, {6.0, 8.0}, {8.0, 8.0}, {8.0, 6.0}, {6.0, 6.0}}}};
+    TriangulateScene(multipart);
+
+    const mwg::rendering::MapRenderScene scene =
+        MakeMapScene({multipart, MakeRectangleLayer({20.0, 20.0, 30.0, 30.0})});
+    EXPECT_TRUE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(scene));
+
+    // A malformed mesh reference also rejects the scene.
+    mwg::rendering::MapRenderScene broken = scene;
+    broken.layers.front().scene.fillMeshes.front()->indices.resize(4);
+    EXPECT_FALSE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(broken));
+}
+
+TEST(VectorLayerRenderer, OpenGlRendersLShapedPolygon)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
+    const RECT bounds{0, 0, 120, 100};
 
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
     FirstPolygon(scene).front() = {
-        {0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}};
-    FirstPolygon(scene).push_back(
-        {{3.0, 3.0}, {3.0, 7.0}, {7.0, 7.0}, {7.0, 3.0}, {3.0, 3.0}});
-    mwg::activex::VectorLayerRenderer renderer;
-    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), S_OK);
+        {0.0, 0.0}, {10.0, 0.0}, {10.0, 4.0}, {4.0, 4.0}, {4.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}};
+    TriangulateScene(scene.layers.front().scene);
 
-    EXPECT_EQ(
-        renderer.GetActiveBackend(),
-        mwg::activex::VectorRenderBackendKind::Gdi);
-    EXPECT_EQ(
-        renderer.GetDiagnostic(),
-        L"The OpenGL preview backend supports only convex, hole-free "
-        L"polygons; this frame was rendered with GDI.");
-    EXPECT_EQ(GetPixel(surface.Get(), 30, 50), kFill);
-    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), GetSysColor(COLOR_WINDOW));
+    const mwg::Viewport viewport = FitViewport(bounds);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT result = renderer.Draw(surface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 2.0), kFill) << "lower arm";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 2.0, 7.0), kFill) << "left arm";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 7.0), GetSysColor(COLOR_WINDOW))
+        << "indentation stays unfilled";
+}
+
+TEST(VectorLayerRenderer, OpenGlRendersPolygonWithMultipleInteriorRings)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
+    const RECT bounds{0, 0, 120, 100};
+
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    mwg::rendering::Polygon& polygon = FirstPolygon(scene);
+    polygon.push_back({{2.0, 2.0}, {2.0, 4.0}, {4.0, 4.0}, {4.0, 2.0}, {2.0, 2.0}});
+    polygon.push_back({{6.0, 6.0}, {6.0, 8.0}, {8.0, 8.0}, {8.0, 6.0}, {6.0, 6.0}});
+    TriangulateScene(scene.layers.front().scene);
+
+    const mwg::Viewport viewport = FitViewport(bounds);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT result = renderer.Draw(surface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 3.0, 3.0), GetSysColor(COLOR_WINDOW))
+        << "first hole stays unfilled";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 7.0), GetSysColor(COLOR_WINDOW))
+        << "second hole stays unfilled";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 5.0, 5.0), kFill) << "between the holes";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 1.0, 5.0), kFill) << "beside the first hole";
+}
+
+TEST(VectorLayerRenderer, OpenGlRendersMultipartPolygonAndOutlinesFollowRings)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
+    const RECT bounds{0, 0, 120, 100};
+
+    mwg::rendering::VectorRenderScene multipart;
+    multipart.extent = {0.0, 0.0, 10.0, 10.0};
+    multipart.sourceFeatureCount = 2;
+    multipart.polygons = {
+        {{{0.0, 0.0}, {6.0, 0.0}, {6.0, 6.0}, {0.0, 6.0}, {0.0, 0.0}}},
+        {{{4.0, 4.0}, {10.0, 4.0}, {10.0, 10.0}, {4.0, 10.0}, {4.0, 4.0}},
+         {{6.0, 6.0}, {6.0, 8.0}, {8.0, 8.0}, {8.0, 6.0}, {6.0, 6.0}}}};
+    const mwg::rendering::MapRenderScene scene = MakeMapScene({multipart});
+
+    const mwg::Viewport viewport = FitViewport(bounds);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT result = renderer.Draw(surface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 2.0, 2.0), kFill) << "first component";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 9.0, 5.0), kFill) << "second component body";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 7.0), GetSysColor(COLOR_WINDOW))
+        << "hole of the second component";
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 8.0, 2.0), GetSysColor(COLOR_WINDOW))
+        << "gap between the components";
+}
+
+TEST(VectorLayerRenderer, OpenGlDoesNotDrawInternalTriangleEdges)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    const mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    const mwg::Viewport viewport = FitViewport(bounds);
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT result = renderer.Draw(surface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+
+    // A convex quad triangulates into two triangles whose diagonal crosses
+    // the polygon interior. Only the original ring may be outlined, so no
+    // interior pixel may have the outline color.
+    constexpr COLORREF kOutline = RGB(24, 58, 82);
+    for (double t = 0.15; t < 0.9; t += 0.1)
+    {
+        for (const mwg::rendering::Point diagonal :
+                 {mwg::rendering::Point{1.0 + 8.0 * t, 1.0 + 8.0 * t},
+                  mwg::rendering::Point{1.0 + 8.0 * t, 9.0 - 8.0 * t}})
+        {
+            const auto screen = viewport.MapToScreen({diagonal.x, diagonal.y});
+            ASSERT_TRUE(screen.has_value());
+            const auto pixel = mwg::ToPixel(*screen);
+            ASSERT_TRUE(pixel.has_value());
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    EXPECT_NE(GetPixel(surface.Get(), pixel->x + dx, pixel->y + dy), kOutline)
+                        << "diagonal point (" << diagonal.x << ", " << diagonal.y << ")";
+                }
+            }
+        }
+    }
+}
+
+TEST(VectorLayerRenderer, GdiAndOpenGlAgreeOnConcaveHoledScene)
+{
+    BitmapSurface gdiSurface(120, 100);
+    BitmapSurface openGlSurface(120, 100);
+    ASSERT_TRUE(gdiSurface.IsValid());
+    ASSERT_TRUE(openGlSurface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {0.0, 0.0, 10.0, 10.0};
+    layer.sourceFeatureCount = 2;
+    layer.polygons = {
+        {{{0.0, 0.0}, {10.0, 0.0}, {10.0, 4.0}, {4.0, 4.0}, {4.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}}},
+        {{{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}},
+         {{3.0, 3.0}, {3.0, 7.0}, {7.0, 7.0}, {7.0, 3.0}, {3.0, 3.0}}}};
+    const mwg::rendering::MapRenderScene scene = MakeMapScene({layer});
+    const mwg::Viewport viewport = FitViewport(bounds);
+
+    mwg::activex::GdiVectorLayerRenderer gdi;
+    ASSERT_NE(FillRect(gdiSurface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    ASSERT_EQ(gdi.Draw(gdiSurface.Get(), bounds, scene, viewport), S_OK);
+
+    mwg::activex::OpenGlVectorLayerRenderer openGl;
+    const HRESULT result = openGl.Draw(openGlSurface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+
+    // Sample points on a coarse grid that stays at least one map unit from
+    // every polygon and hole boundary; both backends must classify them
+    // identically.
+    for (double y = 2.0; y <= 8.0; y += 3.0)
+    {
+        for (double x = 2.0; x <= 8.0; x += 3.0)
+        {
+            const auto screen = viewport.MapToScreen({x, y});
+            ASSERT_TRUE(screen.has_value());
+            const auto pixel = mwg::ToPixel(*screen);
+            ASSERT_TRUE(pixel.has_value());
+            EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel->x, pixel->y),
+                      GetPixel(openGlSurface.Get(), pixel->x, pixel->y))
+                << "map point (" << x << ", " << y << ")";
+        }
+    }
 }
 
 TEST(VectorLayerRenderer, HonorsCpuPreferenceAndReportsTheSelectedBackend)
@@ -685,6 +989,68 @@ TEST(VectorLayerRenderer, OverlappingLayersDrawBottomFirst)
     std::swap(scene.layers[0], scene.layers[1]);
     ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(GetPixel(surface.Get(), 40, 50), kFill);
+}
+
+TEST(VectorLayerRenderer, GdiAndOpenGlAgreeOnOverlappingPolygonsInOneLayer)
+{
+    BitmapSurface gdiSurface(120, 100);
+    BitmapSurface openGlSurface(120, 100);
+    ASSERT_TRUE(gdiSurface.IsValid());
+    ASSERT_TRUE(openGlSurface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    mwg::Viewport viewport(120, 100);
+    viewport.SetView({60.0, 50.0}, 1.0);
+
+    // One layer with two overlapping polygons. The second polygon is drawn
+    // after the first, so its fill must cover the first polygon's outlines
+    // inside the overlap, exactly as the GDI backend paints them.
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {20.25, 10.25, 90.25, 70.25};
+    layer.sourceFeatureCount = 2;
+    layer.polygons = {
+        {{{20.25, 10.25}, {60.25, 10.25}, {60.25, 50.25}, {20.25, 50.25}, {20.25, 10.25}}},
+        {{{40.25, 30.25}, {90.25, 30.25}, {90.25, 70.25}, {40.25, 70.25}, {40.25, 30.25}}}};
+    const mwg::rendering::MapRenderScene scene = MakeMapScene({layer});
+
+    mwg::activex::GdiVectorLayerRenderer gdi;
+    ASSERT_NE(FillRect(gdiSurface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    ASSERT_EQ(gdi.Draw(gdiSurface.Get(), bounds, scene, viewport), S_OK);
+
+    mwg::activex::OpenGlVectorLayerRenderer openGl;
+    const HRESULT result = openGl.Draw(openGlSurface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+
+    // The first polygon's right edge (pixel column 60) and top edge (pixel
+    // row 49) stay visible only outside the second polygon; inside the
+    // overlap the second polygon's fill covers them in both backends.
+    constexpr COLORREF kOutline = RGB(24, 58, 82);
+    for (const mwg::PixelPoint pixel : {mwg::PixelPoint{60, 60}, {50, 49}})
+    {
+        EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel.x, pixel.y), kFill)
+            << "GDI at " << pixel.x << ", " << pixel.y;
+        EXPECT_EQ(GetPixel(openGlSurface.Get(), pixel.x, pixel.y), kFill)
+            << "OpenGL at " << pixel.x << ", " << pixel.y;
+    }
+    for (const mwg::PixelPoint pixel : {mwg::PixelPoint{60, 80}, {40, 60}})
+    {
+        EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel.x, pixel.y), kOutline)
+            << "GDI at " << pixel.x << ", " << pixel.y;
+        EXPECT_EQ(GetPixel(openGlSurface.Get(), pixel.x, pixel.y), kOutline)
+            << "OpenGL at " << pixel.x << ", " << pixel.y;
+    }
+
+    // Away from the boundaries both backends must agree as well.
+    for (const mwg::PixelPoint pixel :
+             {mwg::PixelPoint{30, 70}, {70, 40}, {10, 10}})
+    {
+        EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel.x, pixel.y),
+                  GetPixel(openGlSurface.Get(), pixel.x, pixel.y))
+            << pixel.x << ", " << pixel.y;
+    }
 }
 
 TEST(VectorLayerRenderer, DrawsVerySmallAndVeryElongatedTargets)

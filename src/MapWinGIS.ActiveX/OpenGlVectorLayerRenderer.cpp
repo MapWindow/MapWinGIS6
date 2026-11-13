@@ -2,12 +2,16 @@
 
 /**
  * @file OpenGlVectorLayerRenderer.cpp
- * @brief Renders convex polygon scenes with WGL and copies pixels to GDI.
+ * @brief Renders triangulated polygon scenes with WGL and copies pixels to GDI.
  *
  * Owns one reusable OpenGL context and draws into a framebuffer object so
- * pixel readback is not subject to window pixel-ownership rules. Scenes that
- * need unsupported polygon features, or systems without framebuffer objects,
- * return S_FALSE so the coordinator can use its GDI backend.
+ * pixel readback is not subject to window pixel-ownership rules. Polygon
+ * fills use the indexed triangle meshes prepared by the Core render scene;
+ * outlines follow the original rings. Each polygon is filled and outlined
+ * before the next one is drawn, matching the GDI backend's painter order.
+ * Scenes with polygons that lack a
+ * usable mesh, or systems without framebuffer objects, return S_FALSE so
+ * the coordinator can use its GDI backend.
  */
 #include "OpenGlVectorLayerRenderer.h"
 
@@ -131,110 +135,72 @@ namespace mwg::activex
             bool _valid;
         };
 
-        [[nodiscard]] bool IsSamePoint(
-            const rendering::Point& first,
-            const rendering::Point& second) noexcept
+        /// Returns true when the mesh can feed glVertexPointer and
+        /// glDrawElements safely: complete triangles, in-range indices and
+        /// finite vertex coordinates.
+        [[nodiscard]] bool IsMeshUsable(const rendering::TriangleMesh& mesh) noexcept
         {
-            return first.x == second.x && first.y == second.y;
-        }
-
-        /// Returns true when the ring is a simple, strictly convex polygon.
-        /// Consecutive duplicate vertices are ignored so they cannot hide a
-        /// concave corner, and the total turning angle must be one full turn
-        /// so self-intersecting rings with consistent turns are rejected.
-        [[nodiscard]] bool IsConvex(const rendering::Ring& ring) noexcept
-        {
-            std::vector<rendering::Point> vertices;
-            try
-            {
-                vertices.reserve(ring.size());
-                for (const rendering::Point& point : ring)
-                {
-                    if (vertices.empty() || !IsSamePoint(vertices.back(), point))
-                    {
-                        vertices.push_back(point);
-                    }
-                }
-            }
-            catch (const std::bad_alloc&)
+            if (mesh.vertices.empty() ||
+                mesh.indices.empty() ||
+                mesh.indices.size() % 3U != 0U ||
+                mesh.indices.size() >
+                    static_cast<std::size_t>(std::numeric_limits<GLsizei>::max()))
             {
                 return false;
             }
 
-            while (vertices.size() > 1 && IsSamePoint(vertices.front(), vertices.back()))
+            for (const std::uint32_t index : mesh.indices)
             {
-                vertices.pop_back();
-            }
-
-            const std::size_t count = vertices.size();
-            if (count < 3)
-            {
-                return false;
-            }
-
-            constexpr double kPi = 3.14159265358979323846;
-            double orientation = 0.0;
-            double totalTurn = 0.0;
-            for (std::size_t index = 0; index < count; ++index)
-            {
-                const rendering::Point& first = vertices[index];
-                const rendering::Point& second = vertices[(index + 1) % count];
-                const rendering::Point& third = vertices[(index + 2) % count];
-                const double cross =
-                    (second.x - first.x) * (third.y - second.y) -
-                    (second.y - first.y) * (third.x - second.x);
-                const double dot =
-                    (second.x - first.x) * (third.x - second.x) +
-                    (second.y - first.y) * (third.y - second.y);
-                if (!std::isfinite(cross) || !std::isfinite(dot))
+                if (index >= mesh.vertices.size())
                 {
                     return false;
                 }
+            }
 
-                if (cross == 0.0)
-                {
-                    // Collinear vertices are fine, but a reversal is a spike
-                    // whose overlapping edges GL_POLYGON cannot represent.
-                    if (dot < 0.0)
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-
-                if (orientation == 0.0)
-                {
-                    orientation = cross;
-                }
-                else if ((orientation > 0.0) != (cross > 0.0))
+            for (const rendering::Point& point : mesh.vertices)
+            {
+                if (!std::isfinite(point.x) || !std::isfinite(point.y))
                 {
                     return false;
                 }
-
-                totalTurn += std::atan2(cross, dot);
             }
 
-            // With consistent turn signs the total is a multiple of 2*pi;
-            // only a single full turn describes a simple ring.
-            return orientation != 0.0 && std::abs(totalTurn) < 3.0 * kPi;
+            return true;
         }
 
+        /// Returns true when every polygon of the scene has a usable
+        /// triangulated fill mesh and finite coordinates. Meshes are
+        /// prepared once when the Core scene is created; a polygon without
+        /// one cannot be filled correctly, so the whole frame is reported
+        /// as unsupported and the coordinator uses GDI.
         [[nodiscard]] bool IsSupported(const rendering::MapRenderScene& scene) noexcept
         {
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
-                for (const rendering::Polygon& polygon : layer.scene.polygons)
+                const rendering::VectorRenderScene& vectorScene = layer.scene;
+                if (vectorScene.fillMeshes.size() != vectorScene.polygons.size())
                 {
-                    if (polygon.size() != 1 || !IsConvex(polygon.front()))
+                    return false;
+                }
+
+                for (std::size_t index = 0; index < vectorScene.polygons.size(); ++index)
+                {
+                    const rendering::Polygon& polygon = vectorScene.polygons[index];
+                    const std::optional<rendering::TriangleMesh>& mesh =
+                        vectorScene.fillMeshes[index];
+                    if (!mesh.has_value() || !IsMeshUsable(*mesh))
                     {
                         return false;
                     }
 
-                    for (const rendering::Point& point : polygon.front())
+                    for (const rendering::Ring& ring : polygon)
                     {
-                        if (!std::isfinite(point.x) || !std::isfinite(point.y))
+                        for (const rendering::Point& point : ring)
                         {
-                            return false;
+                            if (!std::isfinite(point.x) || !std::isfinite(point.y))
+                            {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -243,15 +209,52 @@ namespace mwg::activex
             return true;
         }
 
-        /// Draws the convex single-ring polygons of one layer; IsSupported
-        /// must have accepted the scene.
-        void DrawLayer(
-            const rendering::VectorRenderScene& scene,
+        /// Draws one polygon's triangulated fill as indexed triangles through
+        /// the client-side vertex-array API. The caller must have enabled
+        /// GL_VERTEX_ARRAY, and IsSupported must have accepted the scene.
+        [[nodiscard]] HRESULT DrawPolygonFill(
+            const rendering::TriangleMesh& mesh,
             const ViewTransform& transform) noexcept
         {
-            for (const rendering::Polygon& polygon : scene.polygons)
+            // Client-side vertex arrays must stay alive until
+            // glDrawElements has consumed them; the transformed copy is
+            // local to this polygon's draw call.
+            std::vector<GLdouble> deviceVertices;
+            try
             {
-                const rendering::Ring& ring = polygon.front();
+                deviceVertices.reserve(mesh.vertices.size() * 2U);
+                for (const rendering::Point& point : mesh.vertices)
+                {
+                    deviceVertices.push_back(transform.ToDeviceX(point));
+                    deviceVertices.push_back(transform.ToDeviceY(point));
+                }
+            }
+            catch (const std::bad_alloc&)
+            {
+                return E_OUTOFMEMORY;
+            }
+            catch (const std::length_error&)
+            {
+                return E_OUTOFMEMORY;
+            }
+
+            glVertexPointer(2, GL_DOUBLE, 0, deviceVertices.data());
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(mesh.indices.size()),
+                GL_UNSIGNED_INT,
+                mesh.indices.data());
+            return S_OK;
+        }
+
+        /// Draws one polygon's original ring boundaries as outlines.
+        /// Triangle edges are not polygon boundaries and are never drawn.
+        void DrawPolygonOutlines(
+            const rendering::Polygon& polygon,
+            const ViewTransform& transform) noexcept
+        {
+            for (const rendering::Ring& ring : polygon)
+            {
                 std::size_t count = ring.size();
                 if (count > 1 &&
                     ring.front().x == ring.back().x &&
@@ -260,24 +263,46 @@ namespace mwg::activex
                     --count;
                 }
 
-                glColor3ub(61, 122, 169);
-                glBegin(GL_POLYGON);
-                for (std::size_t index = 0; index < count; ++index)
+                if (count < 3)
                 {
-                    const rendering::Point& point = ring[index];
-                    glVertex2d(transform.ToDeviceX(point), transform.ToDeviceY(point));
+                    continue;
                 }
-                glEnd();
 
-                glColor3ub(24, 58, 82);
                 glBegin(GL_LINE_LOOP);
-                for (std::size_t index = 0; index < count; ++index)
+                for (std::size_t vertex = 0; vertex < count; ++vertex)
                 {
-                    const rendering::Point& point = ring[index];
+                    const rendering::Point& point = ring[vertex];
                     glVertex2d(transform.ToDeviceX(point), transform.ToDeviceY(point));
                 }
                 glEnd();
             }
+        }
+
+        /// Draws one layer polygon by polygon, filling each polygon from its
+        /// triangulated mesh and outlining its rings before advancing to the
+        /// next one, so overlapping polygons keep the same painter order as
+        /// the GDI backend.
+        [[nodiscard]] HRESULT DrawLayer(
+            const rendering::VectorRenderScene& scene,
+            const ViewTransform& transform) noexcept
+        {
+            glEnableClientState(GL_VERTEX_ARRAY);
+            for (std::size_t index = 0; index < scene.polygons.size(); ++index)
+            {
+                glColor3ub(61, 122, 169);
+                const HRESULT fillResult =
+                    DrawPolygonFill(*scene.fillMeshes[index], transform);
+                if (FAILED(fillResult))
+                {
+                    glDisableClientState(GL_VERTEX_ARRAY);
+                    return fillResult;
+                }
+
+                glColor3ub(24, 58, 82);
+                DrawPolygonOutlines(scene.polygons[index], transform);
+            }
+            glDisableClientState(GL_VERTEX_ARRAY);
+            return S_OK;
         }
 
         [[nodiscard]] std::int64_t GetWidth(const RECT& bounds) noexcept
@@ -292,6 +317,12 @@ namespace mwg::activex
     }
 
     OpenGlVectorLayerRenderer::OpenGlVectorLayerRenderer() noexcept = default;
+
+    bool OpenGlVectorLayerRenderer::IsSceneSupported(
+        const rendering::MapRenderScene& scene) noexcept
+    {
+        return IsSupported(scene);
+    }
 
     OpenGlVectorLayerRenderer::~OpenGlVectorLayerRenderer()
     {
@@ -564,8 +595,8 @@ namespace mwg::activex
         if (!IsSupported(scene))
         {
             _lastFailureReason =
-                L"The OpenGL preview backend supports only convex, hole-free "
-                L"polygons; this frame was rendered with GDI.";
+                L"The OpenGL backend requires a triangulated fill mesh for "
+                L"every polygon; this frame was rendered with GDI.";
             return {S_FALSE, std::nullopt};
         }
 
@@ -680,7 +711,12 @@ namespace mwg::activex
 
         for (const rendering::LayerRenderScene& layer : scene.layers)
         {
-            DrawLayer(layer.scene, *transform);
+            const HRESULT layerResult = DrawLayer(layer.scene, *transform);
+            if (FAILED(layerResult))
+            {
+                _lastFailureReason = L"OpenGL could not allocate its vertex buffers.";
+                return layerResult;
+            }
         }
 
         glFlush();
