@@ -102,8 +102,15 @@ For additional configurations, dependency features, and troubleshooting, see
 
 The CMake build can also include the native `translate` sample and targets for
 building and running the C# ActiveX test host. Configure with
-`-DMWG_BUILD_SAMPLES=ON` to enable them; see the CMake section in the build
-guide for target names and commands.
+`-DMWG_BUILD_SAMPLES=ON` to enable them:
+
+```powershell
+# Configure with samples and build or launch the C# test host
+cmake --preset x64-debug -DMWG_BUILD_SAMPLES=ON
+cmake --build --preset x64-debug --target run_activex_host
+```
+
+See the CMake section in the build guide for target names and additional commands.
 
 CI Release artifacts use the `full-drivers` feature. Their tests require
 HDF5, NetCDF, KML, SpatiaLite, and PostgreSQL support.

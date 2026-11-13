@@ -1,6 +1,6 @@
 ---
 name: implementing-plan-steps
-description: Implements the next unchecked step of a Markdown implementation plan in an isolated git worktree, reads relevant repository memory, adds tests, verifies the build, reviews memory for useful updates, updates the plan checklist, commits, and opens a pull request against the development branch. Use when the user asks to implement, continue, or work on the next step of a plan file.
+description: Implements the next unchecked step of a Markdown implementation plan in an isolated git worktree, reads relevant repository memory, adds tests, verifies the build, reviews memory for useful updates, updates the plan checklist, commits, and opens a pull request against the development branch or an open previous-phase PR for stacked work. Use when the user asks to implement, continue, or work on the next step of a plan file.
 argument-hint: Path to the plan file (e.g. _plans/My-Feature.md)
 disable-model-invocation: true
 ---
@@ -46,16 +46,25 @@ Copy this checklist and track progress:
 
 **2. Select the step.** Read the plan. Pick the first unchecked item in its checklist. If all items are checked, report that and stop.
 
-Record the supplied plan's path and contents before creating the worktree. For a repository-local plan, record its repository-relative path. If its supplied version is untracked, uncommitted, or differs from the version on `development`, copy that version to the same path in the worktree before switching directories. The worktree copy is the plan used and updated in step 8. For a plan outside the repository, keep using and updating its supplied original path, and leave it uncommitted.
+Record the supplied plan's path and contents before creating the worktree. For a repository-local plan, record its repository-relative path. If its supplied version is untracked, uncommitted, or differs from the version on the selected base branch, copy that version to the same path in the worktree before switching directories. The worktree copy is the plan used and updated in step 8. For a plan outside the repository, keep using and updating its supplied original path, and leave it uncommitted.
 
-**3. Create worktree.**
+**3. Choose the base and create the worktree.**
+
+Check whether the previous phase's pull request is still open. If it is, use
+that PR's head branch as the base so this step becomes a stacked PR. Otherwise,
+use `development`. If the matching previous-phase PR cannot be identified
+unambiguously, ask the user which PR to stack on before creating the worktree.
+Fetch the selected base branch from `origin` and use it for the worktree:
 
 ```bash
-git fetch origin
-git worktree add -b <branch> .worktrees/<branch> origin/development
+git fetch origin <base-branch>
+git worktree add -b <branch> .worktrees/<branch> origin/<base-branch>
 ```
 
-`<branch>`: short kebab-case name derived from the step. Work only inside the worktree from here on.
+`<base-branch>` is `development` when there is no open previous-phase PR, or
+the head branch of that open PR. `<branch>`: short kebab-case name derived
+from the step. Record the selected base branch for the PR in step 10. Work only
+inside the worktree from here on.
 
 Before switching directories, ensure the supplied repository-local plan is present at its recorded repository-relative path in the worktree. Copy the supplied version there if the worktree does not contain that version.
 
@@ -76,7 +85,7 @@ Compare warnings with the latest known `Debug | x64` baseline for the same toolc
 
 **9. Commit.** Before committing, check that `README.md` and the Markdown files in `docs/` are up to date for the selected step; update directly related documentation as needed. Make one commit containing code, tests, relevant documentation and memory changes, and the plan update if the plan is repository-local. Follow [`.github/commit-conventions.instructions.md`](../../commit-conventions.instructions.md), including its gitmoji, conventional type and scope, and description-list format. Example subject: `✨ feat(core): add memory store serialization`.
 
-**10. Push and open PR** against `development`:
+**10. Push and open PR** against the base branch selected in step 3:
 - Title: the plan title.
 - Body: motivation, context, key design decisions, dependencies. Short. No filler or empty sections.
 - Mention memory changes briefly if any were made.
@@ -85,7 +94,7 @@ Compare warnings with the latest known `Debug | x64` baseline for the same toolc
 
 ```bash
 git push -u origin <branch>
-gh pr create --base development --title "<plan title>" --body-file <temporary-body-file>
+gh pr create --base <base-branch> --title "<plan title>" --body-file <temporary-body-file>
 ```
 
 If a build or test still fails after three focused fix-and-rerun attempts, stop and report the failure rather than looping indefinitely.
