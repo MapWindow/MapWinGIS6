@@ -24,7 +24,7 @@ The ActiveX project uses ATL and statically links it.
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 cmake --preset x64-debug
 cmake --build --preset x64-debug
-ctest --preset x64-debug --output-on-failure -LE interactive
+ctest --preset x64-debug
 ```
 
 The first configure installs GDAL and its dependencies and can take a while;
@@ -159,7 +159,7 @@ paths can contain spaces.
 | Configurations | `Debug` (`/MDd`, `_DEBUG`), `Release` (`/MD`, `/O2`) |
 | Platforms | `x64`, `Win32` |
 | Triplets | `x64-windows-v145`, `x86-windows-v145` (in `build/triplets`, pinned to v145) |
-| Output | `bin\<Configuration>\<Platform>\` |
+| Output | MSBuild: `bin\<Configuration>\<Platform>\`; CMake build tree: `out\b\<preset directory>\` (runtime files under `bin\`) |
 | Intermediates | `obj\<Project>\<Configuration>\<Platform>\` |
 
 Nothing is written outside the repository and no environment variables are
@@ -187,8 +187,8 @@ CI uses this feature set for Release artifacts. Core tests built with
 `full-drivers` require HDF5, NetCDF, LIBKML, PostgreSQL, and SpatiaLite support.
 The SpatiaLite test creates a spatial database without an external server.
 Pull requests and pushes to `development` build and test Debug and full-driver
-Release for x64. Pushes to `main` also cover Win32. Each job has a
-180-minute timeout.
+Release for x64 with both CMake and MSBuild. Pushes to `main` also cover Win32.
+Each job has a 180-minute timeout.
 
 ### Runtime data
 
@@ -212,7 +212,9 @@ rebuild or a second platform is fast. To share a cache across machines, set
 $env:VCPKG_BINARY_SOURCES = 'clear;files,\\server\share\vcpkg-cache,readwrite'
 ```
 
-## Running the tests
+## Running the legacy MSBuild tests
+
+These commands run the MSBuild test executables:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
@@ -270,22 +272,23 @@ hardcode a Visual Studio installation path in repository files.
 
 ### Building with CMake
 
-The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, and the native
-GoogleTest suite. Set `MWG_BUILD_SAMPLES=ON` to add the `translate` sample and,
-when .NET and PowerShell 7 are installed, targets to build and launch the C#
-ActiveX test host. The OCX needs the **C++ ATL for latest v145 build tools**
-component for each architecture you build. CMake 3.28 or later is required;
-use the Visual Studio 2026-bundled CMake for the Visual Studio 18 2026
-generator. Run the vcpkg bootstrap first. Ninja presets need an MSVC
-environment: use a Visual Studio toolchain in CLion or configure from a VS
-2026 Developer PowerShell. With the Ninja generator, MIDL also needs `cl.exe`
-on `PATH`.
+The CMake build covers `MapWinGIS.Core.dll`, `MapWinGIS.ocx`, and the Core
+GoogleTest suite. It does not yet build the ActiveX-specific test executable;
+run the legacy ActiveX tests until CMake registers that suite. Set
+`MWG_BUILD_SAMPLES=ON` to add the `translate` sample and, when .NET and
+PowerShell 7 are installed, targets to build and launch the C# ActiveX test
+host. The OCX needs the **C++ ATL for latest v145 build tools** component for
+each architecture you build. CMake 3.28 or later is required; use the Visual
+Studio 2026-bundled CMake for the Visual Studio 18 2026 generator. Run the
+vcpkg bootstrap first. Ninja presets need an MSVC environment: use a Visual
+Studio toolchain in CLion or configure from a VS 2026 Developer PowerShell.
+With the Ninja generator, MIDL also needs `cl.exe` on `PATH`.
 
 ```powershell
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 cmake --preset x64-debug
 cmake --build --preset x64-debug
-ctest --preset x64-debug --output-on-failure -LE interactive
+ctest --preset x64-debug
 ```
 
 The root `CMakeLists.txt` resolves the vcpkg root before `project()` in this
@@ -361,16 +364,24 @@ For a Core-only build that does not require MIDL or ATL, configure with
   (`amd64` for x64, `x86` or `amd64_x86` for x86); a mismatch stops configure
   with an explanation.
 
-| CMake option | Default | MSBuild equivalent |
+| CMake setting | Default / unset behavior | MSBuild equivalent |
 |---|---|---|
-| `MWG_WINDOWS_SDK` | `10.0.28000.0` | `MwgWindowsSdk` (`10.0` = newest) |
+| `MWG_WINDOWS_SDK` | `10.0.28000.0` | `MwgWindowsSdk` (`10.0` selects newest) |
 | `MWG_VCPKG_ROOT` | resolved | `MwgVcpkgRoot` |
 | `VCPKG_MANIFEST_FEATURES` | `tests` | `MwgVcpkgFeatures` |
 | `MWG_ENABLE_ASAN` | `OFF` | `MwgEnableAsan` |
 | `MWG_DEPLOY_RUNTIME_DATA` | `ON` | `MwgDeployRuntimeData` |
 | `MWG_BUILD_TESTS` | `ON` | — (adds the `tests` feature) |
 | `MWG_BUILD_ACTIVEX` | `ON` | — (set `OFF` for a Core-only build) |
-| `MWG_BUILD_SAMPLES` | `OFF` | — |
+| `MWG_BUILD_SAMPLES` | unset (false in `if()`) | — |
+
+`MWG_BUILD_SAMPLES` is read by CMake but is not declared with `option()`.
+Passing `-DMWG_BUILD_SAMPLES=ON` sets it for that configure; because there is
+no declared option, it has no default cache entry and typos are not checked.
+
+With the CMake Visual Studio generator, `MWG_WINDOWS_SDK=10.0` selects the
+newest installed SDK. With Ninja, `10.0` accepts the SDK already selected by
+`vcvars`; Ninja cannot select or pin an SDK.
 
 Machine-specific settings belong in an uncommitted `CMakeUserPresets.json`
 that inherits from the presets, for example:
@@ -477,9 +488,12 @@ the x64 component alone is not enough.
 **Ninja reports a Windows SDK mismatch**
 Ninja takes the SDK from the vcvars environment and cannot pin it. Set the
 Visual Studio toolchain's Windows SDK version to `MWG_WINDOWS_SDK`, or use
-`-DMWG_WINDOWS_SDK=10.0` to accept the newest installed SDK.
+`-DMWG_WINDOWS_SDK=10.0` to accept the SDK already selected by vcvars. For the
+Visual Studio generator, `10.0` selects the newest installed SDK.
 
-**A CMake-built activation script cannot find the OCX or test executable**
-Pass the CMake runtime directory with `-BinDirectory`, for example
-`-BinDirectory out\b\x64d\bin`. The default remains `bin\<Configuration>\<Platform>`
-for MSBuild users.
+**The C# ActiveX test host cannot find the OCX or executable**
+The CMake `run_activex_host` targets pass the runtime directory automatically.
+When launching the C# host script directly, pass that directory with
+`-BinDirectory`, for example `-BinDirectory out\b\x64d\bin`. This directory
+override does not enable native ActiveX hosting verification: that check
+requires the legacy `MapWinGIS.ActiveX.Tests.exe` and its hosting test.

@@ -48,7 +48,15 @@ complexity or limiting improvements. Do not transliterate the legacy code.
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 cmake --preset x64-debug
 cmake --build --preset x64-debug
-ctest --preset x64-debug --output-on-failure -LE interactive
+ctest --preset x64-debug
+```
+
+Until CMake registers the ActiveX tests, also build the legacy solution and run
+its ActiveX suite:
+
+```powershell
+msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
+bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 ```
 
 Every task must leave the tree in this state: CMake `Debug | x64` builds with

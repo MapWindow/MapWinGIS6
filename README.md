@@ -57,7 +57,7 @@ uses the compiler and Windows SDK environment from the Developer shell:
 pwsh -File build\scripts\bootstrap-vcpkg.ps1
 cmake --preset x64-debug
 cmake --build --preset x64-debug
-ctest --preset x64-debug --output-on-failure -LE interactive
+ctest --preset x64-debug
 ```
 
 The first configure installs GDAL and its dependencies through vcpkg and can
@@ -81,7 +81,7 @@ command-line, and legacy MSBuild setup.
 CTest runs the CMake-built test cases:
 
 ```powershell
-ctest --preset x64-debug --output-on-failure -LE interactive
+ctest --preset x64-debug
 ```
 
 For the legacy MSBuild build, run its test executables from the repository root:
