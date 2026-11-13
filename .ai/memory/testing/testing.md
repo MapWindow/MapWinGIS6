@@ -31,6 +31,12 @@ accept multipart WKT. The GPKG driver also writes self-intersecting polygon WKT
 without validation, so invalid-geometry behavior is testable through a generated
 GeoPackage.
 
+Renderer pixel tests sample device pixels, not map coordinates:
+`Viewport::MapToScreen` flips the y axis (`height/2 - (y - center.y) /
+resolution`), and both backends draw through the same transform. Sampling raw
+map coordinates checks the wrong location; convert through `MapPixel`/`ToPixel`
+or compute device coordinates explicitly (cost a test iteration in PR #68).
+
 ## References
 
 - [Testing guide](../../../docs/TESTING.md)
