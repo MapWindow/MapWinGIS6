@@ -991,6 +991,68 @@ TEST(VectorLayerRenderer, OverlappingLayersDrawBottomFirst)
     EXPECT_EQ(GetPixel(surface.Get(), 40, 50), kFill);
 }
 
+TEST(VectorLayerRenderer, GdiAndOpenGlAgreeOnOverlappingPolygonsInOneLayer)
+{
+    BitmapSurface gdiSurface(120, 100);
+    BitmapSurface openGlSurface(120, 100);
+    ASSERT_TRUE(gdiSurface.IsValid());
+    ASSERT_TRUE(openGlSurface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    mwg::Viewport viewport(120, 100);
+    viewport.SetView({60.0, 50.0}, 1.0);
+
+    // One layer with two overlapping polygons. The second polygon is drawn
+    // after the first, so its fill must cover the first polygon's outlines
+    // inside the overlap, exactly as the GDI backend paints them.
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {20.25, 10.25, 90.25, 70.25};
+    layer.sourceFeatureCount = 2;
+    layer.polygons = {
+        {{{20.25, 10.25}, {60.25, 10.25}, {60.25, 50.25}, {20.25, 50.25}, {20.25, 10.25}}},
+        {{{40.25, 30.25}, {90.25, 30.25}, {90.25, 70.25}, {40.25, 70.25}, {40.25, 30.25}}}};
+    const mwg::rendering::MapRenderScene scene = MakeMapScene({layer});
+
+    mwg::activex::GdiVectorLayerRenderer gdi;
+    ASSERT_NE(FillRect(gdiSurface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    ASSERT_EQ(gdi.Draw(gdiSurface.Get(), bounds, scene, viewport), S_OK);
+
+    mwg::activex::OpenGlVectorLayerRenderer openGl;
+    const HRESULT result = openGl.Draw(openGlSurface.Get(), bounds, scene, viewport);
+    if (result == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(result, S_OK);
+
+    // The first polygon's right edge (pixel column 60) and top edge (pixel
+    // row 49) stay visible only outside the second polygon; inside the
+    // overlap the second polygon's fill covers them in both backends.
+    constexpr COLORREF kOutline = RGB(24, 58, 82);
+    for (const mwg::PixelPoint pixel : {mwg::PixelPoint{60, 60}, {50, 49}})
+    {
+        EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel.x, pixel.y), kFill)
+            << "GDI at " << pixel.x << ", " << pixel.y;
+        EXPECT_EQ(GetPixel(openGlSurface.Get(), pixel.x, pixel.y), kFill)
+            << "OpenGL at " << pixel.x << ", " << pixel.y;
+    }
+    for (const mwg::PixelPoint pixel : {mwg::PixelPoint{60, 80}, {40, 60}})
+    {
+        EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel.x, pixel.y), kOutline)
+            << "GDI at " << pixel.x << ", " << pixel.y;
+        EXPECT_EQ(GetPixel(openGlSurface.Get(), pixel.x, pixel.y), kOutline)
+            << "OpenGL at " << pixel.x << ", " << pixel.y;
+    }
+
+    // Away from the boundaries both backends must agree as well.
+    for (const mwg::PixelPoint pixel :
+             {mwg::PixelPoint{30, 70}, {70, 40}, {10, 10}})
+    {
+        EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel.x, pixel.y),
+                  GetPixel(openGlSurface.Get(), pixel.x, pixel.y))
+            << pixel.x << ", " << pixel.y;
+    }
+}
+
 TEST(VectorLayerRenderer, DrawsVerySmallAndVeryElongatedTargets)
 {
     BitmapSurface surface(2000, 400);

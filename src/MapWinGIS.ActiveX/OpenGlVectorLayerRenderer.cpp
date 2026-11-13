@@ -7,7 +7,9 @@
  * Owns one reusable OpenGL context and draws into a framebuffer object so
  * pixel readback is not subject to window pixel-ownership rules. Polygon
  * fills use the indexed triangle meshes prepared by the Core render scene;
- * outlines follow the original rings. Scenes with polygons that lack a
+ * outlines follow the original rings. Each polygon is filled and outlined
+ * before the next one is drawn, matching the GDI backend's painter order.
+ * Scenes with polygons that lack a
  * usable mesh, or systems without framebuffer objects, return S_FALSE so
  * the coordinator can use its GDI backend.
  */
@@ -207,87 +209,100 @@ namespace mwg::activex
             return true;
         }
 
-        /// Draws the triangulated fills of one layer with indexed triangles
-        /// through the client-side vertex-array API; IsSupported must have
-        /// accepted the scene.
-        [[nodiscard]] HRESULT DrawLayerFills(
-            const rendering::VectorRenderScene& scene,
+        /// Draws one polygon's triangulated fill as indexed triangles through
+        /// the client-side vertex-array API. The caller must have enabled
+        /// GL_VERTEX_ARRAY, and IsSupported must have accepted the scene.
+        [[nodiscard]] HRESULT DrawPolygonFill(
+            const rendering::TriangleMesh& mesh,
             const ViewTransform& transform) noexcept
         {
-            glColor3ub(61, 122, 169);
-            glEnableClientState(GL_VERTEX_ARRAY);
-            for (std::size_t index = 0; index < scene.polygons.size(); ++index)
+            // Client-side vertex arrays must stay alive until
+            // glDrawElements has consumed them; the transformed copy is
+            // local to this polygon's draw call.
+            std::vector<GLdouble> deviceVertices;
+            try
             {
-                const rendering::TriangleMesh& mesh = *scene.fillMeshes[index];
-
-                // Client-side vertex arrays must stay alive until
-                // glDrawElements has consumed them; the transformed copy is
-                // local to this polygon's draw call.
-                std::vector<GLdouble> deviceVertices;
-                try
+                deviceVertices.reserve(mesh.vertices.size() * 2U);
+                for (const rendering::Point& point : mesh.vertices)
                 {
-                    deviceVertices.reserve(mesh.vertices.size() * 2U);
-                    for (const rendering::Point& point : mesh.vertices)
-                    {
-                        deviceVertices.push_back(transform.ToDeviceX(point));
-                        deviceVertices.push_back(transform.ToDeviceY(point));
-                    }
+                    deviceVertices.push_back(transform.ToDeviceX(point));
+                    deviceVertices.push_back(transform.ToDeviceY(point));
                 }
-                catch (const std::bad_alloc&)
-                {
-                    glDisableClientState(GL_VERTEX_ARRAY);
-                    return E_OUTOFMEMORY;
-                }
-                catch (const std::length_error&)
-                {
-                    glDisableClientState(GL_VERTEX_ARRAY);
-                    return E_OUTOFMEMORY;
-                }
-
-                glVertexPointer(2, GL_DOUBLE, 0, deviceVertices.data());
-                glDrawElements(
-                    GL_TRIANGLES,
-                    static_cast<GLsizei>(mesh.indices.size()),
-                    GL_UNSIGNED_INT,
-                    mesh.indices.data());
             }
-            glDisableClientState(GL_VERTEX_ARRAY);
+            catch (const std::bad_alloc&)
+            {
+                return E_OUTOFMEMORY;
+            }
+            catch (const std::length_error&)
+            {
+                return E_OUTOFMEMORY;
+            }
+
+            glVertexPointer(2, GL_DOUBLE, 0, deviceVertices.data());
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(mesh.indices.size()),
+                GL_UNSIGNED_INT,
+                mesh.indices.data());
             return S_OK;
         }
 
-        /// Draws the original ring boundaries of one layer as outlines.
+        /// Draws one polygon's original ring boundaries as outlines.
         /// Triangle edges are not polygon boundaries and are never drawn.
-        void DrawLayerOutlines(
+        void DrawPolygonOutlines(
+            const rendering::Polygon& polygon,
+            const ViewTransform& transform) noexcept
+        {
+            for (const rendering::Ring& ring : polygon)
+            {
+                std::size_t count = ring.size();
+                if (count > 1 &&
+                    ring.front().x == ring.back().x &&
+                    ring.front().y == ring.back().y)
+                {
+                    --count;
+                }
+
+                if (count < 3)
+                {
+                    continue;
+                }
+
+                glBegin(GL_LINE_LOOP);
+                for (std::size_t vertex = 0; vertex < count; ++vertex)
+                {
+                    const rendering::Point& point = ring[vertex];
+                    glVertex2d(transform.ToDeviceX(point), transform.ToDeviceY(point));
+                }
+                glEnd();
+            }
+        }
+
+        /// Draws one layer polygon by polygon, filling each polygon from its
+        /// triangulated mesh and outlining its rings before advancing to the
+        /// next one, so overlapping polygons keep the same painter order as
+        /// the GDI backend.
+        [[nodiscard]] HRESULT DrawLayer(
             const rendering::VectorRenderScene& scene,
             const ViewTransform& transform) noexcept
         {
-            glColor3ub(24, 58, 82);
-            for (const rendering::Polygon& polygon : scene.polygons)
+            glEnableClientState(GL_VERTEX_ARRAY);
+            for (std::size_t index = 0; index < scene.polygons.size(); ++index)
             {
-                for (const rendering::Ring& ring : polygon)
+                glColor3ub(61, 122, 169);
+                const HRESULT fillResult =
+                    DrawPolygonFill(*scene.fillMeshes[index], transform);
+                if (FAILED(fillResult))
                 {
-                    std::size_t count = ring.size();
-                    if (count > 1 &&
-                        ring.front().x == ring.back().x &&
-                        ring.front().y == ring.back().y)
-                    {
-                        --count;
-                    }
-
-                    if (count < 3)
-                    {
-                        continue;
-                    }
-
-                    glBegin(GL_LINE_LOOP);
-                    for (std::size_t vertex = 0; vertex < count; ++vertex)
-                    {
-                        const rendering::Point& point = ring[vertex];
-                        glVertex2d(transform.ToDeviceX(point), transform.ToDeviceY(point));
-                    }
-                    glEnd();
+                    glDisableClientState(GL_VERTEX_ARRAY);
+                    return fillResult;
                 }
+
+                glColor3ub(24, 58, 82);
+                DrawPolygonOutlines(scene.polygons[index], transform);
             }
+            glDisableClientState(GL_VERTEX_ARRAY);
+            return S_OK;
         }
 
         [[nodiscard]] std::int64_t GetWidth(const RECT& bounds) noexcept
@@ -696,13 +711,12 @@ namespace mwg::activex
 
         for (const rendering::LayerRenderScene& layer : scene.layers)
         {
-            const HRESULT fillsResult = DrawLayerFills(layer.scene, *transform);
-            if (FAILED(fillsResult))
+            const HRESULT layerResult = DrawLayer(layer.scene, *transform);
+            if (FAILED(layerResult))
             {
                 _lastFailureReason = L"OpenGL could not allocate its vertex buffers.";
-                return fillsResult;
+                return layerResult;
             }
-            DrawLayerOutlines(layer.scene, *transform);
         }
 
         glFlush();

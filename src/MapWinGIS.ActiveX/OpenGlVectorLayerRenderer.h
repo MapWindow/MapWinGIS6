@@ -54,11 +54,12 @@ namespace mwg::activex
          * @brief Draws a scene of triangulated polygons.
          *
          * Fills every polygon from the Core-prepared triangle mesh and draws
-         * its outlines from the original rings. Draws all layers into one
-         * frame, bottom first. Returns S_FALSE without drawing when any
-         * polygon lacks a usable fill mesh or when no OpenGL context with
-         * framebuffer-object support is available, so callers can fall back
-         * to another backend for the whole frame.
+         * its outlines from the original rings before advancing to the next
+         * polygon, matching the GDI backend's painter order within a layer.
+         * Draws all layers into one frame, bottom first. Returns S_FALSE
+         * without drawing when any polygon lacks a usable fill mesh or when
+         * no OpenGL context with framebuffer-object support is available, so
+         * callers can fall back to another backend for the whole frame.
          */
         [[nodiscard]] HRESULT Draw(
             HDC deviceContext,
