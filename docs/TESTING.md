@@ -185,9 +185,15 @@ For build and manual-use instructions, see the
 GeoPackage grid of convex 32-vertex polygons and separately reports Core
 dataset open, render-scene preparation, process private-memory growth, the
 median GDI frame, the first OpenGL frame (context creation and drawing), and
-the median steady OpenGL frame, for a 1280x720 off-screen target. It records
-the values as GoogleTest properties and fails only when a stage fails. Use a
-Release build for meaningful numbers:
+the median steady OpenGL frame, for a 1280x720 off-screen target.
+`RenderingBaseline.MeasuresComplexPolygonCosts` generates a second dataset —
+concave L-shaped polygons, holed rectangles where every feature is a
+two-component multipolygon, and concave 32-vertex star polygons across three
+layers — and additionally reports the number of triangulated polygons and the
+mesh storage (vertices plus indices). Scene preparation in both tests
+includes the one-time constrained Delaunay triangulation of every polygon.
+Results are recorded as GoogleTest properties; the tests fail only when a
+stage fails. Use a Release build for meaningful numbers:
 
 ```powershell
 $env:MWG_RUN_RENDERING_BASELINE = '1'
@@ -195,8 +201,32 @@ $env:MWG_RENDERING_BASELINE_FEATURES = '100000'   # optional; default 50000
 bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_filter=RenderingBaseline.*
 ```
 
-Measurements on one developer workstation (Release, hardware OpenGL); the
-previous implementation measurements are retained for comparison:
+Measurements on one developer workstation (Release, hardware OpenGL), with
+triangulation included in scene preparation:
+
+| Measurement | Convex grid, 50k polygons | Complex mix, 162.5k meshes |
+|---|---:|---:|
+| Core open dataset | 1.6 ms | 2.2 ms |
+| Core prepare render scene | 2,465.4 ms | 2,733.7 ms |
+| Mesh storage (vertices+indices) | — | 32.1 MiB |
+| Private memory increase for scene | 87.7 MiB | 85.9 MiB |
+| GDI frame (median) | 86.9 ms | 168.6 ms |
+| OpenGL first frame | 255.5 ms | 47.2 ms |
+| OpenGL frame (median) | 30.0 ms | 42.2 ms |
+| Private memory increase total | 203.0 MiB | 89.9 MiB |
+
+The complex mix is 50k concave L-shapes, 50k holed multipart features, and
+12.5k star polygons (162,500 triangulated meshes in total); it ran after the
+convex grid in the same process, so its total memory does not repeat the
+one-time OpenGL driver allocation. Triangulation runs once per polygon during
+scene preparation and the meshes are reused on redraw, so the triangulation
+cost shows up in scene preparation, not in per-frame times. Before
+triangulation existed, the same convex grid prepared its scene in 91.5 ms per
+100k features; triangulation now dominates scene preparation at roughly
+15 µs per polygon on this workstation. OpenGL frames re-submit all geometry
+because there is no unchanged-geometry cache.
+
+The pre-triangulation measurements are retained for comparison:
 
 | Measurement | x64, 10k (previous) | x64, 100k (previous) | x64, 100k (sequential) |
 |---|---:|---:|---:|
@@ -208,11 +238,11 @@ previous implementation measurements are retained for comparison:
 | OpenGL frame (median) | 10.0 ms | 82.3 ms | 80.5 ms |
 | Private memory, total | 91.7 MiB | 167.4 MiB | 167.2 MiB |
 
-Scene preparation now reads geometries sequentially through OGR and copies
+Scene preparation reads geometries sequentially through OGR and copies
 their coordinates directly, avoiding indexed lookups, WKT serialization, and
 reparsing. The 100k-feature measurement dropped from 15,225 ms to 91.5 ms on
-the recorded x64 run. OpenGL frames re-submit all geometry because there is no
-unchanged-geometry cache. Total memory includes the OpenGL driver and context.
+the recorded x64 run before triangulation was added. Total memory includes
+the OpenGL driver and context.
 
 ## Conventions
 

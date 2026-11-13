@@ -258,7 +258,7 @@ responsibilities, not a requirement to split them into more DLLs.
 | `MapWinGIS.ocx` | Own COM activation, host-facing control lifecycle, and translation between the external API and core operations. Integrate core rendering with the host surface and selected backend. | GIS rules, core data ownership, rendering-specific types in its public COM contract |
 | Rendering coordinator (in the OCX) | Try OpenGL for supported scenes and use GDI when OpenGL is unavailable or the scene is unsupported. Keep backend selection independent of COM activation. | GIS rules, COM interface layout, backend-specific resource types outside the backend |
 | GDI backend (in the OCX) | Paint supported polygon scenes, including interior rings, into a device context; provide the Windows CPU fallback. | Core dataset ownership, COM interface layout, GPU availability |
-| OpenGL backend (in the OCX) | Render convex single-ring polygons through a reusable WGL context, then copy pixels to the host device context. | Core GIS data ownership and public COM interfaces |
+| OpenGL backend (in the OCX) | Fill polygons from their Core triangulated meshes, outline the original rings, and copy pixels to the host device context through a reusable WGL context. | Core GIS data ownership and public COM interfaces |
 | Future compute work | Host optional compute acceleration only for workloads justified by profiling. | OpenGL being installed or selected |
 
 The OCX is the composition root for control, render-coordinator, and
@@ -296,8 +296,8 @@ and has no mesh. `ViewTransform` captures the `Viewport` once
 per frame so both backends transform every vertex of every layer with the
 same arithmetic as `Viewport::MapToScreen`; GDI draws a screen position in
 the pixel that contains it (`ToPixel`). One backend draws the whole frame.
-The coordinator tries the OpenGL backend when every layer has only simple
-convex polygons with one ring. GDI checks each layer before drawing it; a
+The coordinator tries the OpenGL backend when every polygon of every layer
+has a triangulated fill mesh. GDI checks each layer before drawing it; a
 layer with non-finite or out-of-range device coordinates is skipped and
 reported (`GetFailedLayers`, `RenderingStatus`) while the other layers are
 still drawn.
@@ -307,10 +307,13 @@ fixed-function calls into a framebuffer object (OpenGL 3.0 or
 before copying them to the host device context; this is a working backend
 boundary, not an end-to-end accelerated presentation path. Rendering into a
 framebuffer object avoids undefined pixels from window pixel-ownership rules.
-Interior rings, concave or self-intersecting rings, missing framebuffer-object
-support, initialization failures, and drawing failures use the GDI backend.
-The GDI backend draws the currently supported polygon scene, including its
-interior rings. Both backends draw source coordinates without reprojection,
+Interior rings and concave boundaries draw identically in both backends
+because both consume the same scene; a polygon without a fill mesh (for
+example a self-intersecting ring that GEOS cannot triangulate), missing
+framebuffer-object support, initialization failures, and drawing failures use
+the GDI backend, which draws the original rings.
+The GDI backend draws the original rings of the whole supported polygon scene,
+including its interior rings and concave boundaries. Both backends draw source coordinates without reprojection,
 and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
 and MultiSurface features.
 
@@ -407,10 +410,14 @@ changes and explicit invalidation rebuild the scene for all visible layers.
 There is no tiling, paging, or clipping to the visible extent. GDI skips a
 layer whose device coordinates exceed its range. It clips drawing to the
 requested target rectangle and the host's existing clip region, then restores
-the device context. The opt-in
+the device context. Triangulation runs once per polygon when the scene is
+prepared; view changes (resize, zoom, pan) and redraws reuse the retained
+meshes. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
-tracks scene preparation and backend frame costs. OpenGL only supports convex
-single-ring polygons and copies each frame through CPU memory. Its reusable CPU
+tracks scene preparation, mesh storage, and backend frame costs on both a
+convex grid and a complex mix of concave, holed multipart, and many-vertex
+polygons. OpenGL fills every polygon from its retained triangle mesh and
+copies each frame through CPU memory. Its reusable CPU
 staging buffer is limited to 64 MiB per frame; target dimensions are also
 limited by the detected framebuffer and viewport capabilities. GDI is the supported
 Windows CPU fallback; Core has no independent platform-neutral renderer.

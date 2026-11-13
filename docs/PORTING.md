@@ -97,9 +97,10 @@ Each control load selects the first dataset layer. Core prepares an ordered
 scene for all visible map layers, including Polygon, MultiPolygon,
 CurvePolygon, and MultiSurface geometry. It
 does not expose the broad v5 map, layer, shape, event, or editing API. It draws
-in source coordinates without reprojection. OpenGL only handles convex
-single-ring polygons; GDI handles the supported polygon scene as the CPU
-fallback.
+in source coordinates without reprojection. OpenGL fills the triangulated
+meshes Core prepares for convex, concave, holed, and multipart polygons; GDI
+draws the original rings as the CPU fallback for scenes and systems OpenGL
+cannot handle.
 
 Keep these gaps visible when extending the COM surface. Reuse Core behavior,
 add only the automation members required by a concrete use case, and retain a

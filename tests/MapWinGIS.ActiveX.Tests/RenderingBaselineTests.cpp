@@ -6,8 +6,11 @@
  *
  * Generates a GeoPackage polygon grid and separately times Core dataset access,
  * render-scene preparation, GDI frames, and OpenGL first and steady frames.
- * Results are printed and recorded as GoogleTest properties; the test only
- * fails when a stage fails, never on a timing threshold.
+ * A second scenario generates concave, holed multipart, and many-vertex star
+ * polygons so the triangulation and mesh-storage costs of complex geometry
+ * are measured too. Results are printed and recorded as GoogleTest
+ * properties; the tests only fail when a stage fails, never on a timing
+ * threshold.
  */
 #include <Windows.h>
 #include <psapi.h>
@@ -17,14 +20,17 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iomanip>
+#include <initializer_list>
 #include <iostream>
 #include <memory>
 #include <numbers>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gdal_priv.h>
@@ -147,6 +153,152 @@ namespace
         return path;
     }
 
+    /// Adds a closed ring to a polygon from (x, y) coordinate pairs.
+    void AddRing(OGRPolygon& polygon, std::initializer_list<std::pair<double, double>> points)
+    {
+        OGRLinearRing ring;
+        for (const auto& [x, y] : points)
+        {
+            ring.addPoint(x, y);
+        }
+        ring.closeRings();
+        polygon.addRing(&ring);
+    }
+
+    /// Writes three polygon layers that exercise triangulation with complex
+    /// geometry: a grid of small concave L-shaped polygons, a grid of
+    /// holed rectangles where every feature is a two-component multipolygon,
+    /// and a sparser grid of concave 32-vertex star polygons.
+    std::filesystem::path MakeComplexPolygonDataset(
+        const std::filesystem::path& directory,
+        const int count)
+    {
+        GdalEnvironment::Initialize();
+        const std::filesystem::path path = directory / "complex.gpkg";
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+        if (driver == nullptr)
+        {
+            throw std::runtime_error("GPKG driver is not available");
+        }
+
+        const std::u8string utf8 = path.u8string();
+        GDALDatasetUniquePtr dataset(driver->Create(
+            reinterpret_cast<const char*>(utf8.c_str()), 0, 0, 0, GDT_Unknown, nullptr));
+        if (dataset == nullptr)
+        {
+            throw std::runtime_error("Cannot create the complex baseline dataset");
+        }
+
+        const auto makeLayer = [&](const char* name, const OGRwkbGeometryType type) {
+            OGRLayer* layer = dataset->CreateLayer(name, nullptr, type, nullptr);
+            if (layer == nullptr || dataset->StartTransaction() != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot create a complex baseline layer");
+            }
+            return layer;
+        };
+
+        // Many small concave polygons.
+        OGRLayer* concave = makeLayer("concave", wkbPolygon);
+        const int columns = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
+        for (int index = 0; index < count; ++index)
+        {
+            const double cx = static_cast<double>(index % columns);
+            const double cy = static_cast<double>(index / columns);
+            OGRPolygon polygon;
+            AddRing(polygon,
+                    {{cx - 0.4, cy - 0.4},
+                     {cx + 0.4, cy - 0.4},
+                     {cx + 0.4, cy},
+                     {cx, cy},
+                     {cx, cy + 0.4},
+                     {cx - 0.4, cy + 0.4}});
+            OGRFeature feature(concave->GetLayerDefn());
+            if (feature.SetGeometry(&polygon) != OGRERR_NONE ||
+                concave->CreateFeature(&feature) != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot write a concave baseline feature");
+            }
+        }
+        if (dataset->CommitTransaction() != OGRERR_NONE)
+        {
+            throw std::runtime_error("Cannot commit the concave baseline layer");
+        }
+
+        // Holed rectangles, every one a two-component multipart geometry.
+        OGRLayer* holed = makeLayer("holed", wkbMultiPolygon);
+        for (int index = 0; index < count; ++index)
+        {
+            const double cx = static_cast<double>(index % columns);
+            const double cy = static_cast<double>(index / columns);
+            OGRPolygon body;
+            AddRing(body,
+                    {{cx - 0.4, cy - 0.4},
+                     {cx + 0.4, cy - 0.4},
+                     {cx + 0.4, cy + 0.4},
+                     {cx - 0.4, cy + 0.4},
+                     {cx - 0.4, cy - 0.4}});
+            AddRing(body,
+                    {{cx - 0.15, cy - 0.15},
+                     {cx + 0.15, cy - 0.15},
+                     {cx + 0.15, cy + 0.15},
+                     {cx - 0.15, cy + 0.15},
+                     {cx - 0.15, cy - 0.15}});
+            OGRPolygon satellite;
+            AddRing(satellite,
+                    {{cx + 0.25, cy + 0.25},
+                     {cx + 0.45, cy + 0.25},
+                     {cx + 0.45, cy + 0.45},
+                     {cx + 0.25, cy + 0.45},
+                     {cx + 0.25, cy + 0.25}});
+            OGRMultiPolygon multipart;
+            multipart.addGeometry(&body);
+            multipart.addGeometry(&satellite);
+            OGRFeature feature(holed->GetLayerDefn());
+            if (feature.SetGeometry(&multipart) != OGRERR_NONE ||
+                holed->CreateFeature(&feature) != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot write a holed baseline feature");
+            }
+        }
+        if (dataset->CommitTransaction() != OGRERR_NONE)
+        {
+            throw std::runtime_error("Cannot commit the holed baseline layer");
+        }
+
+        // Larger concave polygons with many vertices.
+        const int starCount = std::max(1, count / 4);
+        const int starColumns =
+            static_cast<int>(std::ceil(std::sqrt(static_cast<double>(starCount))));
+        OGRLayer* stars = makeLayer("stars", wkbPolygon);
+        for (int index = 0; index < starCount; ++index)
+        {
+            const double cx = static_cast<double>(index % starColumns) * 4.0;
+            const double cy = static_cast<double>(index / starColumns) * 4.0;
+            OGRLinearRing ring;
+            for (int vertex = 0; vertex < kVerticesPerPolygon; ++vertex)
+            {
+                const double angle = 2.0 * std::numbers::pi * vertex / kVerticesPerPolygon;
+                const double radius = vertex % 2 == 0 ? 1.6 : 0.7;
+                ring.addPoint(cx + radius * std::cos(angle), cy + radius * std::sin(angle));
+            }
+            ring.closeRings();
+            OGRPolygon polygon;
+            polygon.addRing(&ring);
+            OGRFeature feature(stars->GetLayerDefn());
+            if (feature.SetGeometry(&polygon) != OGRERR_NONE ||
+                stars->CreateFeature(&feature) != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot write a star baseline feature");
+            }
+        }
+        if (dataset->CommitTransaction() != OGRERR_NONE)
+        {
+            throw std::runtime_error("Cannot commit the star baseline layer");
+        }
+        return path;
+    }
+
     /// A 32-bit DIB section target that does not depend on the screen DC.
     class DibSurface final
     {
@@ -263,6 +415,113 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
               << kTargetHeight << " target\n";
     Report("Core open dataset", openMs, "ms");
     Report("Core prepare render scene", sceneMs, "ms");
+    Report("Private memory increase for scene", *memoryAfterScene - *memoryBefore, "MiB");
+    Report("GDI frame (median)", Median(gdiFrames), "ms");
+
+    activex::OpenGlVectorLayerRenderer openGl;
+    start = Clock::now();
+    const HRESULT firstFrame = openGl.Draw(surface.Get(), bounds, scene, viewport);
+    const double firstOpenGlMs = ElapsedMilliseconds(start);
+    if (firstFrame == S_FALSE)
+    {
+        std::wcout << L"  OpenGL unavailable: " << openGl.GetLastFailureReason() << L'\n';
+        return;
+    }
+    ASSERT_EQ(firstFrame, S_OK);
+
+    std::vector<double> openGlFrames;
+    for (int frame = 0; frame < kSteadyFrames; ++frame)
+    {
+        start = Clock::now();
+        ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+        openGlFrames.push_back(ElapsedMilliseconds(start));
+    }
+
+    Report("OpenGL first frame (context+draw)", firstOpenGlMs, "ms");
+    Report("OpenGL frame (median)", Median(openGlFrames), "ms");
+    const std::optional<double> memoryAfterOpenGl = PrivateMiB(memoryError);
+    ASSERT_TRUE(memoryAfterOpenGl.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
+    Report("Private memory increase total", *memoryAfterOpenGl - *memoryBefore, "MiB");
+}
+
+TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)
+{
+    const char* enabled = std::getenv("MWG_RUN_RENDERING_BASELINE");
+    if (enabled == nullptr || std::string(enabled) != "1")
+    {
+        GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
+    }
+
+    const int featureCount = FeatureCountFromEnvironment();
+    TempDirectory directory;
+    const std::filesystem::path path =
+        MakeComplexPolygonDataset(directory.Path(), featureCount);
+
+    DWORD memoryError = ERROR_SUCCESS;
+    const std::optional<double> memoryBefore = PrivateMiB(memoryError);
+    ASSERT_TRUE(memoryBefore.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
+    Clock::time_point start = Clock::now();
+    Map map;
+    const std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+    map.AddLayer(dataset, 0);
+    map.AddLayer(dataset, 1);
+    map.AddLayer(dataset, 2);
+    const double openMs = ElapsedMilliseconds(start);
+
+    start = Clock::now();
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(map);
+    const double sceneMs = ElapsedMilliseconds(start);
+    const std::optional<double> memoryAfterScene = PrivateMiB(memoryError);
+    ASSERT_TRUE(memoryAfterScene.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
+    ASSERT_EQ(scene.layers.size(), 3U);
+    ASSERT_TRUE(scene.skippedLayers.empty());
+
+    std::size_t polygonCount = 0;
+    std::size_t meshedCount = 0;
+    std::size_t meshVertexCount = 0;
+    std::size_t meshIndexCount = 0;
+    for (const rendering::LayerRenderScene& layer : scene.layers)
+    {
+        ASSERT_EQ(layer.scene.fillMeshes.size(), layer.scene.polygons.size());
+        polygonCount += layer.scene.polygons.size();
+        for (const std::optional<rendering::TriangleMesh>& mesh : layer.scene.fillMeshes)
+        {
+            ASSERT_TRUE(mesh.has_value())
+                << "Every complex baseline polygon must triangulate";
+            ++meshedCount;
+            meshVertexCount += mesh->vertices.size();
+            meshIndexCount += mesh->indices.size();
+        }
+    }
+    const double meshMiB =
+        (meshVertexCount * sizeof(rendering::Point) +
+         meshIndexCount * sizeof(std::uint32_t)) /
+        (1024.0 * 1024.0);
+    ASSERT_EQ(meshedCount, polygonCount);
+
+    DibSurface surface(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, kTargetWidth, kTargetHeight};
+    Viewport viewport(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(viewport.FitExtent(map.GetExtent(), 12.0));
+
+    activex::GdiVectorLayerRenderer gdi;
+    std::vector<double> gdiFrames;
+    for (int frame = 0; frame < kSteadyFrames; ++frame)
+    {
+        start = Clock::now();
+        ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+        gdiFrames.push_back(ElapsedMilliseconds(start));
+    }
+
+    std::cout << "Complex polygon baseline: " << featureCount << " concave + "
+              << featureCount << " holed multipart + " << std::max(1, featureCount / 4)
+              << " star polygons (" << meshedCount << " triangulated), " << kTargetWidth
+              << 'x' << kTargetHeight << " target\n";
+    Report("Polygons with fill mesh", static_cast<double>(meshedCount), "");
+    Report("Core open dataset", openMs, "ms");
+    Report("Core prepare render scene", sceneMs, "ms");
+    Report("Mesh storage (vertices+indices)", meshMiB, "MiB");
     Report("Private memory increase for scene", *memoryAfterScene - *memoryBefore, "MiB");
     Report("GDI frame (median)", Median(gdiFrames), "ms");
 
