@@ -235,9 +235,13 @@ when Visual Studio is not on `PATH` or not installed on `C:`.
 
 ### Building with CMake
 
-The CMake build currently covers `MapWinGIS.Core.dll`; the ActiveX control,
-tests and samples follow. It needs CMake 3.28 or later and Ninja; both ship
-with Visual Studio 2026 and CLion. Run the bootstrap script first, then
+The CMake build currently covers `MapWinGIS.Core.dll` and `MapWinGIS.ocx`; the
+tests and samples follow. The OCX needs the **C++ ATL for latest v145 build
+tools** component for each architecture you build, and `midl.exe` needs `cl.exe`
+on `PATH`, so configure and build from a Visual Studio toolchain (CLion) or a
+Developer PowerShell. CMake 3.28 or later is required, with either Ninja or the
+Visual Studio generator. Both CMake and Ninja ship with Visual Studio 2026 and
+CLion. Run the bootstrap script first, then
 configure from a VS 2026 Developer PowerShell (or any shell after
 `vcvarsall.bat x64`):
 
@@ -247,6 +251,9 @@ cmake --preset x64-debug
 cmake --build --preset x64-debug
 ```
 
+For a Core-only build that does not require MIDL or ATL, configure with
+`-DMWG_BUILD_ACTIVEX=OFF`.
+
 | Preset | Generator | Build directory |
 |---|---|---|
 | `x64-debug`, `x64-release` | Ninja, x64 | `out\b\x64d`, `out\b\x64r` |
@@ -255,7 +262,12 @@ cmake --build --preset x64-debug
 
 - Output goes to `<build directory>\bin` (`bin\<Config>` for the Visual Studio
   presets) and import libraries to `lib`, never to the MSBuild `bin\` folder, so
-  both builds can be used side by side.
+  both builds can be used side by side. MIDL output (`MapWinGIS.ActiveX_i.h`,
+  `_i.c`, `.tlb`) goes to `<build directory>\src\MapWinGIS.ActiveX\midl`; the
+  `.tlb` is also copied beside the OCX.
+- To register the CMake-built control for the current user:
+  `regsvr32 /n /i:user out\b\x64d\bin\MapWinGIS.ocx` (use
+  `%WINDIR%\SysWOW64\regsvr32.exe` for Win32; add `/u` to unregister).
 - The vcpkg root is found in the same order as above. CMake uses its own install
   tree, `vcpkg_installed\cmake-<Platform>`, shared by Debug and Release; the
   binary cache makes it cheap.
@@ -280,6 +292,7 @@ cmake --build --preset x64-debug
 | `MWG_ENABLE_ASAN` | `OFF` | `MwgEnableAsan` |
 | `MWG_DEPLOY_RUNTIME_DATA` | `ON` | `MwgDeployRuntimeData` |
 | `MWG_BUILD_TESTS` | `ON` | — (adds the `tests` feature) |
+| `MWG_BUILD_ACTIVEX` | `ON` | — (set `OFF` for a Core-only build) |
 
 Machine-specific settings belong in an uncommitted `CMakeUserPresets.json`
 that inherits from the presets, for example:

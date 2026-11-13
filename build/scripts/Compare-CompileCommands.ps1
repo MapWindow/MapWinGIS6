@@ -84,8 +84,39 @@ $ignoredOptions = @(
 )
 $ignoredOptionPrefixes = @('/Fo', '/Fd', '/Fe', '/Fp', '/ILK:', '/PDB:', '/IMPLIB:', '/OUT:', '/MP')
 
+# Link differences that are deliberate (docs/CMAKE-MIGRATION.md). They are
+# reported under 'explained' and do not count as lost options.
+$explainedLinkDifferences = [ordered]@{
+    '^/manifest(:embed|uac:.*)?$'      = 'CMake''s vs_link wrapper generates and embeds the manifest with mt.exe; the embedded manifest is identical'
+    '^/tlbid:1$'                       = 'Only used when a type library resource is embedded'
+    '^/libpath:<vcpkg_installed>/'     = 'vcpkg auto-link replaced by imported targets with full library paths'
+    '^lib:<vcpkg_installed>/.*\*\.lib$' = 'vcpkg auto-link replaced by imported targets with full library paths'
+    '^lib:<vcpkg_installed>/'          = 'Library from an imported target (find_package)'
+    '^lib:odbc(cp)?32\.lib$'           = 'MSBuild default library; unused, not in CMake''s default list'
+    '^/version:0\.0$'                  = 'CMake default image version; MSBuild leaves it at 0.0 too'
+    '^input:.*\.res$'                  = 'Compiled resource file name (<name>.rc.res in CMake)'
+    '^lib:(<builddir>/)?lib[\\/]mapwingis\.core\.lib$' = 'Core import library from target_link_libraries (MSBuild: project reference)'
+}
+
+# Compile differences that are deliberate (docs/CMAKE-MIGRATION.md), keyed by
+# the target where each difference is expected.
+$explainedCompileDifferencesByTarget = @{
+    'MapWinGIS.Core' = [ordered]@{
+        '^/I<vcpkg_installed>/[^/]+/include/geos$' = 'Interface include directory of GEOS::geos_c'
+        '^/DGDAL_DEBUG$'                          = 'Interface definition of the debug GDAL::GDAL'
+    }
+    'MapWinGIS.ActiveX' = [ordered]@{
+        '^/I<intdir>$'                        = 'MIDL output moved from the intermediate directory to <build>/.../midl (D3)'
+        '^/I<builddir>/.*/midl$'              = 'MIDL output directory (D3)'
+        '^/I<vcpkg_installed>/[^/]+/include$' = 'MSBuild vcpkg auto-include; the OCX has no direct vcpkg dependency in CMake'
+    }
+}
+
 # MSBuild project names that differ from the CMake target names.
-$targetNames = @{ 'Translate' = 'MapWinGIS.Samples.Translate' }
+$targetNames = @{
+    'Translate'             = 'MapWinGIS.Samples.Translate'
+    'MapWinGIS.ActiveX.Impl' = 'MapWinGIS.ActiveX'
+}
 
 function Find-MSBuild {
     if ($MSBuild) { return $MSBuild }
@@ -288,7 +319,7 @@ function Read-MSBuildCommands([string] $logPath, [string] $binDir) {
             $set = ConvertTo-OptionSet $arguments $baseDir $placeholders @('.c', '.cpp', '.cxx', '.cc')
             foreach ($source in $set.Sources) {
                 # Keyed by target: the tests compile some ActiveX sources a second time.
-                $key = "$target $source"
+                $key = Get-SourceKey $target $source
                 if ($compiles.ContainsKey($key)) {
                     $duplicateCompiles++
                     Write-Warning "Duplicate MSBuild compile entry for target '$target' and source '$source'; the parity report keeps the last command."
@@ -335,6 +366,8 @@ function Read-CMakeCommands([string] $buildDir, [string] $logPath, [string] $bin
     }
 
     foreach ($entry in (Get-Content -Raw -LiteralPath $database | ConvertFrom-Json)) {
+        # Resource compiles are in the database too; the MSBuild side has only cl.exe.
+        if ($entry.file -match '\.rc$') { continue }
         $arguments = if ($entry.arguments) { @($entry.arguments | Select-Object -Skip 1) }
                      else { @(Split-CommandLine $entry.command | Select-Object -Skip 1) }
         $fo = $arguments | Where-Object { $_ -match '^[/-]Fo' } | Select-Object -First 1
@@ -343,7 +376,7 @@ function Read-CMakeCommands([string] $buildDir, [string] $logPath, [string] $bin
         $set = ConvertTo-OptionSet $arguments $entry.directory $placeholders @('.c', '.cpp', '.cxx', '.cc')
         $source = Get-NormalizedPath $entry.file $entry.directory $placeholders
         $target = if ($intDir -match '\\CMakeFiles\\(?<t>[^\\]+)\.dir') { $Matches['t'] } else { '' }
-        $key = "$target $source"
+        $key = Get-SourceKey $target $source
         if ($compiles.ContainsKey($key)) {
             $duplicateCompiles++
             Write-Warning "Duplicate CMake compile entry for target '$target' and source '$source'; the parity report keeps the last command."
@@ -419,9 +452,34 @@ function Get-BinarySummary([string] $dumpbin, [string] $path) {
 }
 
 function Compare-OptionSets($reference, $actual) {
-    $lost = @($reference | Where-Object { $actual -cnotcontains $_ })
-    $added = @($actual | Where-Object { $reference -cnotcontains $_ })
+    $lost = @($reference | Where-Object { $actual -notcontains $_ })
+    $added = @($actual | Where-Object { $reference -notcontains $_ })
     return [pscustomobject]@{ Lost = $lost; Added = $added }
+}
+
+# Moves the differences that match a pattern into 'Explained', with the reason.
+function Split-ExplainedDifferences($diff, $patterns) {
+    $explained = [ordered]@{}
+    $lost = @(); $added = @()
+    foreach ($pair in @(@{ Items = $diff.Lost; Kind = 'lost' }, @{ Items = $diff.Added; Kind = 'added' })) {
+        foreach ($option in $pair.Items) {
+            $reason = $null
+            foreach ($pattern in $patterns.Keys) {
+                if ($option -match $pattern) { $reason = $patterns[$pattern]; break }
+            }
+            if ($reason) { $explained["$($pair.Kind) $option"] = $reason }
+            elseif ($pair.Kind -eq 'lost') { $lost += $option }
+            else { $added += $option }
+        }
+    }
+    return [pscustomobject]@{ Lost = $lost; Added = $added; Explained = $explained }
+}
+
+# MIDL output lives in different directories in the two builds (D3); key the
+# generated sources by file name.
+function Get-SourceKey([string] $target, [string] $source) {
+    if ($source -match '^<(intdir|builddir)>/(?:.*/)?(?<file>[^/]+_i\.c)$') { $source = "<generated>/$($Matches['file'])" }
+    return "$target $source"
 }
 
 # --- MSBuild baseline ------------------------------------------------------
@@ -488,9 +546,12 @@ if ($CMakeBuildDir) {
         }
         $diff = Compare-OptionSets $reference.Options $actual.Options
         if ($diff.Lost.Count -or $diff.Added.Count) {
-            $compileDiff[$key] = $diff
-            $lostTotal += $diff.Lost.Count
-            $addedTotal += $diff.Added.Count
+            $patterns = $explainedCompileDifferencesByTarget[$reference.Target]
+            if (-not $patterns) { $patterns = [ordered]@{} }
+            $split = Split-ExplainedDifferences $diff $patterns
+            $compileDiff[$key] = $split
+            $lostTotal += $split.Lost.Count
+            $addedTotal += $split.Added.Count
         }
     }
     foreach ($key in ($cmakeCommands.Compiles.Keys | Where-Object { -not $msbuildCommands.Compiles.ContainsKey($_) })) {
@@ -503,9 +564,10 @@ if ($CMakeBuildDir) {
         if (-not $cmakeCommands.Links.ContainsKey($binary)) { continue }
         $diff = Compare-OptionSets $msbuildCommands.Links[$binary] $cmakeCommands.Links[$binary]
         if ($diff.Lost.Count -or $diff.Added.Count) {
-            $linkDiff[$binary] = $diff
-            $lostTotal += $diff.Lost.Count
-            $addedTotal += $diff.Added.Count
+            $split = Split-ExplainedDifferences $diff $explainedLinkDifferences
+            $linkDiff[$binary] = $split
+            $lostTotal += $split.Lost.Count
+            $addedTotal += $split.Added.Count
         }
     }
     foreach ($binary in ($cmakeCommands.Links.Keys | Where-Object { -not $msbuildCommands.Links.ContainsKey($_) })) {

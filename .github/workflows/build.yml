@@ -46,9 +46,21 @@ jobs:
           $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $vsPath) { throw 'Visual Studio C++ tools were not found.' }
           $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $commands = 'call "{0}" && cmake --preset x64-debug -DMWG_WINDOWS_SDK={1} && cmake --build --preset x64-debug' -f $vcvars,$env:MWG_WINDOWS_SDK
+          $ninja = Join-Path $vsPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+          $env:PATH = "$ninja;$env:PATH"
+          New-Item -ItemType Directory -Force -Path out/parity | Out-Null
+          $commands = 'call "{0}" && cmake --preset x64-debug -DMWG_WINDOWS_SDK={1} && cmake --build --preset x64-debug -- -v > out\parity\cmake-Debug-x64.log 2>&1' -f $vcvars,$env:MWG_WINDOWS_SDK
           & $env:ComSpec /d /s /c $commands
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check CMake/MSBuild parity
+        shell: pwsh
+        run: |
+          pwsh -File build/scripts/Compare-CompileCommands.ps1 `
+            -CMakeBuildDir out/b/x64d `
+            -CMakeBuildLog out/parity/cmake-Debug-x64.log `
+            -FailOnLostFlags `
+            -FailOnNewWarnings
 
   build:
     runs-on: windows-2025

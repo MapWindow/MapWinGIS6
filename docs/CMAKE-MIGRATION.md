@@ -86,7 +86,7 @@ and MSBuild defaults):
 
 | Option | Source |
 |---|---|
-| `/W4 /WX- /wd4251 /external:W4` | `WarningLevel`, `DisableSpecificWarnings`; `/external:W4` is the MSBuild default for external headers |
+| `/W4 /WX (Debug x64), /WX- (other configurations) /wd4251 /external:W4` | `WarningLevel`, `TreatWarningAsError` for Debug x64, `DisableSpecificWarnings`; `/external:W4` is the MSBuild default for external headers |
 | `/utf-8 /Zc:__cplusplus /Zc:preprocessor /Zc:throwingNew /bigobj` | `AdditionalOptions` |
 | `/permissive- /sdl /EHsc /GS /Gd /Gm- /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline` | `ConformanceMode`, `SDLCheck`, `ExceptionHandling`, MSBuild defaults |
 | `/std:c++20` (`/TP`), `/std:c17` (`/TC`, `_i.c` only) | `LanguageStandard`, `LanguageStandard_C` |
@@ -242,7 +242,9 @@ unless `CMAKE_TOOLCHAIN_FILE` is already set.
 One custom target, `MapWinGIS.ActiveX.Interface`, owns the only MIDL
 invocation and writes to `<build>/src/MapWinGIS.ActiveX/midl`. A small library
 target exposes that include directory and the generated `_i.c`. The OCX and
-the tests both depend on that target, never on each other's intermediates.
+the tests both depend on that target, never on each other's intermediates. The
+type library is copied beside the OCX after linking, matching the MSBuild
+output location.
 
 ### D4. ActiveX sources compiled into the tests
 
@@ -300,5 +302,65 @@ pwsh -File build\scripts\Compare-CompileCommands.ps1 -MSBuildLog out\parity\msbu
 | Native tests | 173 run, 170 passed, 3 skipped | — |
 
 The three skipped tests need `MWG_TEST_ACTIVEX_HOST`, `MWG_RUN_NETWORK_GDAL_TESTS`
-or `MWG_RUN_RENDERING_BASELINE`. The Win32 baseline is collected in the phase
-that first builds Win32 with CMake.
+or `MWG_RUN_RENDERING_BASELINE`. The Win32 baseline was collected in Phase 1
+(Debug and Release, 42 TUs / 4 links, 0 warnings).
+
+## Parity status
+
+### MapWinGIS.Core (Phase 1)
+
+Measured for Debug and Release, x64 and Win32 (Ninja presets):
+
+- Compile options: none lost; 0 warnings in both builds.
+- Link options: none lost. The remaining differences are explained by the
+  parity script (`diff.links.<binary>.Explained`):
+  - `/MANIFEST /manifest:embed /MANIFESTUAC:...`: CMake's `vs_link_dll` wrapper
+    generates and embeds the manifest with `mt.exe`; the embedded manifest
+    resource is byte-identical to the MSBuild one.
+  - `/TLBID:1`: only relevant when a type library resource is embedded (OCX).
+  - vcpkg `/LIBPATH` and `*.lib` auto-link: replaced by `GDAL::GDAL` and
+    `GEOS::geos_c` with full library paths.
+  - `odbc32.lib odbccp32.lib`: MSBuild defaults, unused, not in CMake's default
+    `CMAKE_CXX_STANDARD_LIBRARIES`.
+  - `/version:0.0`: added by CMake; the image version is 0.0 in both builds.
+- Added compile options, from the imported targets: `/I<vcpkg>/include/geos`
+  (GEOS's interface include directory) and, in Debug, `/DGDAL_DEBUG`
+  (`GDAL::GDAL` interface definition for the debug library).
+- Win32 needs `/Oy- /analyze-` and, in Release, `/SAFESEH`; MSBuild adds them
+  by default for that platform.
+- `dumpbin`: identical dependents, exports (260), subsystem and DLL
+  characteristics.
+
+### MapWinGIS.ActiveX (Phase 2)
+
+Measured for Debug and Release, x64 and Win32 (Ninja presets):
+
+- Compile and link options: none lost; 0 warnings. Explained differences:
+  - The MIDL include directory is `<build>/src/MapWinGIS.ActiveX/midl`
+    instead of the intermediate directory (D3); the generated `_i.c` is
+    compared by file name.
+  - No vcpkg include directory: the OCX has no direct vcpkg dependency.
+  - The compiled resource is named `MapWinGIS.ActiveX.rc.res`, and the Core
+    import library comes from `target_link_libraries` instead of the project
+    reference.
+- CMake needs two explicit settings to match MSBuild: `DEFINE_SYMBOL ""` (no
+  `MapWinGIS_ActiveX_EXPORTS`; the `.def` file exports the entry points) and
+  `/TC` for C sources (CMake passes `/TP` for C++ only).
+- CMake compiles the implementation sources directly into the OCX target,
+  while MSBuild builds them in `MapWinGIS.ActiveX.Impl`; they therefore also
+  receive the OCX target's `_ATL_APARTMENT_THREADED` and `_WINDLL` definitions.
+- `dumpbin`: identical dependents, the five COM exports, subsystem and DLL
+  characteristics.
+- The generated type library is byte-identical to the MSBuild one, and
+  `MapWinGIS.ActiveX_i.h` is identical below its generated header comment.
+- MIDL runs through one custom command for all generators
+  (`cmake/MwgMidl.cmake`) with the MSBuild options. This IDL produces no
+  proxy or `dlldata.c`; MIDL is told to write them into the output directory
+  and CMake tracks them as byproducts. If the IDL starts producing them, they
+  must be linked into each COM consumer.
+- The generated `.tlb` is copied beside the OCX after linking, matching the
+  MSBuild output directory.
+- Per-user registration (`regsvr32 /n /i:user`), `New-Object -ComObject
+  MapWinGIS6.Control` and unregistration work for the x64 and Win32 OCX.
+- Three clean `-j32` Ninja builds in a row succeeded (no MIDL/RC race), and the
+  Visual Studio generator builds x64 Debug/Release and x86 Debug.
