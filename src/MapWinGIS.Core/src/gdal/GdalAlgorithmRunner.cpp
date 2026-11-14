@@ -43,12 +43,13 @@ namespace mwg
             errors.push_back({GdalErrorClass::Failure, kRunnerErrorCode, std::move(message)});
         }
 
-        bool HasFailure(const std::vector<GdalError>& errors)
+        bool HasFailureSince(const std::vector<GdalError>& errors, const std::size_t start)
         {
-            return std::any_of(errors.begin(), errors.end(), [](const GdalError& error)
-            {
-                return error.errorClass >= GdalErrorClass::Failure;
-            });
+            return std::any_of(errors.begin() + static_cast<std::ptrdiff_t>(start),
+                               errors.end(), [](const GdalError& error)
+                               {
+                                   return error.errorClass >= GdalErrorClass::Failure;
+                               });
         }
 
         GDALAlgorithm* GetActualAlgorithm(GDALAlgorithm* algorithm)
@@ -249,7 +250,10 @@ namespace mwg
 
     GdalAlgorithmRunner::~GdalAlgorithmRunner()
     {
-        const std::lock_guard lock(detail::GdalExecutionMutex());
+        // Destruction only releases the runner's own dataset references
+        // (through GdalDatasetDeleter) and the GDALAlgorithm, which is
+        // refcount-only work. It must not wait for operations holding the
+        // shared GDAL execution lock.
         _impl.reset();
     }
 
@@ -497,11 +501,16 @@ namespace mwg
 
         GdalProgressAdapter adapter(std::move(progress), cancellationToken);
         GdalErrorScope scope;
-        const std::size_t previousCount = _impl->errors.size();
+        // Only diagnostics recorded from this point on decide this run's
+        // outcome; earlier misuse diagnostics (a failed SetArgument, a
+        // premature Finalize()) stay visible in Errors() but must not corrupt
+        // a later Run() or its Result().
+        const std::size_t runStart = _impl->errors.size();
         const bool succeeded = _impl->algorithm->Run(
             detail::GdalProgressAdapterAccess::Function(),
             detail::GdalProgressAdapterAccess::UserData(adapter));
         AppendErrors(_impl->errors, scope);
+        const std::size_t appendedScopeErrors = scope.Errors().size();
 
         // A successful GDAL Run must be finalized even if a callback cancelled
         // or threw after GDAL had already produced its output.
@@ -510,133 +519,168 @@ namespace mwg
         std::optional<PersistentOutput> persistentOutput;
         GDALArgDatasetValue* outputValue = nullptr;
         bool outputWasClosed = false;
-        if (succeeded)
-        {
-            GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());
-            GDALAlgorithmArg* output = actualAlgorithm != nullptr
-                                           ? actualAlgorithm->GetArg("output")
-                                           : nullptr;
-            if (output != nullptr && output->GetType() == GAAT_DATASET)
-            {
-                outputValue = &output->Get<GDALArgDatasetValue>();
-                GDALDataset* const outputDataset = outputValue->GetDatasetRef();
-                persistentOutput = DescribePersistentOutput(*outputValue, outputDataset);
-                const bool callerProvidedOutput =
-                    outputDataset != nullptr &&
-                    outputDataset == _impl->callerProvidedOutputDataset.get();
-                if (!persistentOutput || callerProvidedOutput)
-                {
-                    _impl->outputDataset.reset(
-                        outputValue->GetDatasetIncreaseRefCount());
-                }
-            }
-            finalized = Finalize();
-        }
-        if (finalized && !adapter.WasCancelled() && !HasFailure(_impl->errors) &&
-            _impl->outputDataset != nullptr)
-        {
-            GdalErrorScope outputScope;
-            const std::size_t outputErrorCount = _impl->errors.size();
-            const CPLErr flushResult = _impl->outputDataset->FlushCache();
-            AppendErrors(_impl->errors, outputScope);
-            outputScope.RethrowCaptureException();
-            if (flushResult != CE_None)
-            {
-                AddFailureIfNoDiagnostic(
-                    _impl->errors,
-                    outputErrorCount,
-                    "GDAL algorithm output could not be flushed.");
-            }
-        }
-        else if (finalized && !adapter.WasCancelled() && !HasFailure(_impl->errors) &&
-                 persistentOutput.has_value() && outputValue != nullptr)
-        {
-            GdalErrorScope outputScope;
-            const std::size_t outputErrorCount = _impl->errors.size();
-            const bool outputClosed = outputValue->Close();
-            outputWasClosed = outputClosed;
-            AppendErrors(_impl->errors, outputScope);
-            outputScope.RethrowCaptureException();
-            if (!outputClosed)
-            {
-                AddFailureIfNoDiagnostic(
-                    _impl->errors,
-                    outputErrorCount,
-                    "GDAL algorithm output could not be closed.");
-            }
-            else if (!HasFailure(_impl->errors))
-            {
-                GdalErrorScope reopenScope;
-                _impl->outputDataset = ReopenPersistentOutput(*persistentOutput);
-                if (_impl->outputDataset == nullptr &&
-                    (persistentOutput->openFlags & GDAL_OF_UPDATE) != 0)
-                {
-                    persistentOutput->openFlags &= ~GDAL_OF_UPDATE;
-                    _impl->outputDataset = ReopenPersistentOutput(*persistentOutput);
-                }
-                // Reopening is a convenience, not part of completing the write.
-                // Some creation drivers have no reader, or support only read-only access.
-                for (GdalError error : reopenScope.Errors())
-                {
-                    if (error.errorClass >= GdalErrorClass::Failure)
-                        error.errorClass = GdalErrorClass::Warning;
-                    _impl->errors.push_back(std::move(error));
-                }
-                reopenScope.RethrowCaptureException();
-                if (_impl->outputDataset == nullptr)
-                {
-                    _impl->errors.push_back({
-                        GdalErrorClass::Warning, kRunnerErrorCode,
-                        "GDAL algorithm output was written but no dataset could be reopened: " +
-                            persistentOutput->path});
-                }
-            }
-        }
-        scope.RethrowCaptureException();
 
-        bool callbackFailed = false;
+        // Releases the runner's references to a failed output. Used on the
+        // normal failure path and, noexcept, when a logger/capture rethrow
+        // leaves Run() early so the output is never left open.
+        const auto releaseFailedOutput = [&]() noexcept -> bool
+        {
+            if (_impl->operationSucceeded)
+                return true;
+            _impl->outputDataset.reset();
+            try
+            {
+                GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());
+                GDALAlgorithmArg* output = actualAlgorithm != nullptr
+                                               ? actualAlgorithm->GetArg("output")
+                                               : nullptr;
+                if (output != nullptr && output->GetType() == GAAT_DATASET && !outputWasClosed)
+                    return output->Get<GDALArgDatasetValue>().Close();
+            }
+            catch (...)
+            {
+                return false;
+            }
+            return true;
+        };
+
         try
         {
-            adapter.RethrowCallbackException();
-        }
-        catch (const std::exception& error)
-        {
-            AddError(_impl->errors, "GDAL progress callback failed: " + std::string(error.what()));
-            callbackFailed = true;
+            if (succeeded)
+            {
+                GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());
+                GDALAlgorithmArg* output = actualAlgorithm != nullptr
+                                               ? actualAlgorithm->GetArg("output")
+                                               : nullptr;
+                if (output != nullptr && output->GetType() == GAAT_DATASET)
+                {
+                    outputValue = &output->Get<GDALArgDatasetValue>();
+                    GDALDataset* const outputDataset = outputValue->GetDatasetRef();
+                    persistentOutput = DescribePersistentOutput(*outputValue, outputDataset);
+                    const bool callerProvidedOutput =
+                        outputDataset != nullptr &&
+                        outputDataset == _impl->callerProvidedOutputDataset.get();
+                    if (!persistentOutput || callerProvidedOutput)
+                    {
+                        _impl->outputDataset.reset(
+                            outputValue->GetDatasetIncreaseRefCount());
+                    }
+                }
+                finalized = Finalize();
+            }
+            if (finalized && !adapter.WasCancelled() && !HasFailureSince(_impl->errors, runStart) &&
+                _impl->outputDataset != nullptr)
+            {
+                GdalErrorScope outputScope;
+                const std::size_t outputErrorCount = _impl->errors.size();
+                const CPLErr flushResult = _impl->outputDataset->FlushCache();
+                AppendErrors(_impl->errors, outputScope);
+                outputScope.RethrowCaptureException();
+                if (flushResult != CE_None)
+                {
+                    AddFailureIfNoDiagnostic(
+                        _impl->errors,
+                        outputErrorCount,
+                        "GDAL algorithm output could not be flushed.");
+                }
+            }
+            else if (finalized && !adapter.WasCancelled() &&
+                     !HasFailureSince(_impl->errors, runStart) &&
+                     persistentOutput.has_value() && outputValue != nullptr)
+            {
+                GdalErrorScope outputScope;
+                const std::size_t outputErrorCount = _impl->errors.size();
+                const bool outputClosed = outputValue->Close();
+                outputWasClosed = outputClosed;
+                AppendErrors(_impl->errors, outputScope);
+                outputScope.RethrowCaptureException();
+                if (!outputClosed)
+                {
+                    AddFailureIfNoDiagnostic(
+                        _impl->errors,
+                        outputErrorCount,
+                        "GDAL algorithm output could not be closed.");
+                }
+                else if (!HasFailureSince(_impl->errors, runStart))
+                {
+                    GdalErrorScope reopenScope;
+                    _impl->outputDataset = ReopenPersistentOutput(*persistentOutput);
+                    if (_impl->outputDataset == nullptr &&
+                        (persistentOutput->openFlags & GDAL_OF_UPDATE) != 0)
+                    {
+                        persistentOutput->openFlags &= ~GDAL_OF_UPDATE;
+                        _impl->outputDataset = ReopenPersistentOutput(*persistentOutput);
+                    }
+                    // Reopening is a convenience, not part of completing the write.
+                    // Some creation drivers have no reader, or support only read-only access.
+                    for (GdalError error : reopenScope.Errors())
+                    {
+                        if (error.errorClass >= GdalErrorClass::Failure)
+                            error.errorClass = GdalErrorClass::Warning;
+                        _impl->errors.push_back(std::move(error));
+                    }
+                    reopenScope.RethrowCaptureException();
+                    if (_impl->outputDataset == nullptr)
+                    {
+                        _impl->errors.push_back({
+                            GdalErrorClass::Warning, kRunnerErrorCode,
+                            "GDAL algorithm output was written but no dataset could be reopened: " +
+                                persistentOutput->path});
+                    }
+                }
+            }
+            // The outer scope still captures diagnostics raised between the
+            // nested scopes above; append what arrived after algorithm->Run
+            // so post-run diagnostics are not dropped.
+            const auto& scopeErrors = scope.Errors();
+            _impl->errors.insert(
+                _impl->errors.end(),
+                scopeErrors.begin() + static_cast<std::ptrdiff_t>(appendedScopeErrors),
+                scopeErrors.end());
+            scope.RethrowCaptureException();
+
+            bool callbackFailed = false;
+            try
+            {
+                adapter.RethrowCallbackException();
+            }
+            catch (const std::exception& error)
+            {
+                AddError(_impl->errors, "GDAL progress callback failed: " + std::string(error.what()));
+                callbackFailed = true;
+            }
+            catch (...)
+            {
+                AddError(_impl->errors, "GDAL progress callback failed with a non-standard exception.");
+                callbackFailed = true;
+            }
+
+            if (adapter.WasCancelled() && !callbackFailed)
+            {
+                _impl->cancelled = true;
+                AddError(_impl->errors, "GDAL algorithm execution was cancelled.");
+            }
+            if (!succeeded && !adapter.WasCancelled())
+            {
+                AddFailureIfNoDiagnostic(_impl->errors, runStart, "GDAL algorithm execution failed.");
+            }
+
+            // Success is frozen here; later misuse diagnostics still appear
+            // in Errors() but no longer change Result().succeeded.
+            _impl->operationSucceeded =
+                succeeded && finalized && !adapter.WasCancelled() && !callbackFailed &&
+                !HasFailureSince(_impl->errors, runStart);
         }
         catch (...)
         {
-            AddError(_impl->errors, "GDAL progress callback failed with a non-standard exception.");
-            callbackFailed = true;
+            releaseFailedOutput();
+            throw;
         }
-
-        if (adapter.WasCancelled() && !callbackFailed)
-        {
-            _impl->cancelled = true;
-            AddError(_impl->errors, "GDAL algorithm execution was cancelled.");
-        }
-        if (!succeeded && !adapter.WasCancelled())
-        {
-            AddFailureIfNoDiagnostic(_impl->errors, previousCount, "GDAL algorithm execution failed.");
-        }
-
-        _impl->operationSucceeded =
-            succeeded && finalized && !adapter.WasCancelled() && !callbackFailed &&
-            !HasFailure(_impl->errors);
         if (!_impl->operationSucceeded)
         {
             GdalErrorScope closeScope;
             const std::size_t closeErrorCount = _impl->errors.size();
-            _impl->outputDataset.reset();
-            GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());
-            GDALAlgorithmArg* output = actualAlgorithm != nullptr
-                                           ? actualAlgorithm->GetArg("output")
-                                           : nullptr;
-            bool outputClosed = true;
-            if (output != nullptr && output->GetType() == GAAT_DATASET && !outputWasClosed)
-            {
-                outputClosed = output->Get<GDALArgDatasetValue>().Close();
-            }
+            const bool outputClosed = releaseFailedOutput();
             AppendErrors(_impl->errors, closeScope);
             if (!outputClosed)
             {
@@ -687,8 +731,10 @@ namespace mwg
 
     GdalOperationResult GdalAlgorithmRunner::Result() const
     {
+        // Succeeded() reports the outcome frozen at the end of Run(); misuse
+        // diagnostics recorded afterwards are visible in Errors() only.
         GdalOperationResult result;
-        result.succeeded = _impl->operationSucceeded && !HasFailure(_impl->errors);
+        result.succeeded = _impl->operationSucceeded;
         result.cancelled = _impl->cancelled;
         result.errors = _impl->errors;
         return result;
