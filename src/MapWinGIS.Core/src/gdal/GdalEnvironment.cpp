@@ -49,6 +49,7 @@ namespace mwg
             std::atomic<CPLErrorHandler> previousErrorHandler{nullptr};
             std::filesystem::path gdalDataDir;
             std::filesystem::path projDataDir;
+            bool errorHandlerInstalled = false;
         };
 
         GdalProcessState& ProcessState()
@@ -144,8 +145,12 @@ namespace mwg
 
             state.gdalDataDir = gdalDataDir;
             state.projDataDir = projDataDir;
-            state.previousErrorHandler.store(CPLSetErrorHandler(&ErrorHandler),
-                                             std::memory_order_release);
+            if (!state.errorHandlerInstalled)
+            {
+                state.previousErrorHandler.store(CPLSetErrorHandler(&ErrorHandler),
+                                                 std::memory_order_release);
+                state.errorHandlerInstalled = true;
+            }
 
             std::error_code error;
             const bool hasGdalData = !gdalDataDir.empty() &&
