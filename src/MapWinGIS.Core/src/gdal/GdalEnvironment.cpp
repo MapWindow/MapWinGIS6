@@ -46,7 +46,7 @@ namespace mwg
         {
             std::mutex logHandlerMutex;
             LogHandler logHandler;
-            CPLErrorHandler previousErrorHandler = nullptr;
+            std::atomic<CPLErrorHandler> previousErrorHandler{nullptr};
             std::filesystem::path gdalDataDir;
             std::filesystem::path projDataDir;
         };
@@ -106,7 +106,7 @@ namespace mwg
 
             // Preserve a host-installed process-wide handler. Do not forward
             // to GDAL's default/quiet handlers or recursively to ourselves.
-            const CPLErrorHandler previous = state.previousErrorHandler;
+            const CPLErrorHandler previous = state.previousErrorHandler.load(std::memory_order_acquire);
             if (previous != nullptr &&
                 previous != &ErrorHandler &&
                 previous != CPLDefaultErrorHandler &&
@@ -136,42 +136,46 @@ namespace mwg
             }
 
             GdalProcessState& state = ProcessState();
-            state.gdalDataDir = gdalDataDir;
-            state.projDataDir = projDataDir;
-            state.previousErrorHandler = CPLSetErrorHandler(&ErrorHandler);
+            const std::string gdalPath = gdalDataDir.empty() ? std::string{} : ToUtf8(gdalDataDir);
+            const std::string projPath = projDataDir.empty() ? std::string{} : ToUtf8(projDataDir);
 
             if (!GDALCheckVersion(GDAL_VERSION_MAJOR, GDAL_VERSION_MINOR, "MapWinGIS.Core"))
                 throw CoreError("The loaded GDAL runtime is incompatible with the headers used to build MapWinGIS.Core.");
+
+            state.gdalDataDir = gdalDataDir;
+            state.projDataDir = projDataDir;
+            state.previousErrorHandler.store(CPLSetErrorHandler(&ErrorHandler),
+                                             std::memory_order_release);
 
             std::error_code error;
             const bool hasGdalData = !gdalDataDir.empty() &&
                                      std::filesystem::is_directory(gdalDataDir, error);
             if (hasGdalData && !error)
             {
-                const std::string path = ToUtf8(gdalDataDir);
-                CPLSetConfigOption("GDAL_DATA", path.c_str());
+                CPLSetConfigOption("GDAL_DATA", gdalPath.c_str());
             }
             else
             {
-                ReportDiagnostic(LogLevel::Warning,
+                if (!gdalPath.empty())
+                    CPLSetConfigOption("GDAL_DATA", gdalPath.c_str());
+                GdalEnvironment::ReportDiagnostic(LogLevel::Warning,
                                  "GDAL data directory is unavailable: " + DescribePath(gdalDataDir) +
-                                     ". GDAL will use its configured fallback search paths.");
+                                     ". GDAL_DATA is still set to this path; no alternate data directory is selected.");
             }
 
             error.clear();
             const bool hasProjData = !projDataDir.empty() &&
                                      std::filesystem::is_directory(projDataDir, error);
-            if (hasProjData && !error)
+            if (!projPath.empty())
             {
-                const std::string path = ToUtf8(projDataDir);
-                const char* paths[] = {path.c_str(), nullptr};
+                const char* paths[] = {projPath.c_str(), nullptr};
                 OSRSetPROJSearchPaths(paths);
             }
-            else
+            if (!hasProjData || error)
             {
-                ReportDiagnostic(LogLevel::Warning,
+                GdalEnvironment::ReportDiagnostic(LogLevel::Warning,
                                  "PROJ data directory is unavailable: " + DescribePath(projDataDir) +
-                                     ". PROJ will use its configured fallback search paths.");
+                                     ". PROJ search is restricted to this configured path.");
             }
 
             const GdalInitializer initializer;
