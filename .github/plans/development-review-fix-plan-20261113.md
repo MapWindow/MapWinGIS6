@@ -178,8 +178,8 @@ All of these are in `src/MapWinGIS.Core/src/gdal/GdalEnvironment.cpp` and `inclu
 
 Suggested fix:
 
-- Make the state the handler uses (log handler, its mutex, and anything else `ErrorHandler` and `ReportDiagnostic` read) immortal: allocate it once with `new` in a function-local static and never delete it. Comment why it is deliberately leaked.
-- Do not call GDAL from `DllMain`. If you add an explicit shutdown that restores the previous handler, it must be called by the host, not from `DllMain`.
+- Make the state the handler uses (log handler, its mutex, and anything else `ErrorHandler` and `ReportDiagnostic` read) immortal to avoid static-destruction ordering problems; comment why it is deliberately leaked. This does not keep the callback code alive after Core unloads.
+- **Decision**: choose and document a module-lifetime policy before implementing this fix. Either keep Core loaded while GDAL retains the callback, or require host-invoked pre-unload shutdown that prevents new callbacks, restores the previous handler, and waits for in-flight callbacks to finish before releasing state or unloading Core. Do not call GDAL or wait for callbacks from `DllMain`.
 - Test: install a log handler, trigger a diagnostic, then reset the handler to empty and trigger another; both must be safe. A real unload test is not required; explain in the PR why it is not practical.
 
 **#16 – The host's GDAL error handler is replaced** (`GdalEnvironment.cpp:77`)
