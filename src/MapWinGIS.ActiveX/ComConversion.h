@@ -23,10 +23,15 @@ namespace mwg::activex::ComConversion
         BSTR* result) noexcept;
     [[nodiscard]] HRESULT BstrToUtf8(BSTR value, std::string& result);
     [[nodiscard]] HRESULT Utf8ToBstr(std::string_view value, BSTR* result);
+    /// Lossy diagnostic conversion; malformed UTF-8 and embedded NULs become U+FFFD.
+    [[nodiscard]] HRESULT DiagnosticToBstr(std::string_view value, BSTR* result) noexcept;
     [[nodiscard]] HRESULT CopyStringArray(
         SAFEARRAY* source,
         std::vector<std::string>& values);
     [[nodiscard]] HRESULT CreateStringArray(
         const std::vector<std::string>& values,
         SAFEARRAY** result);
+    [[nodiscard]] HRESULT CreateDiagnosticStringArray(
+        const std::vector<std::string>& values,
+        SAFEARRAY** result) noexcept;
 }
