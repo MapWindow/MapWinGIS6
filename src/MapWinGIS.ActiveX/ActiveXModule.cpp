@@ -38,16 +38,17 @@ STDAPI DllUnregisterServer()
 
 STDAPI DllInstall(BOOL bInstall, LPCWSTR pszCmdLine)
 {
-    if (pszCmdLine != nullptr && _wcsicmp(pszCmdLine, L"user") == 0)
+    switch (ParseDllInstallRegistrationScope(pszCmdLine))
     {
+    case DllInstallRegistrationScope::User:
         ATL::AtlSetPerUserRegistration(true);
         return bInstall ? DllRegisterServer() : DllUnregisterServer();
-    }
 
-    if (pszCmdLine != nullptr)
-    {
+    case DllInstallRegistrationScope::Machine:
+        return bInstall ? DllRegisterServer() : DllUnregisterServer();
+
+    case DllInstallRegistrationScope::Invalid:
+    default:
         return E_INVALIDARG;
     }
-
-    return bInstall ? DllRegisterServer() : DllUnregisterServer();
 }
