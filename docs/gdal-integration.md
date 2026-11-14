@@ -20,6 +20,22 @@ with `GdalEnvironment::HasRasterDriver()` or `HasVectorDriver()`. An absent
 driver or unsupported algorithm produces GDAL diagnostics; it is not silently
 substituted.
 
+Core pins its DLL in memory when registering its process-wide GDAL error
+callback. GDAL may invoke that callback until process exit, so Core must not
+be unloaded while the process is running. Its callback state is intentionally
+kept alive for the same period. The host's GDAL error handler, if one was
+installed before MapWinGIS initialization, continues to receive diagnostics
+after the MapWinGIS logger has processed them. GDAL's default and quiet
+handlers are not redundantly forwarded to.
+
+The explicit `Initialize(gdalDataDir, projDataDir)` overload returns `true`
+when those paths are active and `false` if initialization already happened
+with different paths. Initialization happens only once per process. Missing
+or inaccessible data directories produce warnings. The configured locations
+remain the GDAL/PROJ search locations; deploy runtime data rather than relying
+on an alternate data directory. The Core DLL requires a GDAL-compatible
+runtime matching the compile-time ABI; see [GDAL versioning](gdal-version.md).
+
 The DLL API exchanges C++ standard-library types across the DLL boundary.
 Consumers must use the same MSVC toolset and CRT as the Core DLL.
 
@@ -232,8 +248,8 @@ The solution builds the runnable C++ example
   GDAL can report progress on worker threads. The adapter serializes progress
   callbacks. Logging callbacks run on the thread that raises the diagnostic.
 - If initialization reports missing GDAL or PROJ data, rebuild with runtime
-  data deployment enabled. The data directories are placed beside the DLL;
-  do not set `GDAL_DATA` or `PROJ_LIB` as a workaround.
+  data deployment enabled. The configured search paths point beside the DLL;
+  a missing path is warned about and is not silently replaced.
 - If a cloud path fails, confirm the driver, protocol support, credentials,
   network access and GDAL configuration for the installed build.
 - If a conversion fails, inspect all captured diagnostics; an installed GDAL
