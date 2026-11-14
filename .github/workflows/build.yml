@@ -248,6 +248,7 @@ jobs:
         run: |
           foreach ($test in @(
             @{ Name = "core"; Project = "MapWinGIS.Core.Tests" },
+            @{ Name = "core-gdal-init"; Project = "MapWinGIS.Core.GdalInitialization.Tests" },
             @{ Name = "activex"; Project = "MapWinGIS.ActiveX.Tests" }
           )) {
             $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/$($test.Project).exe"

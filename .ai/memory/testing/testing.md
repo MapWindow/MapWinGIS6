@@ -1,8 +1,19 @@
 # Test setup and constraints
 
-The solution builds two native GoogleTest executables:
+The solution builds three native GoogleTest executables:
 
 - `MapWinGIS.Core.Tests` tests the Core API and behavior.
+- `MapWinGIS.Core.GdalInitialization.Tests` tests first-call
+  `GdalEnvironment` initialization (host error-handler forwarding, missing
+  data-directory warnings). It needs its own process because GDAL's error
+  handler and data paths are process-wide and initialization runs once; any
+  Core call in `MapWinGIS.Core.Tests` initializes GDAL implicitly. Its shared
+  `Main.cpp` must not initialize GDAL. Add new once-only initialization tests
+  here, not to `MapWinGIS.Core.Tests` (PR #76). CTest runs each test in its
+  own process, while the MSBuild job runs them all in one, so each test must
+  work in both. A test host handler must be installed with
+  `CPLSetErrorHandler` before `GdalEnvironment` initializes; installed later,
+  it replaces Core's handler instead of being forwarded to.
 - `MapWinGIS.ActiveX.Tests` tests COM-facing behavior and native ActiveX
   components. ActiveX implementation units are also built as
   `MapWinGIS.ActiveX.Impl.lib`, so renderer and conversion code can be tested
@@ -14,7 +25,8 @@ of committing generated shapefiles or databases. Initialize GDAL before
 direct GDAL use; Core APIs initialize it as needed. Wrap expected GDAL output
 in `GdalEnvironment::QuietScope`.
 
-The GitHub workflow runs both native test executables. The separate .NET
+The GitHub workflow runs all native test executables; the MSBuild job lists
+them explicitly in its Test step, so add new test projects there. The separate .NET
 ActiveX host checks require Windows and an interactive desktop; they are not
 currently part of CI. The rendering performance baseline is opt-in and should
 be run in Release when collecting meaningful timings.
@@ -50,5 +62,6 @@ keeps it (PR #75). Direct `OGRLayer` use in tests needs `<ogrsf_frmts.h>`;
 - [Build guide test commands](../../../docs/BUILDING.md#running-the-tests)
 - [Shared fixtures](../../../tests/MapWinGIS.Core.Tests/TestData.h)
 - [Core test project](../../../tests/MapWinGIS.Core.Tests/MapWinGIS.Core.Tests.vcxproj)
+- [GDAL initialization test project](../../../tests/MapWinGIS.Core.Tests/MapWinGIS.Core.GdalInitialization.Tests.vcxproj)
 - [ActiveX test project](../../../tests/MapWinGIS.ActiveX.Tests/MapWinGIS.ActiveX.Tests.vcxproj)
 - [CI test workflow](../../../.github/workflows/build.yml)

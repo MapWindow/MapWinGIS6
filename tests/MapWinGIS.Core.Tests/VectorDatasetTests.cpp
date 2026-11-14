@@ -314,3 +314,9 @@ TEST(VectorDataset, TruncatesLongInvalidWktWithoutSplittingUtf8)
         EXPECT_LT(message.size(), 260U);
     }
 }
+
+TEST(VectorDataset, RejectsUnpairedSurrogateInCallerPath)
+{
+    const std::filesystem::path invalidPath(L"\xD800");
+    EXPECT_THROW((void)VectorDataset::TryOpen(invalidPath), InvalidArgument);
+}
