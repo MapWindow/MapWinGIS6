@@ -518,6 +518,28 @@ TEST(GdalOperationDispatcher, CompletionRemainsAvailableWhenWakeCallbackFails)
     EXPECT_TRUE(result.result->succeeded);
 }
 
+TEST(GdalOperationDispatcher, RestartsAfterShutdownWithFreshOperationState)
+{
+    mwg::GdalEnvironment::Initialize();
+    RegisterDispatcherAlgorithms();
+
+    DispatchSignal signal;
+    mwg::activex::GdalOperationDispatcher dispatcher;
+    dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
+    const std::uint64_t oldId = dispatcher.Begin("mwg-test-dispatcher diagnostics", {});
+    dispatcher.Shutdown();
+    dispatcher.Restart();
+    dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
+    const std::uint64_t newId = dispatcher.Begin("mwg-test-dispatcher diagnostics", {});
+    EXPECT_NE(oldId, newId);
+    ASSERT_TRUE(WaitForCompletion(dispatcher, signal, newId,
+        std::chrono::steady_clock::now() + 10s));
+    const auto result = dispatcher.End(newId);
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(result.result.has_value());
+    EXPECT_TRUE(result.result->succeeded);
+}
+
 TEST(GdalOperationDispatcher, ResumesNotificationsWithoutCancellingActiveOperations)
 {
     mwg::GdalEnvironment::Initialize();
