@@ -9,7 +9,11 @@ The solution builds three native GoogleTest executables:
   handler and data paths are process-wide and initialization runs once; any
   Core call in `MapWinGIS.Core.Tests` initializes GDAL implicitly. Its shared
   `Main.cpp` must not initialize GDAL. Add new once-only initialization tests
-  here, not to `MapWinGIS.Core.Tests` (PR #76).
+  here, not to `MapWinGIS.Core.Tests` (PR #76). CTest runs each test in its
+  own process, while the MSBuild job runs them all in one, so each test must
+  work in both. A test host handler must be installed with
+  `CPLSetErrorHandler` before `GdalEnvironment` initializes; installed later,
+  it replaces Core's handler instead of being forwarded to.
 - `MapWinGIS.ActiveX.Tests` tests COM-facing behavior and native ActiveX
   components. ActiveX implementation units are also built as
   `MapWinGIS.ActiveX.Impl.lib`, so renderer and conversion code can be tested
