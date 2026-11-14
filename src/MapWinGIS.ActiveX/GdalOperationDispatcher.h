@@ -144,6 +144,8 @@ namespace mwg::activex
         void Suspend() noexcept;
         /// Requests cancellation and detaches workers; safe from any thread.
         void Shutdown() noexcept;
+        /// Starts a fresh operation lifetime after a previous Close/Shutdown.
+        void Restart();
 
     private:
         std::shared_ptr<State> _state;
