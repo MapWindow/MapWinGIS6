@@ -163,7 +163,7 @@ namespace mwg::activex
         {
             _dispatcher.SetWakeCallback(
                 &GdalEventSource::PostDispatchMessage,
-                _dispatchWindow->m_hWnd);
+                _dispatchWindow.get());
         }
     }
 
@@ -294,6 +294,7 @@ namespace mwg::activex
         if (_dispatchWindow != nullptr)
         {
             _dispatchWindow->Destroy();
+            _dispatchWindow.reset();
         }
     }
 
