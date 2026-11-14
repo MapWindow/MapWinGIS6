@@ -5,8 +5,8 @@
 Implement one phase per run and open one PR per phase, in this order. Check a phase off only when its PR is open and its build and tests pass.
 
 - [x] Phase 1 – Make the CMake test build complete and trustworthy (#8, #9, #10, #29, #40)
-- [ ] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
-- [ ] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
+- [x] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
+- [x] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 - [ ] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 - [ ] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 - [x] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
@@ -115,6 +115,13 @@ Suggested fix:
 - Replace `"Cannot parse WKT: " + wkt` with a bounded excerpt (for example the first 200 characters followed by `…` and the total length). Make sure truncation does not split a UTF-8 sequence.
 - Test: an invalid WKT longer than the limit produces a message no longer than the limit plus the fixed text.
 
+**Phase 2 result:** Implemented in [PR #75](https://github.com/MapWindow/MapWinGIS6/pull/75). The Shapefile driver's count is bypassed because its reported total includes deleted DBF records; the indexed FID list is authoritative for those layers. WKT diagnostics now include at most a 200-byte UTF-8-safe excerpt and the original byte length. CMake Debug x64 built and all 384 non-interactive tests passed; MSBuild Debug x64 built without warnings and both test executables passed. Both new regression tests fail against the previous `VectorDataset.cpp`.
+
+**Limitations and validation notes:**
+
+- The deleted-record fixture opens the Shapefile with `AUTO_REPACK=NO`; with the driver default the deleted record is removed on close and the test cannot detect the overcount. The test asserts that the raw driver count still includes the deleted record.
+- Build files did not change, so the compile-command parity check was not rerun locally.
+
 ### Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 
 **#2 – Dataset and runner release take the global execution mutex** (`src/MapWinGIS.Core/src/gdal/GdalOperationResult.cpp:52-57`, `GdalAlgorithmRunner.cpp:250-254`)
@@ -169,6 +176,17 @@ Suggested fix:
 
 - Check how MapWinGIS 5 built overviews (repository `MapWindow/MapWinGIS`, its GDAL overview helpers): internal GeoTIFF overviews or external `.ovr`.
 - Record the result in `docs/gdal-migration.md`. If MapWinGIS 5 built internal overviews and v6 deliberately builds external ones, document the difference and its reason. If the difference is unintended, raise it as a **Decision** with the user; do not change the behaviour in this phase.
+
+**Phase 3 result:** Implemented in a stacked PR on the Phase 2 PR branch. `GdalDatasetDeleter` and `GdalAlgorithmRunner` destruction release their references without taking the GDAL execution lock; `Run()` decides failure on run-scoped diagnostics only, freezes `Result().succeeded` at the end of `Run()`, cleans up (closes) the output on every exceptional exit, and appends outer-scope diagnostics captured after `algorithm->Run` returned. Opens use `GDAL_OF_VERBOSE_ERROR`. Threading and partial-output contracts are documented in the headers, `docs/ARCHITECTURE.md`, `docs/gdal-integration.md`, and `docs/gdal-migration.md`. New regression tests cover release during a blocked operation, runner destruction during a blocked operation, dataset destruction inside a progress callback, Finalize-before-Run, post-success misuse diagnostics, logger-exception cleanup of the output file, post-run diagnostic capture, and verbose open-error assertions.
+
+**Limitations and validation notes:**
+
+- MapWinGIS 5 opens the raster read-only and calls `GDALBuildOverviews` exactly like v6, so external `.ovr` production matches v5 and was recorded as intentional; no behavior change and no user decision was needed.
+- #32 decision: the user had no preference; the recommended default was applied — partial outputs are documented, not deleted.
+- #17: GDAL 3.12 offers no reliable per-operation collection of worker-thread diagnostics; documented instead of implemented.
+- #19: covered by a test that emits a warning from the virtual `GDALDataset::GetRootGroup()` while the runner describes the output.
+- Local Windows validation: the CMake `x64-debug` build succeeded, and CTest ran 391 non-interactive tests with zero failures; three tests were skipped (the public COG network test and two rendering benchmarks). The build printed two MSVC D9025 command-line warnings for `/external:W0` being overridden by `/external:W4` while compiling ActiveX test sources.
+- The initial GitHub Actions run failed during compilation on the pre-merge branch (invalid GDAL override, callback type mismatch, protected `poDriver` access, and the development-side vector-test include). The merge and test corrections address these locally; the checks must rerun after push. MSBuild and compile-command parity were not run locally.
 
 ### Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 

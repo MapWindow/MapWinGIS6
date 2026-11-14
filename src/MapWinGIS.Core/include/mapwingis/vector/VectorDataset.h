@@ -64,8 +64,10 @@ namespace mwg
         /// Geometry type, mapped onto the shapefile types MapWinGIS 5 exposes.
         [[nodiscard]] ShapeType Type() const;
 
-        /// Exact count, cached after a complete feature scan. If the driver
-        /// cannot determine it, builds the feature ID index to count features.
+        /// Exact number of features returned by OGR iteration; deleted Shapefile
+        /// records are excluded. The count is cached after a complete scan. For
+        /// drivers with an inexact count, builds the feature ID index; other
+        /// drivers may provide an exact count without building that index.
         /// \throws CoreError when counting or reading features fails.
         [[nodiscard]] std::int64_t FeatureCount() const;
 

@@ -21,12 +21,19 @@ class GDALDataset;
 namespace mwg
 {
     /// Releases a dataset reference returned by a GDAL operation.
+    /// Releasing never takes the shared GDAL execution lock, so it cannot
+    /// block behind or deadlock with a GDAL operation running on another
+    /// thread. The caller must not release the last reference while another
+    /// thread still uses the dataset.
     struct MWG_CORE_API GdalDatasetDeleter
     {
         void operator()(GDALDataset* dataset) const noexcept;
     };
 
     /// Owns a GDAL dataset reference transferred to a caller.
+    /// Destruction is lock-free and safe from GDAL progress callbacks, but
+    /// the last reference must not be destroyed while another thread is
+    /// actively using the dataset.
     using GdalDatasetPtr = std::unique_ptr<GDALDataset, GdalDatasetDeleter>;
 
     /// Owns an operation's diagnostics and any returned datasets.
