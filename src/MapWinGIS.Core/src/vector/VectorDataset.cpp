@@ -429,12 +429,16 @@ namespace mwg
 
     std::int64_t detail::VectorLayerAccess::ForEachGeometry(
         const VectorLayer& layer,
-        const std::function<void(const OGRGeometry&)>& callback)
+        const std::function<void(const OGRGeometry&)>& callback,
+        Extent* extent)
     {
         OGRLayer& ogrLayer = *layer._impl->_layer;
+        const VectorLayer::Impl::IgnoredFields ignoredFields(
+            ogrLayer, layer._impl->_fields, false);
         ogrLayer.ResetReading();
         const ReadingReset readingReset{ogrLayer};
 
+        std::optional<Extent> computedExtent;
         std::int64_t count = 0;
         while (const OGRFeatureUniquePtr feature{ReadNextFeature(ogrLayer)})
         {
@@ -446,11 +450,30 @@ namespace mwg
             const OGRGeometry* geometry = feature->GetGeometryRef();
             if (geometry != nullptr && !geometry->IsEmpty())
             {
+                if (extent != nullptr)
+                {
+                    OGREnvelope envelope;
+                    geometry->getEnvelope(&envelope);
+                    const Extent featureExtent{
+                        envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY};
+                    computedExtent = computedExtent
+                        ? computedExtent->Union(featureExtent)
+                        : featureExtent;
+                }
                 callback(*geometry);
             }
         }
+        if (extent != nullptr)
+        {
+            *extent = computedExtent.value_or(Extent{});
+        }
         layer._impl->_featureCount = count;
         return count;
+    }
+
+    bool detail::VectorLayerAccess::HasFastExtent(const VectorLayer& layer) noexcept
+    {
+        return layer._impl->_layer->TestCapability(OLCFastGetExtent) != FALSE;
     }
 
     VectorLayer::VectorLayer(std::unique_ptr<Impl> impl)

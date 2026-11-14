@@ -405,8 +405,15 @@ share one.
 
 Core prepares and retains the complete supported polygon scene in memory,
 reading feature geometries sequentially without WKT serialization and
-reparsing. Adding a prepared layer retains the existing scene. Other layer
-changes and explicit invalidation rebuild the scene for all visible layers.
+reparsing. MapView caches one scene per layer: visibility changes reassemble
+the map snapshot without rereading visible layers, hidden layers are prepared
+when first shown, and removing or clearing layers drops only the corresponding
+cache entries. InvalidateLayerScene rebuilds one layer after source edits;
+InvalidateScene clears all layer caches. Adding a prepared layer seeds its
+cache directly. The public map scene remains an owning snapshot, so assembly
+copies cached geometry. When a driver cannot provide a fast extent, scene
+preparation computes bounds during the geometry traversal instead of scanning
+the layer separately.
 There is no tiling, paging, or clipping to the visible extent. GDI skips a
 layer whose device coordinates exceed its range. It clips drawing to the
 requested target rectangle and the host's existing clip region, then restores
