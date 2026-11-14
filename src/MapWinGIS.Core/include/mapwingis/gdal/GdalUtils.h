@@ -44,6 +44,13 @@ namespace mwg
      * Result().WasCancelled() distinguishes token/callback cancellation from
      * callback exceptions and other failures. GDAL execution is serialized
      * with runners and convenience operations, not with direct dataset access.
+     *
+     * Diagnostics raised by GDAL worker threads (for example "-multi" or
+     * NUM_THREADS warp options) reach the installed log handler but not
+     * Errors(), because error capture is thread-local. Open failures are
+     * reported with GDAL_OF_VERBOSE_ERROR, so open diagnostics name the path.
+     * A failed or cancelled operation can leave a partial output file behind;
+     * the utilities do not delete outputs they created.
      */
     class MWG_CORE_API GdalUtils
     {
