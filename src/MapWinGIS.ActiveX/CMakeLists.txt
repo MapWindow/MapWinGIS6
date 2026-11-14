@@ -33,6 +33,7 @@ set(MWG_ACTIVEX_HEADERS
     GdiVectorLayerRenderer.h
     MapWinGISControl.h
     OpenGlVectorLayerRenderer.h
+    PanBlit.h
     VectorLayerRenderer.h
     VectorRenderBackend.h
     ViewTransform.h

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "OpenGlVectorLayerRenderer.h"
+#include "PanBlit.h"
 #include "OpenGlVectorLayerRendererTestAccess.h"
 #include "VectorLayerRenderer.h"
 #include "ViewTransform.h"
@@ -1120,4 +1121,26 @@ TEST(VectorLayerRenderer, DrawsVerySmallAndVeryElongatedTargets)
         EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK)
             << bounds.right << " x " << bounds.bottom;
     }
+}
+
+TEST(PanBlitTest, AcceptsOnlyWholePixelShiftsInsideTheFrame)
+{
+    LONG shift = 99;
+    EXPECT_TRUE(mwg::activex::TryGetWholePixelPanShift(12.0, 100, shift));
+    EXPECT_EQ(shift, 12);
+
+    EXPECT_TRUE(mwg::activex::TryGetWholePixelPanShift(-7.0 + 5e-7, 100, shift));
+    EXPECT_EQ(shift, -7);
+
+    shift = 99;
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(2.25, 100, shift));
+    EXPECT_EQ(shift, 99);
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(99.9999999, 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(100.0, 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(-100.0, 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(
+        std::numeric_limits<double>::infinity(), 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(
+        std::numeric_limits<double>::quiet_NaN(), 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(0.0, 0, shift));
 }

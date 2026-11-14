@@ -27,7 +27,8 @@ namespace mwg::activex
             HDC deviceContext,
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
-            const Viewport& viewport) noexcept override;
+            const Viewport& viewport,
+            bool retainStagingBuffer = true) noexcept override;
 
         /// Layers skipped by the last Draw call, in drawing order.
         [[nodiscard]] const std::vector<LayerId>& GetFailedLayers() const noexcept

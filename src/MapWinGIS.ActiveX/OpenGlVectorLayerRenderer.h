@@ -65,7 +65,8 @@ namespace mwg::activex
             HDC deviceContext,
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
-            const Viewport& viewport) noexcept override;
+            const Viewport& viewport,
+            bool retainStagingBuffer = true) noexcept override;
 
         [[nodiscard]] std::wstring_view GetLastFailureReason() const noexcept
         {
@@ -131,6 +132,9 @@ namespace mwg::activex
         std::wstring_view _lastFailureReason =
             L"OpenGL was not selected for this frame.";
         std::wstring_view _initializationFailureReason;
-        std::vector<unsigned char> _rgbaPixels;
+        std::vector<unsigned char> _pixelBuffer;
+        int _retryTargetWidth = 0;
+        int _retryTargetHeight = 0;
+        unsigned int _initializationRetryDrawsRemaining = 0;
     };
 }
