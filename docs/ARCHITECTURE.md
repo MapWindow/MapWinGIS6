@@ -26,7 +26,9 @@ and cancels the current operation lifetime; a new non-null client site or a
 recreated control window starts a fresh operation lifetime. A closed control
 can therefore be reactivated and used again. Diagnostic strings are marshalled
 lossily: malformed UTF-8 and embedded NUL bytes become U+FFFD so invalid
-messages cannot prevent release of a completed operation.
+messages cannot prevent release of a completed operation. Its retry timer is
+created on the owner thread only while operation slots are outstanding and is
+stopped as soon as the last slot is ended.
 
 ## Module design
 
