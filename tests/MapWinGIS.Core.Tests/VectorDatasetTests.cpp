@@ -230,3 +230,10 @@ TEST(VectorDataset, ReportsFlushFailures)
         }
     }
 }
+
+
+TEST(VectorDataset, RejectsUnpairedSurrogateInCallerPath)
+{
+    const std::filesystem::path invalidPath(L"\\xD800");
+    EXPECT_THROW((void)VectorDataset::TryOpen(invalidPath), InvalidArgument);
+}
