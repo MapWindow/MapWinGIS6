@@ -481,7 +481,6 @@ namespace mwg
                                   const GdalCancellationToken* cancellationToken)
     {
         const detail::GdalExecutionLock lock;
-        _impl->operationSucceeded = false;
         if (_impl->runAttempted)
         {
             AddError(_impl->errors, "A GDAL algorithm runner can only be run once.");

@@ -6,7 +6,7 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 
 - [x] Phase 1 – Make the CMake test build complete and trustworthy (#8, #9, #10, #29, #40)
 - [x] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
-- [ ] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
+- [x] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 - [ ] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 - [ ] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 - [ ] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
@@ -184,8 +184,9 @@ Suggested fix:
 - MapWinGIS 5 opens the raster read-only and calls `GDALBuildOverviews` exactly like v6, so external `.ovr` production matches v5 and was recorded as intentional; no behavior change and no user decision was needed.
 - #32 decision: the user had no preference; the recommended default was applied — partial outputs are documented, not deleted.
 - #17: GDAL 3.12 offers no reliable per-operation collection of worker-thread diagnostics; documented instead of implemented.
-- #19: covered by a test that emits a warning from `GDALDataset::GetOpenOptions` while the runner describes the output.
-- The implementation was authored and statically reviewed on a Linux environment; the MSVC Debug/Release builds, both native test executables, and the compile-command parity check could not be run there and must be verified by CI or a Windows build before merge.
+- #19: covered by a test that emits a warning from the virtual `GDALDataset::GetRootGroup()` while the runner describes the output.
+- Local Windows validation: the CMake `x64-debug` build succeeded, and CTest ran 391 non-interactive tests with zero failures; three tests were skipped (the public COG network test and two rendering benchmarks). The build printed two MSVC D9025 command-line warnings for `/external:W0` being overridden by `/external:W4` while compiling ActiveX test sources.
+- The initial GitHub Actions run failed during compilation on the pre-merge branch (invalid GDAL override, callback type mismatch, protected `poDriver` access, and the development-side vector-test include). The merge and test corrections address these locally; the checks must rerun after push. MSBuild and compile-command parity were not run locally.
 
 ### Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 

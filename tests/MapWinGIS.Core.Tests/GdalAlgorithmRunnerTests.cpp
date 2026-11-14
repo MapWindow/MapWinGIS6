@@ -380,12 +380,17 @@ namespace
     class PostRunDiagnosticDataset final : public GDALDataset
     {
     public:
-        const char* const* GetOpenOptions() const override
+        std::shared_ptr<GDALGroup> GetRootGroup() const override
         {
             // Emitted while the runner describes the freshly produced output,
             // after algorithm->Run returned and outside every nested scope.
             CPLError(CE_Warning, CPLE_AppDefined, "%s", "post-run diagnostic");
-            return nullptr;
+            return {};
+        }
+
+        void SetTestDriver(GDALDriver* driver)
+        {
+            poDriver = driver;
         }
     };
 
@@ -496,6 +501,7 @@ TEST(GdalAlgorithmRunner, ReportsInvalidArgumentsAndRejectsRepeatedRun)
     ASSERT_TRUE(runner.Run());
     EXPECT_FALSE(runner.Run());
     EXPECT_NE(runner.Errors().back().message.find("only be run once"), std::string::npos);
+    EXPECT_TRUE(runner.Result().Succeeded());
 }
 
 TEST(GdalAlgorithmRunner, ReportsFinalizationFailures)
@@ -651,7 +657,7 @@ TEST(GdalAlgorithmRunner, FinalizesSuccessfulGdalRunEvenWhenCallbackCancelsOrThr
     EXPECT_EQ(CallbackLifecycleAlgorithm::finalizeCount, 2);
 
     GdalAlgorithmRunner nonStandard("mwg-test callback-lifecycle");
-    EXPECT_FALSE(nonStandard.Run([](double, std::string_view) { throw 42; }));
+    EXPECT_FALSE(nonStandard.Run([](double, std::string_view) -> bool { throw 42; }));
     EXPECT_FALSE(nonStandard.Result().WasCancelled());
     EXPECT_NE(nonStandard.Result().ErrorMsg().find("non-standard exception"), std::string::npos);
     EXPECT_EQ(CallbackLifecycleAlgorithm::finalizeCount, 3);
@@ -1183,14 +1189,14 @@ TEST(GdalAlgorithmRunner, CapturesDiagnosticsRaisedAfterAlgorithmRunReturns)
             return nullptr;
         auto dataset = std::make_unique<PostRunDiagnosticDataset>();
         dataset->SetDescription(info->pszFilename);
-        dataset->poDriver = GetGDALDriverManager()->GetDriverByName("MWGPostRun");
+        dataset->SetTestDriver(GetGDALDriverManager()->GetDriverByName("MWGPostRun"));
         return dataset.release();
     };
     GetGDALDriverManager()->RegisterDriver(driver.get());
 
     auto diagnosticOutput = std::make_unique<PostRunDiagnosticDataset>();
     diagnosticOutput->SetDescription("MWG_POST_RUN:output");
-    diagnosticOutput->poDriver = driver.get();
+    diagnosticOutput->SetTestDriver(driver.get());
     OutputFailureAlgorithm::outputDataset = diagnosticOutput.release();
     OutputFailureAlgorithm::runSucceeded = true;
     OutputFailureAlgorithm::rejectOpen = false;
@@ -1218,7 +1224,7 @@ namespace
         std::thread worker([&callbackEntered, &finish]
         {
             GdalAlgorithmRunner runner("mwg-test progress");
-            runner.Run([&](double fraction, std::string_view)
+            (void)runner.Run([&](double fraction, std::string_view)
             {
                 if (fraction == 0.0)
                 {
@@ -1251,12 +1257,13 @@ TEST(GdalAlgorithmRunner, ReleasesDatasetWithoutWaitingForActiveOperations)
     // The release must complete even though |worker| holds the execution
     // lock inside its blocked operation.
     std::future<void> release = std::async(std::launch::async, [&dataset] { dataset.reset(); });
-    ASSERT_EQ(release.wait_for(std::chrono::seconds(10)), std::future_status::ready)
-        << "Releasing a dataset blocked on the GDAL execution lock";
-    release.get();
-
+    const std::future_status releaseStatus = release.wait_for(std::chrono::seconds(10));
     finish.store(true);
     worker.join();
+    release.get();
+    EXPECT_EQ(releaseStatus, std::future_status::ready)
+        << "Releasing a dataset blocked on the GDAL execution lock";
+
     EXPECT_EQ(dataset, nullptr);
 }
 
@@ -1264,20 +1271,22 @@ TEST(GdalAlgorithmRunner, DestroysRunnerWithoutWaitingForActiveOperations)
 {
     GdalEnvironment::Initialize();
     RegisterTestAlgorithms();
+    auto idleRunner = std::make_unique<GdalAlgorithmRunner>("mwg-test progress");
     std::atomic_bool callbackEntered{false};
     std::atomic_bool finish{false};
     std::thread worker = StartBlockedOperation(callbackEntered, finish);
 
-    std::future<void> destruction = std::async(std::launch::async, []
+    std::future<void> destruction = std::async(std::launch::async, [&idleRunner]
     {
-        const GdalAlgorithmRunner idleRunner("mwg-test progress");
+        idleRunner.reset();
     });
-    ASSERT_EQ(destruction.wait_for(std::chrono::seconds(10)), std::future_status::ready)
-        << "Destroying a runner blocked on the GDAL execution lock";
-    destruction.get();
-
+    const std::future_status destructionStatus = destruction.wait_for(std::chrono::seconds(10));
     finish.store(true);
     worker.join();
+    destruction.get();
+    EXPECT_EQ(destructionStatus, std::future_status::ready)
+        << "Destroying a runner blocked on the GDAL execution lock";
+    EXPECT_EQ(idleRunner, nullptr);
 }
 
 TEST(GdalAlgorithmRunner, DestroysDatasetInsideProgressCallbackWithoutDeadlock)
