@@ -273,11 +273,16 @@ The OpenGL backend owns its WGL context and reusable pixel buffers; those
 resources are released with the control. `WM_SIZE` resizes the `MapView`
 viewport. For windowless hosts, `SetObjectRects` supplies the live size.
 `OnDraw` uses a viewport copy sized to the drawing target. Printing, metafile
-output, and scaled draws do not change the live viewport or its pending fit.
+output, and scaled draws do not change the live viewport or its pending fit,
+and use temporary frame/staging buffers rather than resizing the interactive
+screen buffers.
 If no view exists yet, drawing fits only that copy to the visible map extent.
 Resizing updates the OpenGL viewport and staging buffers without changing
 ownership of map data. A left-button drag pans the shared `MapView` by the
-pixel delta converted with the viewport's map-units-per-pixel resolution.
+pixel delta converted with the viewport's map-units-per-pixel resolution. The
+cached frame is blitted only for whole-pixel offsets (within a small
+floating-point epsilon); fractional offsets and shifts at least as large as
+the frame trigger a full render.
 Wheel input calls `MapView::ZoomAt` at the cursor. The control acquires and
 releases mouse capture through either its window or its windowless in-place
 site, and ends a drag on capture loss, cancellation, close, or destruction.
@@ -303,9 +308,12 @@ reported (`GetFailedLayers`, `RenderingStatus`) while the other layers are
 still drawn.
 OpenGL uses a context created on a hidden, never-presented window, draws with
 fixed-function calls into a framebuffer object (OpenGL 3.0 or
-`GL_EXT_framebuffer_object`), and reads pixels back into a reusable CPU buffer
-before copying them to the host device context; this is a working backend
-boundary, not an end-to-end accelerated presentation path. Rendering into a
+`GL_EXT_framebuffer_object`), and reads pixels back in BGRA order into a CPU
+buffer before copying them to the host device context. The interactive path
+retains this staging allocation; printing and alternate-size draws release it
+after each frame. The buffer is reused across polygons while transforming
+triangle vertices, avoiding a fresh allocation for every polygon. This is a
+working backend boundary, not an end-to-end accelerated presentation path. Rendering into a
 framebuffer object avoids undefined pixels from window pixel-ownership rules.
 Interior rings and concave boundaries draw identically in both backends
 because both consume the same scene; a polygon without a fill mesh (for
@@ -333,8 +341,8 @@ maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
 limited to one 64 MiB buffer per frame, including retained capacity and
 reallocation peaks; larger targets use GDI instead. A failed rendering
-context is recreated on later draws until a replacement initializes
-successfully. Switching backends does not discard map state. The GDI backend
+context is retried after a short back-off, or immediately when the target size
+changes, until a replacement initializes successfully. Switching backends does not discard map state. The GDI backend
 remains usable without a GPU or OpenGL runtime; Core itself has no
 graphics-runtime dependency.
 

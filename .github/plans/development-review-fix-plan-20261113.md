@@ -309,6 +309,14 @@ Suggested fix:
 **Limitations:** The public MapRenderScene remains an owning snapshot, so assembling it copies cached geometry. The cache prevents repeated GDAL reads and triangulation on visibility changes, but does not eliminate snapshot-copy cost. The nested polygon representation was retained; flat coordinate buffers remain a separate design decision.
 
 ### Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
+**Implementation submitted in [PR #81](https://github.com/MapWindow/MapWinGIS6/pull/81) (validation pending):**
+
+- Whole-pixel pan blits now reject fractional, non-finite, and frame-sized-or-larger offsets before integer conversion; resize failures invalidate the layer cache, request a redraw, and cannot escape the `noexcept` path.
+- Alternate-size draws use a temporary frame buffer and release their OpenGL staging buffer. OpenGL reuses transformed vertex storage per layer, reads BGRA directly into the DIB-compatible buffer, and backs off repeated initialization failures with a retry on target-size changes.
+- Added focused whole-pixel pan-offset regression tests. Local Windows builds and tests were skipped as requested; CI remains required.
+- Remaining limitation: the existing renderer has no separate convexity/angle calculation to cache, and no reliable render-scene generation token for safe per-scene support-result caching. The implementation therefore avoids a pointer-only cache that could return stale support results. GDI retains its preflight coordinate scan so an invalid layer is never partially drawn. The requested scaled-draw buffer-size integration assertion and forced-`ResizeView`-failure redraw test remain unverified.
+- The phase remains unchecked until CI/build and test criteria are met.
+
 
 **#21 – Sub-pixel check in the pan blit is dead code** (`src/MapWinGIS.ActiveX/MapWinGISControl.cpp:1124-1127`, `TryBlitCachedLayers`)
 
