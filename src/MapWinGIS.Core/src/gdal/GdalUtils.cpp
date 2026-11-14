@@ -112,7 +112,8 @@ namespace mwg
         {
             const std::string utf8Path = detail::ToUtf8(path);
             return DatasetPtr(static_cast<GDALDataset*>(
-                GDALOpenEx(utf8Path.c_str(), flags, nullptr, nullptr, nullptr)));
+                GDALOpenEx(utf8Path.c_str(), flags | GDAL_OF_VERBOSE_ERROR,
+                           nullptr, nullptr, nullptr)));
         }
 
         bool CloseDataset(DatasetPtr& dataset) noexcept
