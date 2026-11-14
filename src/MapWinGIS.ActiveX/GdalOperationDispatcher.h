@@ -146,6 +146,8 @@ namespace mwg::activex
         void Shutdown() noexcept;
         /// Starts a fresh operation lifetime after a previous Close/Shutdown.
         void Restart();
+        /// True while any operation result remains outstanding.
+        [[nodiscard]] bool HasOutstandingOperations() const noexcept;
 
     private:
         std::shared_ptr<State> _state;
