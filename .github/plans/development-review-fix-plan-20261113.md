@@ -10,7 +10,7 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 - [ ] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 - [ ] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 - [ ] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
-- [ ] Phase 7 – Rebuild render scenes per layer (#7, #34)
+- [x] Phase 7 – Rebuild render scenes per layer (#7, #34)
 - [ ] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
 - [ ] Phase 9 – Load vector datasets asynchronously (#36)
 
