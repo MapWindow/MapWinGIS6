@@ -1,5 +1,30 @@
 # Verified development lessons
 
+## Dataset and runner release must stay lock-free
+
+**Problem:** Taking the shared GDAL execution mutex in `GdalDatasetDeleter` or
+the `GdalAlgorithmRunner` destructor makes release wait for any long operation
+on another thread and can deadlock when release happens from a progress
+callback on a GDAL worker thread.
+
+**Cause:** The execution mutex serializes GDAL *operations*. Reference
+release (`GDALReleaseDataset`) is already thread-safe, so the lock added
+nothing except blocking; no GDAL thread-safety requirement justifies it.
+
+**Resolution:** Release dataset references and destroy runners without the
+execution mutex, and document that the last reference must not be released
+while another thread actively uses the dataset. Do not reintroduce the mutex
+into release paths. Regression tests release a dataset and destroy a runner
+while another thread's operation holds the lock inside a blocking progress
+callback.
+
+**Limitations:** The contract protects against blocking/deadlock, not against
+misuse (releasing a dataset another thread is using).
+
+See [GdalOperationResult.h](../../../src/MapWinGIS.Core/include/mapwingis/gdal/GdalOperationResult.h),
+[GdalAlgorithmRunner.cpp](../../../src/MapWinGIS.Core/src/gdal/GdalAlgorithmRunner.cpp),
+and [GdalAlgorithmRunnerTests.cpp](../../../tests/MapWinGIS.Core.Tests/GdalAlgorithmRunnerTests.cpp).
+
 ## A feature count may require a checked scan
 
 **Problem:** Some OGR drivers cannot report a feature count. An indexed
