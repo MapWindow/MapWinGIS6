@@ -194,6 +194,7 @@ namespace mwg::activex
         }
 
         _dispatching = true;
+        const std::uint64_t generation = _dispatcher.GetGeneration();
         struct DispatchGuard final
         {
             GdalEventSource& source;
@@ -208,7 +209,8 @@ namespace mwg::activex
             }
         } dispatchGuard{*this};
 
-        while (_dispatcher.IsDispatchActive())
+        while (_dispatcher.GetGeneration() == generation &&
+               _dispatcher.IsDispatchActive())
         {
             const auto notifications = _dispatcher.DrainNotifications();
             if (notifications.empty())
@@ -218,7 +220,8 @@ namespace mwg::activex
 
             for (const GdalOperationNotification& notification : notifications)
             {
-                if (!_dispatcher.IsDispatchActive())
+                if (_dispatcher.GetGeneration() != generation ||
+                    !_dispatcher.IsDispatchActive())
                 {
                     break;
                 }
@@ -231,24 +234,36 @@ namespace mwg::activex
                 {
                     GdalOperationDispatcher& dispatcher;
                     std::uint64_t operationId;
+                    std::uint64_t generation;
+                    GdalOperationDispatcher& owner;
 
                     ~NotificationGuard()
                     {
-                        dispatcher.EndNotificationDelivery(operationId);
+                        if (owner.GetGeneration() == generation)
+                        {
+                            dispatcher.EndNotificationDelivery(operationId);
+                        }
                     }
-                } notificationGuard{_dispatcher, notification.operationId};
+                } notificationGuard{_dispatcher, notification.operationId, generation, _dispatcher};
 
                 const HRESULT result =
                     notification.kind == GdalNotificationKind::Progress
-                    ? FireProgress(notification)
-                    : FireCompleted(notification.operationId);
-                if (FAILED(result))
+                    ? FireProgress(notification, generation)
+                    : FireCompleted(notification.operationId, generation);
+                if (FAILED(result) && _dispatcher.GetGeneration() == generation)
                 {
                     RecordCallbackError(notification.operationId, result);
                 }
+                if (_dispatcher.GetGeneration() != generation)
+                {
+                    break;
+                }
             }
         }
-        UpdateRetryTimer();
+        if (_dispatcher.GetGeneration() == generation)
+        {
+            UpdateRetryTimer();
+        }
         return 0;
     }
 
@@ -330,7 +345,8 @@ namespace mwg::activex
     }
 
     HRESULT GdalEventSource::FireProgress(
-        const GdalOperationNotification& notification)
+        const GdalOperationNotification& notification,
+        const std::uint64_t generation)
     {
         BSTR message = nullptr;
         HRESULT result = ComConversion::DiagnosticToBstr(notification.message, &message);
@@ -350,12 +366,15 @@ namespace mwg::activex
         result = FireEvent(
             kGdalProgressDispId,
             parameters,
-            notification.operationId);
+            notification.operationId,
+            generation);
         ::SysFreeString(message);
         return result;
     }
 
-    HRESULT GdalEventSource::FireCompleted(const std::uint64_t operationId)
+    HRESULT GdalEventSource::FireCompleted(
+        const std::uint64_t operationId,
+        const std::uint64_t generation)
     {
         VARIANTARG argument{};
         argument.vt = VT_I8;
@@ -364,13 +383,15 @@ namespace mwg::activex
         return FireEvent(
             kGdalOperationCompletedDispId,
             parameters,
-            operationId);
+            operationId,
+            generation);
     }
 
     HRESULT GdalEventSource::FireEvent(
         const DISPID eventId,
         DISPPARAMS& parameters,
-        const std::uint64_t operationId)
+        const std::uint64_t operationId,
+        const std::uint64_t generation)
     {
         if (parameters.cArgs > kMaxEventArguments)
         {
@@ -398,7 +419,8 @@ namespace mwg::activex
         HRESULT firstError = S_OK;
         for (const ATL::CComPtr<IUnknown>& unknown : sinks)
         {
-            if (!_dispatcher.IsDispatchActive())
+            if (_dispatcher.GetGeneration() != generation ||
+                !_dispatcher.IsDispatchActive())
             {
                 break;
             }
@@ -409,7 +431,10 @@ namespace mwg::activex
                 {
                     firstError = E_NOINTERFACE;
                 }
-                RecordCallbackError(operationId, E_NOINTERFACE);
+                if (_dispatcher.GetGeneration() == generation)
+                {
+                    RecordCallbackError(operationId, E_NOINTERFACE);
+                }
                 continue;
             }
 
@@ -436,7 +461,10 @@ namespace mwg::activex
                 {
                     firstError = result;
                 }
-                RecordCallbackError(operationId, result);
+                if (_dispatcher.GetGeneration() == generation)
+                {
+                    RecordCallbackError(operationId, result);
+                }
                 continue;
             }
 
@@ -458,13 +486,20 @@ namespace mwg::activex
             {
                 ::VariantClear(&arguments[index]);
             }
+            if (_dispatcher.GetGeneration() != generation)
+            {
+                break;
+            }
             if (FAILED(invokeResult))
             {
                 if (SUCCEEDED(firstError))
                 {
                     firstError = invokeResult;
                 }
-                RecordCallbackError(operationId, invokeResult);
+                if (_dispatcher.GetGeneration() == generation)
+                {
+                    RecordCallbackError(operationId, invokeResult);
+                }
             }
         }
         return firstError;
