@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "GdalOperationDispatcher.h"
+#include "GdalDispatchWindow.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -188,6 +189,17 @@ namespace
         return false;
     }
 }
+
+
+#if defined(MWG_ENABLE_RENDERER_TEST_HOOKS)
+TEST(GdalDispatchWindow, DoesNotArmRetryTimerWhileIdle)
+{
+    auto window = std::make_shared<mwg::activex::GdalDispatchWindow>();
+    ASSERT_NE(window->Create(nullptr, nullptr), nullptr);
+    EXPECT_FALSE(window->IsRetryTimerArmedForTesting());
+    window->Destroy();
+}
+#endif
 
 TEST(GdalOperationDispatcher, RunsRasterConversionAndDeliversCompletionOnOwnerThread)
 {
