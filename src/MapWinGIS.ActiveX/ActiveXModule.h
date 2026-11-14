@@ -21,7 +21,7 @@ enum class DllInstallRegistrationScope
 [[nodiscard]] inline DllInstallRegistrationScope ParseDllInstallRegistrationScope(
     const wchar_t* commandLine) noexcept
 {
-    if (commandLine == nullptr || commandLine[0] == L'\\0')
+    if (commandLine == nullptr || commandLine[0] == L'\0')
     {
         return DllInstallRegistrationScope::Machine;
     }
