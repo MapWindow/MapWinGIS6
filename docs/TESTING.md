@@ -117,6 +117,8 @@ Pull requests run both Debug and full-driver Release tests for x64.
 
 The native `MapWinGIS.ActiveX.Tests` project covers COM activation, registered
 control rendering through GDI and OpenGL, and GDAL progress/completion events.
+Diagnostic conversion tests verify that malformed UTF-8 and embedded NULs
+are replaced instead of rejecting a completed operation's result.
 Its registered-control host test also sends a wheel zoom and captured drag to
 the hosted control and verifies their viewport effects. Run this opt-in test
 with `tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1`.
