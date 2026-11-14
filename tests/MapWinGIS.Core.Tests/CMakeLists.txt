@@ -16,6 +16,7 @@ set(MWG_CORE_TEST_HEADERS
 set(MWG_CORE_TEST_SOURCES
     GdalAlgorithmRunnerTests.cpp
     GdalEnvironmentTests.cpp
+    GdalInitializationTests.cpp
     GdalModernCapabilitiesTests.cpp
     GdalRuntimeTests.cpp
     GdalTypedOptionsTests.cpp
@@ -61,6 +62,29 @@ mwg_deploy_runtime_dlls(MapWinGIS.Core.Tests)
 
 file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/test-results")
 gtest_discover_tests(MapWinGIS.Core.Tests
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 120
+    WORKING_DIRECTORY "${MWG_RUNTIME_DIR}"
+    XML_OUTPUT_DIR "${PROJECT_BINARY_DIR}/test-results"
+)
+
+
+# First-call initialization needs a fresh process because GDAL's error handler
+# and data paths are process-wide and GdalEnvironment initializes only once.
+add_executable(MapWinGIS.Core.GdalInitialization.Tests
+    GdalInitializationTests.cpp
+    Main.cpp
+)
+target_link_libraries(MapWinGIS.Core.GdalInitialization.Tests PRIVATE
+    MapWinGIS::Core
+    GDAL::GDAL
+    GTest::gtest
+)
+mwg_apply_common_options(MapWinGIS.Core.GdalInitialization.Tests)
+target_link_options(MapWinGIS.Core.GdalInitialization.Tests PRIVATE /SUBSYSTEM:CONSOLE)
+set_target_properties(MapWinGIS.Core.GdalInitialization.Tests PROPERTIES FOLDER "tests")
+mwg_deploy_runtime_dlls(MapWinGIS.Core.GdalInitialization.Tests)
+gtest_discover_tests(MapWinGIS.Core.GdalInitialization.Tests
     DISCOVERY_MODE PRE_TEST
     DISCOVERY_TIMEOUT 120
     WORKING_DIRECTORY "${MWG_RUNTIME_DIR}"
