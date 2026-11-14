@@ -34,6 +34,15 @@ the stamp and removes the stamp when requested features differ. This is needed
 when switching features such as `tests` and `full-drivers`; otherwise vcpkg
 could reuse an install built for another feature set.
 
+GitHub Actions vcpkg cache keys must also distinguish the requested feature set.
+On PR #80, Debug and Release initially shared a key; the Debug job saved its
+smaller package cache first, and the Release job could not replace it with the
+`full-drivers` packages. PR-scoped caches can also take precedence over a
+development-branch cache with the same key. The workflow now saves caches only
+from pushes and lets pull requests restore them. See
+[`build.yml`](../../../.github/workflows/build.yml) and the observed run
+`43613765529`.
+
 ## References
 
 - [Dependency manifest](../../../vcpkg.json)
