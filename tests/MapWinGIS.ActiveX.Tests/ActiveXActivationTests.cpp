@@ -843,6 +843,25 @@ namespace
 
 }
 
+TEST_F(ActiveXMapTest, InvalidGdalArgumentsSetComErrorInfo)
+{
+    ComPtr<IMapWinGISControlGdal> gdal;
+    ASSERT_EQ(_control.As(&gdal), S_OK);
+    BSTR emptyAlgorithm = ::SysAllocStringLen(nullptr, 0);
+    ASSERT_NE(emptyAlgorithm, nullptr);
+    LONGLONG operationId = 0;
+    EXPECT_EQ(gdal->BeginGdalOperation(emptyAlgorithm, nullptr, &operationId), E_INVALIDARG);
+    ::SysFreeString(emptyAlgorithm);
+
+    ComPtr<IErrorInfo> errorInfo;
+    ASSERT_EQ(::GetErrorInfo(0, &errorInfo), S_OK);
+    BSTR description = nullptr;
+    ASSERT_EQ(errorInfo->GetDescription(&description), S_OK);
+    std::unique_ptr<wchar_t, decltype(&::SysFreeString)> text{description, &::SysFreeString};
+    ASSERT_NE(text, nullptr);
+    EXPECT_NE(std::wstring(text.get()).find(L"algorithm path"), std::wstring::npos);
+}
+
 TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
 {
     ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}, {3, 0, 5, 2}}), S_OK);
