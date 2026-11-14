@@ -20,6 +20,14 @@ API and the ActiveX wrapper's separate `IMapWinGISControlGdal` interface.
 The wrapper handles COM translation, worker dispatch, progress, cancellation,
 and operation results; GDAL execution and dataset ownership remain in Core.
 
+The ActiveX GDAL event source is suspended while its control window is absent
+and resumes dispatch when that window is recreated. `IOleObject::Close` stops
+and cancels the current operation lifetime; a new non-null client site or a
+recreated control window starts a fresh operation lifetime. A closed control
+can therefore be reactivated and used again. Diagnostic strings are marshalled
+lossily: malformed UTF-8 and embedded NUL bytes become U+FFFD so invalid
+messages cannot prevent release of a completed operation.
+
 ## Module design
 
 - GDAL execution support, including `GdalAlgorithmRunner`, is implemented in
