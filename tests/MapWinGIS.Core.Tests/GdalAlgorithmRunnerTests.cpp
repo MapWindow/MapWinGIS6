@@ -15,12 +15,15 @@
 #include <barrier>
 #include <chrono>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <cpl_error.h>
 
 #include <Windows.h>
 #include <gdal_priv.h>
@@ -374,6 +377,18 @@ namespace
     bool OutputFailureAlgorithm::runSucceeded = false;
     bool OutputFailureAlgorithm::rejectOpen = false;
 
+    class PostRunDiagnosticDataset final : public GDALDataset
+    {
+    public:
+        const char* const* GetOpenOptions() const override
+        {
+            // Emitted while the runner describes the freshly produced output,
+            // after algorithm->Run returned and outside every nested scope.
+            CPLError(CE_Warning, CPLE_AppDefined, "%s", "post-run diagnostic");
+            return nullptr;
+        }
+    };
+
     void RegisterTestAlgorithms()
     {
         static std::once_flag registrationFlag;
@@ -636,7 +651,7 @@ TEST(GdalAlgorithmRunner, FinalizesSuccessfulGdalRunEvenWhenCallbackCancelsOrThr
     EXPECT_EQ(CallbackLifecycleAlgorithm::finalizeCount, 2);
 
     GdalAlgorithmRunner nonStandard("mwg-test callback-lifecycle");
-    EXPECT_FALSE(nonStandard.Run([](double, std::string_view) -> bool { throw 42; }));
+    EXPECT_FALSE(nonStandard.Run([](double, std::string_view) { throw 42; }));
     EXPECT_FALSE(nonStandard.Result().WasCancelled());
     EXPECT_NE(nonStandard.Result().ErrorMsg().find("non-standard exception"), std::string::npos);
     EXPECT_EQ(CallbackLifecycleAlgorithm::finalizeCount, 3);
@@ -1065,4 +1080,221 @@ TEST(GdalAlgorithmRunner, GroupCommandLineReturnsSelectedSubalgorithmMemoryOutpu
     ASSERT_NE(output, nullptr);
     EXPECT_EQ(output->GetRasterXSize(), 32);
     EXPECT_EQ(output->GetRasterYSize(), 24);
+}
+
+TEST(GdalAlgorithmRunner, FinalizeBeforeRunDoesNotPreventSuccessfulRun)
+{
+    GdalEnvironment::Initialize();
+    const GdalEnvironment::QuietScope quiet;
+    const test::TempDirectory directory;
+    const auto input = test::MakeRaster(directory.Path());
+    const std::filesystem::path output = directory.Path() / "finalize-first.tif";
+
+    GdalAlgorithmRunner runner("raster convert");
+    // The premature finalization records a diagnostic but must not poison
+    // the later Run().
+    EXPECT_FALSE(runner.Finalize());
+    ASSERT_TRUE(runner.SetArgument("input", ToUtf8(input)));
+    ASSERT_TRUE(runner.SetArgument("output", ToUtf8(output)));
+    EXPECT_TRUE(runner.Run()) << LastError(runner);
+    EXPECT_TRUE(runner.Result().Succeeded());
+    EXPECT_TRUE(std::filesystem::exists(output));
+}
+
+TEST(GdalAlgorithmRunner, MisuseDiagnosticsAfterSuccessfulRunDoNotChangeResult)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    GdalAlgorithmRunner runner(std::vector<std::string>{"mwg-test", "typed-arguments"});
+    ASSERT_TRUE(runner.SetArgument("text", "configured"));
+    ASSERT_TRUE(runner.SetArgument("enabled", true));
+    ASSERT_TRUE(runner.SetArgument("count", 3));
+    ASSERT_TRUE(runner.SetArgument("ratio", 1.5));
+    ASSERT_TRUE(runner.SetArgument("values", std::vector<double>{1.0, 2.0}));
+    ASSERT_TRUE(runner.SetArgument("labels", std::vector<std::string>{"one", "two"}));
+    ASSERT_TRUE(runner.Run());
+    EXPECT_TRUE(runner.Result().Succeeded());
+
+    const std::size_t errorCount = runner.Errors().size();
+    EXPECT_FALSE(runner.SetArgument("text", "changed"));
+    EXPECT_EQ(runner.Errors().size(), errorCount + 1);
+    EXPECT_TRUE(runner.Result().Succeeded());
+    EXPECT_EQ(runner.TakeOutputDataset(), nullptr);
+}
+
+TEST(GdalAlgorithmRunner, LoggerExceptionsPropagateAndReleaseTheOutputFile)
+{
+    GdalEnvironment::Initialize();
+    const test::TempDirectory directory;
+    const auto input = test::MakeRaster(directory.Path());
+    const std::filesystem::path output = directory.Path() / "logger-failure.tif";
+
+    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    {
+        throw std::runtime_error("logger failed");
+    });
+    GdalAlgorithmRunner runner("raster convert");
+    ASSERT_TRUE(runner.SetArgument("input", ToUtf8(input)));
+    ASSERT_TRUE(runner.SetArgument("output", ToUtf8(output)));
+    bool diagnosticSent = false;
+    EXPECT_THROW(
+        (void)runner.Run([&diagnosticSent](double fraction, std::string_view)
+        {
+            if (!diagnosticSent && fraction >= 1.0)
+            {
+                diagnosticSent = true;
+                CPLError(CE_Warning, CPLE_AppDefined, "%s", "trigger diagnostic");
+            }
+            return true;
+        }),
+        std::runtime_error);
+    GdalEnvironment::SetLogHandler({});
+
+    ASSERT_TRUE(diagnosticSent);
+    ASSERT_TRUE(std::filesystem::exists(output));
+    // The failed run must have released its output reference: the file is
+    // deletable instead of remaining locked.
+    EXPECT_TRUE(std::filesystem::remove(output));
+}
+
+TEST(GdalAlgorithmRunner, CapturesDiagnosticsRaisedAfterAlgorithmRunReturns)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    const GdalEnvironment::QuietScope quiet;
+    const auto deregister = [](GDALDriver* driver)
+    {
+        GetGDALDriverManager()->DeregisterDriver(driver);
+        delete driver;
+    };
+    const std::unique_ptr<GDALDriver, decltype(deregister)> driver{
+        std::make_unique<GDALDriver>().release(),
+        deregister};
+    driver->SetDescription("MWGPostRun");
+    driver->SetMetadataItem(GDAL_DCAP_RASTER, "YES");
+    driver->SetMetadataItem(GDAL_DCAP_OPEN, "YES");
+    driver->pfnIdentify = [](GDALOpenInfo* info)
+    {
+        return std::string_view(info->pszFilename).starts_with("MWG_POST_RUN:") ? TRUE : FALSE;
+    };
+    driver->pfnOpen = [](GDALOpenInfo* info) -> GDALDataset*
+    {
+        if (!std::string_view(info->pszFilename).starts_with("MWG_POST_RUN:"))
+            return nullptr;
+        auto dataset = std::make_unique<PostRunDiagnosticDataset>();
+        dataset->SetDescription(info->pszFilename);
+        dataset->poDriver = GetGDALDriverManager()->GetDriverByName("MWGPostRun");
+        return dataset.release();
+    };
+    GetGDALDriverManager()->RegisterDriver(driver.get());
+
+    auto diagnosticOutput = std::make_unique<PostRunDiagnosticDataset>();
+    diagnosticOutput->SetDescription("MWG_POST_RUN:output");
+    diagnosticOutput->poDriver = driver.get();
+    OutputFailureAlgorithm::outputDataset = diagnosticOutput.release();
+    OutputFailureAlgorithm::runSucceeded = true;
+    OutputFailureAlgorithm::rejectOpen = false;
+    OutputFailureAlgorithm::finalizeSucceeded = true;
+
+    GdalAlgorithmRunner runner("mwg-test output-failure");
+    EXPECT_TRUE(runner.Run()) << runner.Result().DetailedErrorMsg();
+    EXPECT_TRUE(runner.Result().Succeeded());
+    const auto& errors = runner.Errors();
+    EXPECT_TRUE(std::any_of(errors.begin(), errors.end(), [](const GdalError& error)
+    {
+        return error.message.find("post-run diagnostic") != std::string::npos;
+    })) << runner.Result().DetailedErrorMsg();
+    OutputFailureAlgorithm::outputDataset = nullptr;
+}
+
+namespace
+{
+    // Runs the progress algorithm with a callback that blocks at the first
+    // progress report, so the worker thread holds the GDAL execution lock
+    // until |finish| is set. Returns the blocked worker thread.
+    std::thread StartBlockedOperation(std::atomic_bool& callbackEntered, std::atomic_bool& finish)
+    {
+        callbackEntered.store(false);
+        std::thread worker([&callbackEntered, &finish]
+        {
+            GdalAlgorithmRunner runner("mwg-test progress");
+            runner.Run([&](double fraction, std::string_view)
+            {
+                if (fraction == 0.0)
+                {
+                    callbackEntered.store(true);
+                    while (!finish.load())
+                        std::this_thread::yield();
+                }
+                return true;
+            });
+        });
+        while (!callbackEntered.load())
+            std::this_thread::yield();
+        return worker;
+    }
+}
+
+TEST(GdalAlgorithmRunner, ReleasesDatasetWithoutWaitingForActiveOperations)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    const test::TempDirectory directory;
+    const auto input = test::MakeRaster(directory.Path());
+    GdalDatasetPtr dataset(static_cast<GDALDataset*>(GDALOpen(ToUtf8(input).c_str(), GA_ReadOnly)));
+    ASSERT_NE(dataset, nullptr);
+
+    std::atomic_bool callbackEntered{false};
+    std::atomic_bool finish{false};
+    std::thread worker = StartBlockedOperation(callbackEntered, finish);
+
+    // The release must complete even though |worker| holds the execution
+    // lock inside its blocked operation.
+    std::future<void> release = std::async(std::launch::async, [&dataset] { dataset.reset(); });
+    ASSERT_EQ(release.wait_for(std::chrono::seconds(10)), std::future_status::ready)
+        << "Releasing a dataset blocked on the GDAL execution lock";
+    release.get();
+
+    finish.store(true);
+    worker.join();
+    EXPECT_EQ(dataset, nullptr);
+}
+
+TEST(GdalAlgorithmRunner, DestroysRunnerWithoutWaitingForActiveOperations)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    std::atomic_bool callbackEntered{false};
+    std::atomic_bool finish{false};
+    std::thread worker = StartBlockedOperation(callbackEntered, finish);
+
+    std::future<void> destruction = std::async(std::launch::async, []
+    {
+        const GdalAlgorithmRunner idleRunner("mwg-test progress");
+    });
+    ASSERT_EQ(destruction.wait_for(std::chrono::seconds(10)), std::future_status::ready)
+        << "Destroying a runner blocked on the GDAL execution lock";
+    destruction.get();
+
+    finish.store(true);
+    worker.join();
+}
+
+TEST(GdalAlgorithmRunner, DestroysDatasetInsideProgressCallbackWithoutDeadlock)
+{
+    GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
+    const test::TempDirectory directory;
+    const auto input = test::MakeRaster(directory.Path());
+    GdalDatasetPtr dataset(static_cast<GDALDataset*>(GDALOpen(ToUtf8(input).c_str(), GA_ReadOnly)));
+    ASSERT_NE(dataset, nullptr);
+
+    GdalAlgorithmRunner runner("mwg-test progress");
+    EXPECT_TRUE(runner.Run([&dataset](double fraction, std::string_view)
+    {
+        if (fraction == 0.0)
+            dataset.reset();
+        return true;
+    }));
+    EXPECT_EQ(dataset, nullptr);
 }
