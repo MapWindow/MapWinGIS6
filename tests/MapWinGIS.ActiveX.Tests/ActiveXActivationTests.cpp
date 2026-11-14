@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -47,6 +48,51 @@ namespace
         const std::u8string utf8 = path.u8string();
         return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
     }
+
+    class TestPropertyBag final :
+        public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
+        public IPropertyBag
+    {
+    public:
+        BEGIN_COM_MAP(TestPropertyBag)
+            COM_INTERFACE_ENTRY(IPropertyBag)
+        END_COM_MAP()
+
+        STDMETHOD(Read)(LPCOLESTR name, VARIANT* value, IErrorLog*) override
+        {
+            if (name == nullptr || value == nullptr)
+            {
+                return E_POINTER;
+            }
+            const auto found = _values.find(name);
+            if (found == _values.end())
+            {
+                return E_INVALIDARG;
+            }
+            return ::VariantCopy(value, const_cast<VARIANT*>(
+                static_cast<const VARIANT*>(&found->second)));
+        }
+
+        STDMETHOD(Write)(LPCOLESTR name, VARIANT* value) override
+        {
+            if (name == nullptr || value == nullptr)
+            {
+                return E_POINTER;
+            }
+            try
+            {
+                _values.insert_or_assign(name, ATL::CComVariant(*value));
+                return S_OK;
+            }
+            catch (const std::bad_alloc&)
+            {
+                return E_OUTOFMEMORY;
+            }
+        }
+
+    private:
+        std::map<std::wstring, ATL::CComVariant, std::less<>> _values;
+    };
 
     class GdalEventSink final : public IDispatch
     {
@@ -1159,6 +1205,34 @@ TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughStream)
     LARGE_INTEGER beginning{};
     ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
     ASSERT_EQ(persistence->Load(stream.Get()), S_OK);
+
+    ATL::CComBSTR actual;
+    ASSERT_EQ(control->get_RenderingBackendPreference(&actual), S_OK);
+    EXPECT_STREQ(actual, L"OpenGL");
+}
+
+
+TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughPropertyBag)
+{
+    ComPtr<IPersistPropertyBag> persistence;
+    ASSERT_EQ(_control.As(&persistence), S_OK);
+    ComPtr<IMapWinGISControl2> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+
+    ATL::CComBSTR openGl(L"OpenGL");
+    ASSERT_EQ(control->put_RenderingBackendPreference(openGl), S_OK);
+
+    ATL::CComObject<TestPropertyBag>* rawBag = nullptr;
+    ASSERT_EQ(ATL::CComObject<TestPropertyBag>::CreateInstance(&rawBag), S_OK);
+    ASSERT_NE(rawBag, nullptr);
+    rawBag->AddRef();
+    ComPtr<IPropertyBag> bag;
+    bag.Attach(rawBag);
+    ASSERT_EQ(persistence->Save(bag.Get(), TRUE, TRUE), S_OK);
+
+    ATL::CComBSTR gdi(L"GDI");
+    ASSERT_EQ(control->put_RenderingBackendPreference(gdi), S_OK);
+    ASSERT_EQ(persistence->Load(bag.Get(), nullptr), S_OK);
 
     ATL::CComBSTR actual;
     ASSERT_EQ(control->get_RenderingBackendPreference(&actual), S_OK);
