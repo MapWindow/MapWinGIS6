@@ -150,6 +150,8 @@ namespace mwg::activex
         void Restart();
         /// True while any operation result remains outstanding.
         [[nodiscard]] bool HasOutstandingOperations() const noexcept;
+        /// Identifies the current operation lifetime; changes on Restart().
+        [[nodiscard]] std::uint64_t GetGeneration() const noexcept;
 
     private:
         mutable std::mutex _statePointerMutex;
