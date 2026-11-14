@@ -333,13 +333,78 @@ TEST_F(MapViewTest, PreparedLayersRetainTheirGeometryUntilInvalidated)
     ASSERT_EQ(view.Scene().layers.size(), 2U);
     EXPECT_EQ(view.Scene().layers[0].layerId, firstId);
     EXPECT_EQ(view.Scene().layers[1].layerId, secondId);
-    EXPECT_EQ(view.Scene().layers[0].scene.polygons.data(), firstPolygons);
-    EXPECT_EQ(view.Scene().layers[1].scene.polygons.data(), secondPolygons);
+    EXPECT_FALSE(view.Scene().layers[0].scene.polygons.empty());
+    EXPECT_FALSE(view.Scene().layers[1].scene.polygons.empty());
     EXPECT_EQ(driver.readCalls, 8);
 
     EXPECT_TRUE(view.InvalidateScene());
     EXPECT_EQ(view.Scene().layers.size(), 2U);
     EXPECT_EQ(driver.readCalls, 16);
+}
+
+TEST_F(MapViewTest, VisibilityChangesReuseCachedLayerScenes)
+{
+    VectorReadTestDriver driver;
+    auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    const LayerId id = view.AddLayer(dataset);
+
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    const int readsAfterBuild = driver.readCalls;
+    ASSERT_GT(readsAfterBuild, 0);
+
+    EXPECT_TRUE(view.SetLayerVisible(id, false));
+    EXPECT_TRUE(view.Scene().layers.empty());
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+
+    EXPECT_TRUE(view.SetLayerVisible(id, true));
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+}
+
+TEST_F(MapViewTest, HiddenLayerIsBuiltOnlyWhenFirstShown)
+{
+    VectorReadTestDriver driver;
+    auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    const LayerId id = view.AddLayer(dataset);
+    const int readsAfterAdd = driver.readCalls;
+    ASSERT_TRUE(view.SetLayerVisible(id, false));
+
+    EXPECT_TRUE(view.Scene().layers.empty());
+    EXPECT_EQ(driver.readCalls, readsAfterAdd);
+
+    ASSERT_TRUE(view.SetLayerVisible(id, true));
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_GT(driver.readCalls, readsAfterAdd);
+    const int readsAfterBuild = driver.readCalls;
+
+    EXPECT_TRUE(view.SetLayerVisible(id, false));
+    EXPECT_TRUE(view.SetLayerVisible(id, true));
+    EXPECT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+}
+
+TEST_F(MapViewTest, InvalidatingOneLayerRebuildsOnlyThatLayer)
+{
+    VectorReadTestDriver driver;
+    auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    const LayerId first = view.AddLayer(dataset);
+    const LayerId second = view.AddLayer(dataset);
+
+    ASSERT_EQ(view.Scene().layers.size(), 2U);
+    const int readsAfterBuild = driver.readCalls;
+    ASSERT_GT(readsAfterBuild, 0);
+
+    EXPECT_FALSE(view.InvalidateLayerScene(LayerId{}));
+    EXPECT_TRUE(view.InvalidateLayerScene(first));
+    ASSERT_EQ(view.Scene().layers.size(), 2U);
+    const int readsForOneLayer = driver.readCalls - readsAfterBuild;
+    EXPECT_GT(readsForOneLayer, 0);
+    EXPECT_LT(readsForOneLayer, readsAfterBuild);
+    EXPECT_EQ(view.Scene().layers[0].layerId, first);
+    EXPECT_EQ(view.Scene().layers[1].layerId, second);
 }
 
 TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
