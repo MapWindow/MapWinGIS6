@@ -7,6 +7,7 @@
 #include "ComConversion.h"
 
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace mwg::activex::ComConversion
