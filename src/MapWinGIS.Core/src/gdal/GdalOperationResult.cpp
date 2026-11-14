@@ -4,12 +4,10 @@
  * @file GdalOperationResult.cpp
  * @brief Implements GDAL operation-result diagnostics and dataset ownership.
  *
- * Formats diagnostics and releases returned dataset references under the
- * shared GDAL execution lock.
+ * Formats diagnostics and releases returned dataset references without
+ * waiting on the shared GDAL execution lock.
  */
 #include "mapwingis/gdal/GdalOperationResult.h"
-
-#include "internal/GdalExecution.h"
 
 #include <gdal_priv.h>
 
@@ -51,7 +49,10 @@ namespace mwg
 
     void GdalDatasetDeleter::operator()(GDALDataset* dataset) const noexcept
     {
-        const std::lock_guard lock(detail::GdalExecutionMutex());
+        // GDALReleaseDataset only decrements the reference count, which GDAL
+        // implements atomically; the actual close runs on the releasing
+        // thread when the last reference goes away. Releasing must never
+        // wait for unrelated operations that hold the execution lock.
         if (dataset != nullptr)
             GDALReleaseDataset(dataset);
     }
