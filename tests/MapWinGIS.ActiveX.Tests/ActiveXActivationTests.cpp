@@ -32,6 +32,7 @@
 #include <gdalalgorithm.h>
 
 #include "MapWinGIS.ActiveX_i.h"
+#include "ActiveXModule.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -1107,6 +1108,83 @@ TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
         &noArguments, &result, nullptr, nullptr), S_OK);
     EXPECT_EQ(result.vt, VT_I4);
     EXPECT_EQ(result.lVal, 1);
+}
+
+
+TEST_F(ActiveXMapTest, ExposesClassInfoAndGdalTypeInformation)
+{
+    ComPtr<IProvideClassInfo2> classInfo;
+    ASSERT_EQ(_control.As(&classInfo), S_OK);
+
+    GUID sourceDispId{};
+    ASSERT_EQ(
+        classInfo->GetGUID(GUIDKIND_DEFAULT_SOURCE_DISP_IID, &sourceDispId),
+        S_OK);
+    EXPECT_TRUE(IsEqualIID(sourceDispId, __uuidof(IMapWinGISControlEvents)));
+
+    ComPtr<ITypeInfo> coclassInfo;
+    ASSERT_EQ(classInfo->GetClassInfo(&coclassInfo), S_OK);
+    TYPEATTR* coclassAttributes = nullptr;
+    ASSERT_EQ(coclassInfo->GetTypeAttr(&coclassAttributes), S_OK);
+    EXPECT_TRUE(IsEqualGUID(coclassAttributes->guid, CLSID_MapWinGISControl));
+    coclassInfo->ReleaseTypeAttr(coclassAttributes);
+
+    ComPtr<IMapWinGISControlGdal> gdal;
+    ASSERT_EQ(_control.As(&gdal), S_OK);
+    ComPtr<IDispatch> dispatch;
+    ASSERT_EQ(gdal.As(&dispatch), S_OK);
+    UINT typeInfoCount = 0;
+    ASSERT_EQ(dispatch->GetTypeInfoCount(&typeInfoCount), S_OK);
+    EXPECT_EQ(typeInfoCount, 1U);
+    ComPtr<ITypeInfo> gdalTypeInfo;
+    ASSERT_EQ(dispatch->GetTypeInfo(0, LOCALE_USER_DEFAULT, &gdalTypeInfo), S_OK);
+}
+
+TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughStream)
+{
+    ComPtr<IPersistStreamInit> persistence;
+    ASSERT_EQ(_control.As(&persistence), S_OK);
+    ComPtr<IMapWinGISControl2> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+
+    ATL::CComBSTR openGl(L"OpenGL");
+    ASSERT_EQ(control->put_RenderingBackendPreference(openGl), S_OK);
+
+    ComPtr<IStream> stream;
+    ASSERT_EQ(CreateStreamOnHGlobal(nullptr, TRUE, &stream), S_OK);
+    ASSERT_EQ(persistence->Save(stream.Get(), TRUE), S_OK);
+
+    ATL::CComBSTR gdi(L"GDI");
+    ASSERT_EQ(control->put_RenderingBackendPreference(gdi), S_OK);
+    LARGE_INTEGER beginning{};
+    ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
+    ASSERT_EQ(persistence->Load(stream.Get()), S_OK);
+
+    ATL::CComBSTR actual;
+    ASSERT_EQ(control->get_RenderingBackendPreference(&actual), S_OK);
+    EXPECT_STREQ(actual, L"OpenGL");
+}
+
+TEST(ActiveXModule, ParsesDllInstallRegistrationScope)
+{
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(nullptr),
+        DllInstallRegistrationScope::Machine);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L""),
+        DllInstallRegistrationScope::Machine);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L"user"),
+        DllInstallRegistrationScope::User);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L"USER"),
+        DllInstallRegistrationScope::User);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L"machine"),
+        DllInstallRegistrationScope::Invalid);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L"user "),
+        DllInstallRegistrationScope::Invalid);
 }
 
 TEST_F(ActiveXMapTest, ExtendedLoadRefitsAnExistingNavigationView)
