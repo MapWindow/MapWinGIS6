@@ -15,6 +15,7 @@
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/vector/VectorDataset.h"
+#include "mapwingis/rendering/VectorRenderScene.h"
 
 using namespace mwg;
 using namespace mwg::test;
@@ -228,5 +229,71 @@ TEST(VectorDataset, ReportsFlushFailures)
             if (std::string_view(path).ends_with("detail"))
                 EXPECT_NE(message.find("Simulated flush failure"), std::string::npos) << message;
         }
+    }
+}
+
+
+// A deleted DBF record remains in the Shapefile's physical record count, but
+// GDAL iteration and indexed access both skip it.
+TEST(VectorDataset, ExcludesDeletedShapefileRecordsFromFeatureCount)
+{
+    const TempDirectory dir;
+    const std::filesystem::path path = MakeSampleShapefile(dir.Path());
+
+    {
+        GDALDatasetUniquePtr writable(
+            static_cast<GDALDataset*>(GDALDataset::Open(path.string().c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE)));
+        ASSERT_NE(writable, nullptr);
+        OGRLayer* const layer = writable->GetLayer(0);
+        ASSERT_NE(layer, nullptr);
+        ASSERT_EQ(layer->DeleteFeature(1), OGRERR_NONE);
+        ASSERT_EQ(writable->FlushCache(), CE_None);
+    }
+
+    {
+        const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+        VectorLayer& layer = dataset->Layer(0);
+        EXPECT_EQ(layer.FeatureCount(), SampleLayer::kFeatureCount - 1);
+        EXPECT_EQ(layer.CellInteger(0, 0), 1);
+        EXPECT_EQ(layer.CellInteger(0, 1), 3);
+        EXPECT_THROW((void)layer.CellInteger(0, 2), CoreError);
+    }
+
+    {
+        const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+        VectorLayer& layer = dataset->Layer(0);
+        const std::int64_t countBeforeGeometryScan = layer.FeatureCount();
+        const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(layer);
+        EXPECT_EQ(scene.sourceFeatureCount, SampleLayer::kFeatureCount - 1);
+        EXPECT_EQ(countBeforeGeometryScan, SampleLayer::kFeatureCount - 1);
+        EXPECT_EQ(layer.FeatureCount(), countBeforeGeometryScan);
+        EXPECT_EQ(layer.CellInteger(0, 1), 3);
+    }
+}
+
+TEST(VectorDataset, TruncatesLongInvalidWktWithoutSplittingUtf8)
+{
+    const TempDirectory dir;
+    const std::filesystem::path path = MakeSampleShapefile(dir.Path());
+    const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path, OpenMode::Update);
+
+    const std::string wkt = std::string(199, 'x') + "é" + std::string(300, 'y');
+    try
+    {
+        dataset->Layer(0).SetGeometryWkt(0, wkt);
+        FAIL() << "Invalid WKT was accepted";
+    }
+    catch (const CoreError& error)
+    {
+        const std::string message(error.what());
+        constexpr std::string_view prefix = "Cannot parse WKT: ";
+        const std::size_t excerptStart = message.find(prefix);
+        ASSERT_NE(excerptStart, std::string::npos);
+        const std::size_t excerptEnd = message.find("…", excerptStart + prefix.size());
+        ASSERT_NE(excerptEnd, std::string::npos);
+        EXPECT_EQ(message.substr(excerptStart + prefix.size(), excerptEnd - excerptStart - prefix.size()),
+                  std::string(199, 'x'));
+        EXPECT_NE(message.find(std::to_string(wkt.size()) + " bytes total"), std::string::npos);
+        EXPECT_LT(message.size(), 260U);
     }
 }
