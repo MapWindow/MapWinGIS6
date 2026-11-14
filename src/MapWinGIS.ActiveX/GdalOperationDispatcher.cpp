@@ -580,6 +580,12 @@ namespace mwg::activex
         _state = std::make_shared<State>();
     }
 
+    bool GdalOperationDispatcher::HasOutstandingOperations() const noexcept
+    {
+        std::lock_guard lock(_state->mutex);
+        return !_state->operations.empty();
+    }
+
     void GdalOperationDispatcher::Suspend() noexcept
     {
         std::lock_guard lock(_state->mutex);
