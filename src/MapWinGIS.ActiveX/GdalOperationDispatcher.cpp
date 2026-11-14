@@ -43,6 +43,7 @@ namespace mwg::activex
         std::mutex mutex;
         std::unordered_map<std::uint64_t, std::shared_ptr<Operation>> operations;
         std::uint64_t nextId = 1;
+        std::uint64_t generation = 1;
         WakeCallback wakeCallback = nullptr;
         void* wakeContext = nullptr;
         WorkerFinishedCallback workerFinishedCallback = nullptr;
@@ -289,14 +290,33 @@ namespace mwg::activex
             catch (const std::exception& exception)
             {
                 result.succeeded = false;
-                result.summary = ExceptionMessageToUtf8(exception.what());
-                result.diagnostics = result.summary;
+                try
+                {
+                    const std::string message = ExceptionMessageToUtf8(exception.what());
+                    result.summary = message;
+                    result.diagnostics = message;
+                }
+                catch (...)
+                {
+                    // A diagnostic must never escape this noexcept worker, especially
+                    // when the original failure was an allocation failure.
+                    result.summary.clear();
+                    result.diagnostics.clear();
+                }
             }
             catch (...)
             {
                 result.succeeded = false;
-                result.summary = "GDAL operation failed with an unknown native exception.";
-                result.diagnostics = result.summary;
+                try
+                {
+                    result.summary = "GDAL operation failed with an unknown native exception.";
+                    result.diagnostics = result.summary;
+                }
+                catch (...)
+                {
+                    result.summary.clear();
+                    result.diagnostics.clear();
+                }
             }
 
             std::lock_guard lock(state->mutex);
@@ -587,6 +607,8 @@ namespace mwg::activex
         const std::shared_ptr<State> previous = _state;
         {
             std::lock_guard stateLock(previous->mutex);
+            replacement->nextId = previous->nextId;
+            replacement->generation = previous->generation + 1;
             previous->stopping = true;
             previous->suspended = false;
             previous->wakeCallback = nullptr;
@@ -609,6 +631,12 @@ namespace mwg::activex
         const std::shared_ptr<State> state = _state;
         std::lock_guard lock(state->mutex);
         return !state->operations.empty();
+    }
+
+    std::uint64_t GdalOperationDispatcher::GetGeneration() const noexcept
+    {
+        std::lock_guard pointerLock(_statePointerMutex);
+        return _state->generation;
     }
 
     void GdalOperationDispatcher::Suspend() noexcept
