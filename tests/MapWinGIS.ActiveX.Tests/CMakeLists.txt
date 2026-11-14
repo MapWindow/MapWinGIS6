@@ -8,6 +8,7 @@ include(GoogleTest)
 
 set(MWG_ACTIVEX_TEST_HEADERS
     OpenGlVectorLayerRendererTestAccess.h
+    "${PROJECT_SOURCE_DIR}/src/MapWinGIS.ActiveX/PanBlit.h"
     "${PROJECT_SOURCE_DIR}/tests/MapWinGIS.Core.Tests/TestData.h"
 )
 

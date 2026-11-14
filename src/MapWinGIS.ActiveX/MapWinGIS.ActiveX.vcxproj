@@ -74,6 +74,7 @@
     <ClInclude Include="GdiVectorLayerRenderer.h" />
     <ClInclude Include="MapWinGISControl.h" />
     <ClInclude Include="OpenGlVectorLayerRenderer.h" />
+    <ClInclude Include="PanBlit.h" />
     <ClInclude Include="VectorLayerRenderer.h" />
     <ClInclude Include="VectorRenderBackend.h" />
     <ClInclude Include="ViewTransform.h" />

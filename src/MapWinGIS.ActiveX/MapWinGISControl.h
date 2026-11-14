@@ -194,7 +194,8 @@ private:
         const RECT& frameBounds,
         const mwg::rendering::MapRenderScene& scene,
         const mwg::Viewport& viewport,
-        bool useCache);
+        bool useCache,
+        bool retainRendererBuffers);
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;

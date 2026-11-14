@@ -43,7 +43,8 @@ namespace mwg::activex
             HDC deviceContext,
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
-            const Viewport& viewport) noexcept = 0;
+            const Viewport& viewport,
+            bool retainStagingBuffer = true) noexcept = 0;
     };
 
     /// True when bounds has the viewport's size and the viewport is valid.

@@ -44,6 +44,8 @@ namespace mwg::activex
         constexpr GLenum kMaxRenderbufferSize = 0x84E8;
         constexpr std::size_t kMaxStagingBufferBytes = 64U * 1024U * 1024U;
         constexpr std::size_t kBytesPerPixel = 4;
+        constexpr GLenum kBgra = 0x80E1;
+        constexpr unsigned int kInitializationRetryDraws = 60;
     }
 
     struct OpenGlVectorLayerRenderer::FramebufferFunctions final
@@ -214,14 +216,18 @@ namespace mwg::activex
         /// GL_VERTEX_ARRAY, and IsSupported must have accepted the scene.
         [[nodiscard]] HRESULT DrawPolygonFill(
             const rendering::TriangleMesh& mesh,
-            const ViewTransform& transform) noexcept
+            const ViewTransform& transform,
+            std::vector<GLdouble>& deviceVertices) noexcept
         {
-            // Client-side vertex arrays must stay alive until
-            // glDrawElements has consumed them; the transformed copy is
-            // local to this polygon's draw call.
-            std::vector<GLdouble> deviceVertices;
+            // Reuse one transformed-vertex allocation for every polygon in
+            // the layer instead of allocating in the inner draw loop.
             try
             {
+                deviceVertices.clear();
+                if (mesh.vertices.size() > deviceVertices.max_size() / 2U)
+                {
+                    return E_OUTOFMEMORY;
+                }
                 deviceVertices.reserve(mesh.vertices.size() * 2U);
                 for (const rendering::Point& point : mesh.vertices)
                 {
@@ -287,11 +293,12 @@ namespace mwg::activex
             const ViewTransform& transform) noexcept
         {
             glEnableClientState(GL_VERTEX_ARRAY);
+            std::vector<GLdouble> deviceVertices;
             for (std::size_t index = 0; index < scene.polygons.size(); ++index)
             {
                 glColor3ub(61, 122, 169);
                 const HRESULT fillResult =
-                    DrawPolygonFill(*scene.fillMeshes[index], transform);
+                    DrawPolygonFill(*scene.fillMeshes[index], transform, deviceVertices);
                 if (FAILED(fillResult))
                 {
                     glDisableClientState(GL_VERTEX_ARRAY);
@@ -629,14 +636,14 @@ namespace mwg::activex
     {
         try
         {
-            if (_rgbaPixels.capacity() < stagingBytes)
+            if (_pixelBuffer.capacity() < stagingBytes)
             {
                 // Drop retained capacity before reserve to avoid overlapping
                 // allocations that exceed the 64 MiB staging budget.
-                std::vector<unsigned char>().swap(_rgbaPixels);
-                _rgbaPixels.reserve(stagingBytes);
+                std::vector<unsigned char>().swap(_pixelBuffer);
+                _pixelBuffer.reserve(stagingBytes);
             }
-            _rgbaPixels.resize(stagingBytes);
+            _pixelBuffer.resize(stagingBytes);
         }
         catch (const std::bad_alloc&)
         {
@@ -726,9 +733,9 @@ namespace mwg::activex
             0,
             target.width,
             target.height,
-            GL_RGBA,
+            kBgra,
             GL_UNSIGNED_BYTE,
-            _rgbaPixels.data());
+            _pixelBuffer.data());
         if (glGetError() != GL_NO_ERROR)
         {
             _lastFailureReason =
@@ -746,7 +753,6 @@ namespace mwg::activex
         const RECT& bounds,
         const Target& target) noexcept
     {
-        const std::size_t pixelCount = target.pixelWidth * target.pixelHeight;
         for (std::size_t row = 0; row < target.pixelHeight / 2; ++row)
         {
             for (std::size_t column = 0; column < target.pixelWidth; ++column)
@@ -759,18 +765,14 @@ namespace mwg::activex
                 for (std::size_t channel = 0; channel < kBytesPerPixel; ++channel)
                 {
                     std::swap(
-                        _rgbaPixels[topPixel + channel],
-                        _rgbaPixels[bottomPixel + channel]);
+                        _pixelBuffer[topPixel + channel],
+                        _pixelBuffer[bottomPixel + channel]);
                 }
             }
         }
 
-        for (std::size_t pixel = 0; pixel < pixelCount; ++pixel)
-        {
-            const std::size_t offset = pixel * kBytesPerPixel;
-            std::swap(_rgbaPixels[offset], _rgbaPixels[offset + 2]);
-            _rgbaPixels[offset + 3] = 255;
-        }
+        // GL_BGRA matches the little-endian 32-bit BI_RGB DIB byte
+        // order; only the OpenGL bottom-up row order needs reversing.
 
         BITMAPINFO bitmapInfo{};
         bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -790,7 +792,7 @@ namespace mwg::activex
             0,
             0,
             static_cast<UINT>(target.height),
-            _rgbaPixels.data(),
+            _pixelBuffer.data(),
             &bitmapInfo,
             DIB_RGB_COLORS);
         if (copiedRows != target.height)
@@ -819,9 +821,16 @@ namespace mwg::activex
         const HDC deviceContext,
         const RECT& bounds,
         const rendering::MapRenderScene& scene,
-        const Viewport& viewport) noexcept
+        const Viewport& viewport,
+        const bool retainStagingBuffer) noexcept
     {
         _lastFailureReason = L"OpenGL did not render this frame.";
+        if (!retainStagingBuffer)
+        {
+            // A non-interactive draw must not retain a previous screen
+            // buffer, including when target validation rejects this frame.
+            std::vector<unsigned char>().swap(_pixelBuffer);
+        }
         const TargetValidation validation =
             ValidateTarget(deviceContext, bounds, scene, viewport);
         if (!validation.target.has_value())
@@ -839,8 +848,32 @@ namespace mwg::activex
             _initializationFailureReason = {};
         }
 
+        if (_initializationFailed &&
+            (target.width != _retryTargetWidth || target.height != _retryTargetHeight))
+        {
+            // A resize is a useful retry boundary: drivers can reject one
+            // context/target combination yet support a later target.
+            Release();
+            _initializationFailed = false;
+            _initializationFailureReason = {};
+            _initializationRetryDrawsRemaining = 0;
+        }
+        if (_initializationFailed)
+        {
+            if (_initializationRetryDrawsRemaining > 0)
+            {
+                --_initializationRetryDrawsRemaining;
+                _lastFailureReason = _initializationFailureReason;
+                return S_FALSE;
+            }
+            _initializationFailed = false;
+            _initializationFailureReason = {};
+        }
         if (!Initialize())
         {
+            _retryTargetWidth = target.width;
+            _retryTargetHeight = target.height;
+            _initializationRetryDrawsRemaining = kInitializationRetryDraws;
             return S_FALSE;
         }
         _contextInvalid = false;
@@ -860,15 +893,28 @@ namespace mwg::activex
             target.pixelWidth * target.pixelHeight * kBytesPerPixel;
         if (!EnsureStaging(stagingBytes))
         {
+            if (!retainStagingBuffer)
+            {
+                std::vector<unsigned char>().swap(_pixelBuffer);
+            }
             return S_FALSE;
         }
 
         const HRESULT renderResult = RenderScene(scene, viewport, target);
         if (FAILED(renderResult) || renderResult == S_FALSE)
         {
+            if (!retainStagingBuffer)
+            {
+                std::vector<unsigned char>().swap(_pixelBuffer);
+            }
             return renderResult;
         }
 
-        return CopyToDeviceContext(deviceContext, bounds, target);
+        const HRESULT copyResult = CopyToDeviceContext(deviceContext, bounds, target);
+        if (!retainStagingBuffer)
+        {
+            std::vector<unsigned char>().swap(_pixelBuffer);
+        }
+        return copyResult;
     }
 }
