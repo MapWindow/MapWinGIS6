@@ -49,7 +49,7 @@ namespace
         return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
     }
 
-    class TestPropertyBag final :
+    class TestPropertyBag :
         public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
         public IPropertyBag
     {
