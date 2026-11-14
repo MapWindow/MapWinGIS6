@@ -57,7 +57,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/development' && steps.cache.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
+        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: vcpkg-binary-cache
@@ -138,7 +138,7 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "MWG_CMAKE_BUILD_PRESET=$buildPreset"
 
       - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/development' && steps.cache.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
+        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: vcpkg-binary-cache
@@ -229,7 +229,7 @@ jobs:
             -m -v:m
 
       - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/development' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: vcpkg-binary-cache

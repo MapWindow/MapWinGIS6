@@ -217,10 +217,12 @@ $env:VCPKG_BINARY_SOURCES = 'clear;files,\\server\share\vcpkg-cache,readwrite'
 ```
 
 GitHub Actions keys its vcpkg cache by platform, requested feature set, runner
-image, and the dependency manifests and triplets. Pushes to `development` save
-the cache after dependency installation. Pull requests restore it without
-creating separate pull-request caches. Debug and CMake parity use the `tests`
-feature set, while Release uses `full` drivers.
+image, and the dependency manifests and triplets. Pushes to `development` and
+`main` save the cache after dependency installation; `main` needs its own
+entries because GitHub does not let the default branch restore caches from
+`development`. Pull requests restore these caches without creating separate
+pull-request caches. Debug and CMake parity use the `tests` feature set, while
+Release uses `full` drivers.
 
 ## Running the legacy MSBuild tests
 

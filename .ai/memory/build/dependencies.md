@@ -39,7 +39,9 @@ On PR #80, Debug and Release initially shared a key; the Debug job saved its
 smaller package cache first, and the Release job could not replace it with the
 `full-drivers` packages. PR-scoped caches can also take precedence over a
 development-branch cache with the same key. The workflow now saves caches only
-from `development` pushes and lets pull requests restore them. See
+from `development` and `main` pushes and lets pull requests restore them.
+`main` is the default branch and cannot restore `development`-scoped caches,
+so it must save its own. See
 [`build.yml`](../../../.github/workflows/build.yml) and the observed run
 `43613765529`.
 
