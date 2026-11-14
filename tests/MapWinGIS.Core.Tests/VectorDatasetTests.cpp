@@ -23,6 +23,12 @@ using namespace mwg::test;
 
 namespace
 {
+    std::string ToUtf8(const std::filesystem::path& path)
+    {
+        const std::u8string utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
     class FlushFailureDataset : public GDALDataset
     {
     public:
@@ -244,7 +250,7 @@ TEST(VectorDataset, ExcludesDeletedShapefileRecordsFromFeatureCount)
         // Without AUTO_REPACK=NO the driver removes the deleted record on close.
         const char* const openOptions[] = {"AUTO_REPACK=NO", nullptr};
         GDALDatasetUniquePtr writable(GDALDataset::Open(
-            path.string().c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE, nullptr, openOptions));
+            ToUtf8(path).c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE, nullptr, openOptions));
         ASSERT_NE(writable, nullptr);
         OGRLayer* const layer = writable->GetLayer(0);
         ASSERT_NE(layer, nullptr);
@@ -253,7 +259,7 @@ TEST(VectorDataset, ExcludesDeletedShapefileRecordsFromFeatureCount)
     }
 
     {
-        GDALDatasetUniquePtr raw(GDALDataset::Open(path.string().c_str(), GDAL_OF_VECTOR));
+        GDALDatasetUniquePtr raw(GDALDataset::Open(ToUtf8(path).c_str(), GDAL_OF_VECTOR));
         ASSERT_NE(raw, nullptr);
         OGRLayer* const layer = raw->GetLayer(0);
         ASSERT_NE(layer, nullptr);
