@@ -327,7 +327,7 @@ namespace mwg
             return {};
         }
 
-        std::wstring buffer(MAX_PATH, L'\\0');
+        std::wstring buffer(MAX_PATH, L'\0');
         for (;;)
         {
             const DWORD length = GetModuleFileNameW(module, buffer.data(), static_cast<DWORD>(buffer.size()));
