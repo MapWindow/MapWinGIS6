@@ -5,7 +5,7 @@
 Implement one phase per run and open one PR per phase, in this order. Check a phase off only when its PR is open and its build and tests pass.
 
 - [x] Phase 1 – Make the CMake test build complete and trustworthy (#8, #9, #10, #29, #40)
-- [ ] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
+- [x] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
 - [ ] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 - [ ] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 - [ ] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
@@ -115,8 +115,12 @@ Suggested fix:
 - Replace `"Cannot parse WKT: " + wkt` with a bounded excerpt (for example the first 200 characters followed by `…` and the total length). Make sure truncation does not split a UTF-8 sequence.
 - Test: an invalid WKT longer than the limit produces a message no longer than the limit plus the fixed text.
 
+**Phase 2 result:** Implemented in [PR #75](https://github.com/MapWindow/MapWinGIS6/pull/75). The Shapefile driver's count is bypassed because its reported total includes deleted DBF records; the indexed FID list is authoritative for those layers. WKT diagnostics now include at most a 200-byte UTF-8-safe excerpt and the original byte length. CMake Debug x64 built and all 384 non-interactive tests passed; MSBuild Debug x64 built without warnings and both test executables passed. Both new regression tests fail against the previous `VectorDataset.cpp`.
 
-**Implementation notes:** The Shapefile driver's count is bypassed because its reported total includes deleted DBF records; the indexed FID list is authoritative for those layers. WKT diagnostics now include at most a 200-byte UTF-8-safe excerpt and the original byte length. Regression tests cover deleted-record indexing, the geometry-iteration cache path, and multibyte truncation. Local builds and tests were intentionally not run under the user-approved GitHub-only workflow; CI validation is pending on the pull request.
+**Limitations and validation notes:**
+
+- The deleted-record fixture opens the Shapefile with `AUTO_REPACK=NO`; with the driver default the deleted record is removed on close and the test cannot detect the overcount. The test asserts that the raw driver count still includes the deleted record.
+- Build files did not change, so the compile-command parity check was not rerun locally.
 
 ### Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 

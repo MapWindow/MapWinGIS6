@@ -10,12 +10,13 @@
 #include <gtest/gtest.h>
 
 #include <gdal_priv.h>
+#include <ogrsf_frmts.h>
 
 #include "TestData.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
-#include "mapwingis/vector/VectorDataset.h"
 #include "mapwingis/rendering/VectorRenderScene.h"
+#include "mapwingis/vector/VectorDataset.h"
 
 using namespace mwg;
 using namespace mwg::test;
@@ -232,7 +233,6 @@ TEST(VectorDataset, ReportsFlushFailures)
     }
 }
 
-
 // A deleted DBF record remains in the Shapefile's physical record count, but
 // GDAL iteration and indexed access both skip it.
 TEST(VectorDataset, ExcludesDeletedShapefileRecordsFromFeatureCount)
@@ -241,13 +241,24 @@ TEST(VectorDataset, ExcludesDeletedShapefileRecordsFromFeatureCount)
     const std::filesystem::path path = MakeSampleShapefile(dir.Path());
 
     {
-        GDALDatasetUniquePtr writable(
-            static_cast<GDALDataset*>(GDALDataset::Open(path.string().c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE)));
+        // Without AUTO_REPACK=NO the driver removes the deleted record on close.
+        const char* const openOptions[] = {"AUTO_REPACK=NO", nullptr};
+        GDALDatasetUniquePtr writable(GDALDataset::Open(
+            path.string().c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE, nullptr, openOptions));
         ASSERT_NE(writable, nullptr);
         OGRLayer* const layer = writable->GetLayer(0);
         ASSERT_NE(layer, nullptr);
         ASSERT_EQ(layer->DeleteFeature(1), OGRERR_NONE);
         ASSERT_EQ(writable->FlushCache(), CE_None);
+    }
+
+    {
+        GDALDatasetUniquePtr raw(GDALDataset::Open(path.string().c_str(), GDAL_OF_VECTOR));
+        ASSERT_NE(raw, nullptr);
+        OGRLayer* const layer = raw->GetLayer(0);
+        ASSERT_NE(layer, nullptr);
+        ASSERT_EQ(layer->GetFeatureCount(TRUE), SampleLayer::kFeatureCount)
+            << "The fixture must keep the deleted record in the Shapefile";
     }
 
     {
