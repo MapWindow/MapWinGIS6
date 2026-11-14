@@ -115,6 +115,9 @@ Suggested fix:
 - Replace `"Cannot parse WKT: " + wkt` with a bounded excerpt (for example the first 200 characters followed by `…` and the total length). Make sure truncation does not split a UTF-8 sequence.
 - Test: an invalid WKT longer than the limit produces a message no longer than the limit plus the fixed text.
 
+
+**Implementation notes:** The Shapefile driver's count is bypassed because its reported total includes deleted DBF records; the indexed FID list is authoritative for those layers. WKT diagnostics now include at most a 200-byte UTF-8-safe excerpt and the original byte length. Regression tests cover deleted-record indexing, the geometry-iteration cache path, and multibyte truncation. Local builds and tests were intentionally not run under the user-approved GitHub-only workflow; CI validation is pending on the pull request.
+
 ### Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 
 **#2 – Dataset and runner release take the global execution mutex** (`src/MapWinGIS.Core/src/gdal/GdalOperationResult.cpp:52-57`, `GdalAlgorithmRunner.cpp:250-254`)
