@@ -410,9 +410,11 @@ namespace mwg::activex
     GdalCancelResult GdalOperationDispatcher::Cancel(
         const std::uint64_t operationId) noexcept
     {
-        std::lock_guard lock(_state->mutex);
-        const auto operation = _state->operations.find(operationId);
-        if (operation == _state->operations.end())
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> state = _state;
+        std::lock_guard lock(state->mutex);
+        const auto operation = state->operations.find(operationId);
+        if (operation == state->operations.end())
         {
             return GdalCancelResult::NotFound;
         }
@@ -506,8 +508,10 @@ namespace mwg::activex
 
     bool GdalOperationDispatcher::IsDispatchActive() const noexcept
     {
-        std::lock_guard lock(_state->mutex);
-        return !_state->stopping && !_state->suspended;
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> state = _state;
+        std::lock_guard lock(state->mutex);
+        return !state->stopping && !state->suspended;
     }
 
     std::vector<GdalOperationNotification>
@@ -554,18 +558,20 @@ namespace mwg::activex
 
     void GdalOperationDispatcher::Shutdown() noexcept
     {
-        std::lock_guard lock(_state->mutex);
-        if (_state->stopping)
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> state = _state;
+        std::lock_guard lock(state->mutex);
+        if (state->stopping)
         {
             return;
         }
 
-        _state->stopping = true;
-        _state->suspended = false;
-        _state->wakeCallback = nullptr;
-        _state->wakeContext = nullptr;
-        _state->wakePending = false;
-        for (auto& [operationId, operation] : _state->operations)
+        state->stopping = true;
+        state->suspended = false;
+        state->wakeCallback = nullptr;
+        state->wakeContext = nullptr;
+        state->wakePending = false;
+        for (auto& [operationId, operation] : state->operations)
         {
             static_cast<void>(operationId);
             operation->cancellation.Cancel();
@@ -576,14 +582,33 @@ namespace mwg::activex
 
     void GdalOperationDispatcher::Restart()
     {
-        Shutdown();
-        _state = std::make_shared<State>();
+        std::shared_ptr<State> replacement = std::make_shared<State>();
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> previous = _state;
+        {
+            std::lock_guard stateLock(previous->mutex);
+            previous->stopping = true;
+            previous->suspended = false;
+            previous->wakeCallback = nullptr;
+            previous->wakeContext = nullptr;
+            previous->wakePending = false;
+            for (auto& [operationId, operation] : previous->operations)
+            {
+                static_cast<void>(operationId);
+                operation->cancellation.Cancel();
+                operation->progress.reset();
+                operation->completionPending = false;
+            }
+        }
+        _state = std::move(replacement);
     }
 
     bool GdalOperationDispatcher::HasOutstandingOperations() const noexcept
     {
-        std::lock_guard lock(_state->mutex);
-        return !_state->operations.empty();
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> state = _state;
+        std::lock_guard lock(state->mutex);
+        return !state->operations.empty();
     }
 
     void GdalOperationDispatcher::Suspend() noexcept
