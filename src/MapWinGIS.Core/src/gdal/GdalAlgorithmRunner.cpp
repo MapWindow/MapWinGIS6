@@ -505,15 +505,7 @@ namespace mwg
         // premature Finalize()) stay visible in Errors() but must not corrupt
         // a later Run() or its Result().
         const std::size_t runStart = _impl->errors.size();
-        const bool succeeded = _impl->algorithm->Run(
-            detail::GdalProgressAdapterAccess::Function(),
-            detail::GdalProgressAdapterAccess::UserData(adapter));
-        AppendErrors(_impl->errors, scope);
-        const std::size_t appendedScopeErrors = scope.Errors().size();
-
-        // A successful GDAL Run must be finalized even if a callback cancelled
-        // or threw after GDAL had already produced its output.
-        _impl->executionSucceeded = succeeded;
+        bool succeeded = false;
         bool finalized = false;
         std::optional<PersistentOutput> persistentOutput;
         GDALArgDatasetValue* outputValue = nullptr;
@@ -545,6 +537,15 @@ namespace mwg
 
         try
         {
+            succeeded = _impl->algorithm->Run(
+                detail::GdalProgressAdapterAccess::Function(),
+                detail::GdalProgressAdapterAccess::UserData(adapter));
+            // A successful GDAL Run must be finalized even if a callback cancelled
+            // or threw after GDAL had already produced its output.
+            _impl->executionSucceeded = succeeded;
+            AppendErrors(_impl->errors, scope);
+            const std::size_t appendedScopeErrors = scope.Errors().size();
+
             if (succeeded)
             {
                 GDALAlgorithm* const actualAlgorithm = GetActualAlgorithm(_impl->algorithm.get());

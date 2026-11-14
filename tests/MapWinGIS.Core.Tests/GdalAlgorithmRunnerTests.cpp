@@ -373,6 +373,41 @@ namespace
         GDALArgDatasetValue _output;
     };
 
+    class LoggerFailureOutputAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        static inline std::string outputPath;
+
+        LoggerFailureOutputAlgorithm()
+            : GDALAlgorithm(
+                  "mwg-test-logger-failure-output",
+                  "Test output cleanup after logger failures",
+                  "")
+        {
+            AddArg("output", 0, "Output dataset", &_output);
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc, void*) override
+        {
+            GDALDriver* const driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+            GDALDataset* const output = driver != nullptr
+                                            ? driver->Create(outputPath.c_str(), 8, 8, 1, GDT_Byte, nullptr)
+                                            : nullptr;
+            if (output == nullptr)
+                return false;
+            _output.Set(output);
+            GDALReleaseDataset(output);
+            // Raised outside any progress callback, so the installed logger
+            // runs and its exception is captured by the runner's error scope.
+            CPLError(CE_Warning, CPLE_AppDefined, "%s", "trigger diagnostic");
+            return false;
+        }
+
+    private:
+        GDALArgDatasetValue _output;
+    };
+
     GDALDataset* OutputFailureAlgorithm::outputDataset = nullptr;
     bool OutputFailureAlgorithm::runSucceeded = false;
     bool OutputFailureAlgorithm::rejectOpen = false;
@@ -418,6 +453,8 @@ namespace
                                       [] { return std::make_unique<CallerOwnedOutputAlgorithm>(); });
             registry.DeclareAlgorithm({"mwg-test", "worker-progress"},
                                       [] { return std::make_unique<WorkerProgressAlgorithm>(); });
+            registry.DeclareAlgorithm({"mwg-test", "logger-failure-output"},
+                                      [] { return std::make_unique<LoggerFailureOutputAlgorithm>(); });
         });
     }
 
@@ -1131,35 +1168,38 @@ TEST(GdalAlgorithmRunner, MisuseDiagnosticsAfterSuccessfulRunDoNotChangeResult)
 TEST(GdalAlgorithmRunner, LoggerExceptionsPropagateAndReleaseTheOutputFile)
 {
     GdalEnvironment::Initialize();
+    RegisterTestAlgorithms();
     const test::TempDirectory directory;
-    const auto input = test::MakeRaster(directory.Path());
     const std::filesystem::path output = directory.Path() / "logger-failure.tif";
+    LoggerFailureOutputAlgorithm::outputPath = ToUtf8(output);
 
-    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    int loggerCalls = 0;
+    GdalEnvironment::SetLogHandler([&loggerCalls](LogLevel, std::string_view message)
     {
+        if (message.find("trigger diagnostic") == std::string_view::npos)
+            return;
+        ++loggerCalls;
         throw std::runtime_error("logger failed");
     });
-    GdalAlgorithmRunner runner("raster convert");
-    ASSERT_TRUE(runner.SetArgument("input", ToUtf8(input)));
-    ASSERT_TRUE(runner.SetArgument("output", ToUtf8(output)));
-    bool diagnosticSent = false;
-    EXPECT_THROW(
-        (void)runner.Run([&diagnosticSent](double fraction, std::string_view)
-        {
-            if (!diagnosticSent && fraction >= 1.0)
-            {
-                diagnosticSent = true;
-                CPLError(CE_Warning, CPLE_AppDefined, "%s", "trigger diagnostic");
-            }
-            return true;
-        }),
-        std::runtime_error);
+    GdalAlgorithmRunner runner("mwg-test logger-failure-output");
+    std::string exceptionMessage;
+    try
+    {
+        (void)runner.Run();
+    }
+    catch (const std::runtime_error& error)
+    {
+        exceptionMessage = error.what();
+    }
     GdalEnvironment::SetLogHandler({});
+    LoggerFailureOutputAlgorithm::outputPath.clear();
 
-    ASSERT_TRUE(diagnosticSent);
+    EXPECT_EQ(loggerCalls, 1);
+    EXPECT_EQ(exceptionMessage, "logger failed");
+    EXPECT_FALSE(runner.Result().Succeeded());
     ASSERT_TRUE(std::filesystem::exists(output));
-    // The failed run must have released its output reference: the file is
-    // deletable instead of remaining locked.
+    // The runner is still alive, so the file is deletable only if the
+    // exceptional exit closed the output instead of leaving it locked.
     EXPECT_TRUE(std::filesystem::remove(output));
 }
 
