@@ -26,6 +26,7 @@
 #include <windows.h>
 
 #include "internal/Utf8.h"
+#include "internal/GdalDiagnosticDispatch.h"
 #include "internal/GdalExecution.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalConfig.h"
@@ -92,41 +93,7 @@ namespace mwg
         void CPL_STDCALL ErrorHandler(const CPLErr severity, CPLErrorNum errorNumber,
                                       const char* message) noexcept
         {
-            if (message == nullptr) return;
-
-            GdalProcessState& state = ProcessState();
-            try
-            {
-                GdalEnvironment::ReportDiagnostic(ToLogLevel(severity), message);
-            }
-            catch (...)
-            {
-                if (!t_logException)
-                    t_logException = std::current_exception();
-            }
-
-            // Preserve a host-installed process-wide handler. Do not forward
-            // to GDAL's default/quiet handlers or recursively to ourselves.
-            const CPLErrorHandler previous = state.previousErrorHandler.load(std::memory_order_acquire);
-            if (previous != nullptr &&
-                previous != &ErrorHandler &&
-                previous != CPLDefaultErrorHandler &&
-                previous != CPLQuietErrorHandler)
-            {
-                try
-                {
-                    // Like the MapWinGIS logger, the host handler must not start
-                    // GDAL work: on a worker thread that would wait for the
-                    // execution lock held by the thread waiting for this worker.
-                    const detail::GdalCallbackScope callbackScope;
-                    previous(severity, errorNumber, message);
-                }
-                catch (...)
-                {
-                    if (!t_logException)
-                        t_logException = std::current_exception();
-                }
-            }
+            detail::DispatchGdalDiagnostic(severity, errorNumber, message, t_logException);
         }
 
         void DoInitialize(const std::filesystem::path& gdalDataDir,
@@ -221,6 +188,47 @@ namespace mwg
                 if (value != nullptr && CPLTestBool(value)) ++count;
             }
             return count;
+        }
+    }
+
+    void detail::DispatchGdalDiagnostic(const CPLErr severity, const CPLErrorNum errorNumber,
+                                        const char* message, std::exception_ptr& firstException) noexcept
+    {
+        if (message == nullptr) return;
+
+        try
+        {
+            GdalEnvironment::ReportDiagnostic(ToLogLevel(severity), message);
+        }
+        catch (...)
+        {
+            if (!firstException)
+                firstException = std::current_exception();
+        }
+
+        // Preserve a host-installed process-wide handler. Do not forward
+        // to GDAL's default/quiet handlers or recursively to ourselves.
+        const CPLErrorHandler previous = ProcessState().previousErrorHandler.load(std::memory_order_acquire);
+        if (previous == nullptr ||
+            previous == &ErrorHandler ||
+            previous == CPLDefaultErrorHandler ||
+            previous == CPLQuietErrorHandler)
+        {
+            return;
+        }
+
+        try
+        {
+            // Like the MapWinGIS logger, the host handler must not start
+            // GDAL work: on a worker thread that would wait for the
+            // execution lock held by the thread waiting for this worker.
+            const GdalCallbackScope callbackScope;
+            previous(severity, errorNumber, message);
+        }
+        catch (...)
+        {
+            if (!firstException)
+                firstException = std::current_exception();
         }
     }
 

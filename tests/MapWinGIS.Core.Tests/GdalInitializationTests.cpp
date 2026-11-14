@@ -18,6 +18,7 @@
 
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
+#include "mapwingis/gdal/GdalDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 namespace
@@ -26,12 +27,16 @@ namespace
     std::atomic<int> g_dataDirectoryWarnings{0};
     std::atomic_bool g_attemptReentry{false};
     std::atomic_bool g_reentryRejected{false};
+    std::atomic<int> g_lastHostClass{CE_None};
+    std::atomic<int> g_lastHostErrorNumber{CPLE_None};
     std::mutex g_messagesMutex;
     std::vector<std::string> g_messages;
 
-    void CPL_STDCALL HostErrorHandler(CPLErr, CPLErrorNum, const char* message)
+    void CPL_STDCALL HostErrorHandler(CPLErr errorClass, CPLErrorNum errorNumber, const char* message)
     {
         ++g_hostHandlerCalls;
+        g_lastHostClass = errorClass;
+        g_lastHostErrorNumber = errorNumber;
         if (message != nullptr)
         {
             std::lock_guard lock(g_messagesMutex);
@@ -111,4 +116,36 @@ TEST(GdalInitialization, RejectsGdalWorkFromHostHandler)
     EXPECT_FALSE(g_attemptReentry.load());
     EXPECT_TRUE(g_reentryRejected.load());
     mwg::GdalEnvironment::RethrowLogException();
+}
+
+TEST(GdalInitialization, ForwardsScopedDiagnosticsToHostHandler)
+{
+    if (!mwg::GdalEnvironment::IsInitialized())
+        CPLSetErrorHandler(&HostErrorHandler);
+    mwg::GdalEnvironment::Initialize();
+    {
+        std::lock_guard lock(g_messagesMutex);
+        g_messages.clear();
+    }
+    g_lastHostClass = CE_None;
+    g_lastHostErrorNumber = CPLE_None;
+
+    {
+        mwg::GdalErrorScope scope;
+        CPLError(CE_Failure, CPLE_FileIO, "%s", "scoped forwarding check");
+        ASSERT_EQ(scope.Errors().size(), 1U);
+        scope.RethrowCaptureException();
+    }
+    EXPECT_EQ(g_lastHostClass.load(), CE_Failure);
+    EXPECT_EQ(g_lastHostErrorNumber.load(), CPLE_FileIO);
+
+    {
+        mwg::GdalErrorScope scope;
+        const mwg::GdalEnvironment::QuietScope quiet;
+        CPLError(CE_Warning, CPLE_AppDefined, "%s", "quiet scoped check");
+    }
+
+    std::lock_guard lock(g_messagesMutex);
+    EXPECT_EQ(std::count(g_messages.begin(), g_messages.end(), "scoped forwarding check"), 1);
+    EXPECT_EQ(std::count(g_messages.begin(), g_messages.end(), "quiet scoped check"), 0);
 }

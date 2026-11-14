@@ -30,6 +30,7 @@ set(MWG_CORE_PUBLIC_HEADERS
 )
 
 set(MWG_CORE_PRIVATE_HEADERS
+    src/internal/GdalDiagnosticDispatch.h
     src/internal/GdalExecution.h
     src/internal/GdalProgressAdapterAccess.h
     src/internal/Utf8.h
