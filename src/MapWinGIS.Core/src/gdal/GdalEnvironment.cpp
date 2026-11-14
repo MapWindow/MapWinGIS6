@@ -115,6 +115,10 @@ namespace mwg
             {
                 try
                 {
+                    // Like the MapWinGIS logger, the host handler must not start
+                    // GDAL work: on a worker thread that would wait for the
+                    // execution lock held by the thread waiting for this worker.
+                    const detail::GdalCallbackScope callbackScope;
                     previous(severity, errorNumber, message);
                 }
                 catch (...)

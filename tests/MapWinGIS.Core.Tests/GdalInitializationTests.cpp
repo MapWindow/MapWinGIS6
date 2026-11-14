@@ -16,12 +16,16 @@
 #include <cpl_error.h>
 #include <gdal.h>
 
+#include "mapwingis/core/Error.h"
+#include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 namespace
 {
     std::atomic<int> g_hostHandlerCalls{0};
     std::atomic<int> g_dataDirectoryWarnings{0};
+    std::atomic_bool g_attemptReentry{false};
+    std::atomic_bool g_reentryRejected{false};
     std::mutex g_messagesMutex;
     std::vector<std::string> g_messages;
 
@@ -32,6 +36,18 @@ namespace
         {
             std::lock_guard lock(g_messagesMutex);
             g_messages.emplace_back(message);
+        }
+
+        if (g_attemptReentry.exchange(false))
+        {
+            try
+            {
+                const mwg::GdalAlgorithmRunner runner("raster info");
+            }
+            catch (const mwg::CoreError&)
+            {
+                g_reentryRejected = true;
+            }
         }
     }
 }
@@ -79,4 +95,20 @@ TEST(GdalInitialization, PreservesHostHandlerAndReportsMissingDataDirectories)
 
     EXPECT_FALSE(mwg::GdalEnvironment::Initialize(root / "other-gdal", root / "other-proj"));
     mwg::GdalEnvironment::SetLogHandler({});
+}
+
+TEST(GdalInitialization, RejectsGdalWorkFromHostHandler)
+{
+    // The host handler must be installed before Core so Core forwards to it.
+    if (!mwg::GdalEnvironment::IsInitialized())
+        CPLSetErrorHandler(&HostErrorHandler);
+    mwg::GdalEnvironment::Initialize();
+    g_reentryRejected = false;
+    g_attemptReentry = true;
+
+    CPLError(CE_Warning, CPLE_AppDefined, "%s", "host re-entry check");
+
+    EXPECT_FALSE(g_attemptReentry.load());
+    EXPECT_TRUE(g_reentryRejected.load());
+    mwg::GdalEnvironment::RethrowLogException();
 }
