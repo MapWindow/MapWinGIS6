@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <cpl_conv.h>
+#include <cpl_error.h>
 #include <gdal_priv.h>
 #include <ogrsf_frmts.h>
 
@@ -497,10 +498,14 @@ TEST(GdalUtils, MapsFailureDiagnosticsToLegacyErrorProperties)
     test::TempDirectory directory;
     GdalUtils utils;
 
+    const std::filesystem::path missingInput = directory.Path() / "missing.tif";
     EXPECT_FALSE(RunLegacyRasterTranslate(
-        utils, directory.Path() / "missing.tif", directory.Path() / "missing-output.tif", {}));
-    EXPECT_NE(utils.LastErrorCode(), 0);
-    EXPECT_FALSE(utils.ErrorMsg(utils.LastErrorCode()).empty());
+        utils, missingInput, directory.Path() / "missing-output.tif", {}));
+    // Open failures are verbose: the diagnostic names the failing path.
+    EXPECT_EQ(utils.LastErrorCode(), CPLE_OpenFailed);
+    const std::string openError = utils.ErrorMsg(utils.LastErrorCode());
+    EXPECT_NE(openError.find(missingInput.filename().string()), std::string::npos)
+        << openError;
     EXPECT_FALSE(utils.DetailedErrorMsg().empty());
     EXPECT_FALSE(utils.Errors().empty());
 

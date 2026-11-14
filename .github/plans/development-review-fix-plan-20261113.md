@@ -6,7 +6,7 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 
 - [x] Phase 1 – Make the CMake test build complete and trustworthy (#8, #9, #10, #29, #40)
 - [ ] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
-- [ ] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
+- [x] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 - [ ] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 - [ ] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 - [ ] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
@@ -172,6 +172,16 @@ Suggested fix:
 
 - Check how MapWinGIS 5 built overviews (repository `MapWindow/MapWinGIS`, its GDAL overview helpers): internal GeoTIFF overviews or external `.ovr`.
 - Record the result in `docs/gdal-migration.md`. If MapWinGIS 5 built internal overviews and v6 deliberately builds external ones, document the difference and its reason. If the difference is unintended, raise it as a **Decision** with the user; do not change the behaviour in this phase.
+
+**Phase 3 result:** Implemented in a stacked PR on the Phase 2 PR branch. `GdalDatasetDeleter` and `GdalAlgorithmRunner` destruction release their references without taking the GDAL execution lock; `Run()` decides failure on run-scoped diagnostics only, freezes `Result().succeeded` at the end of `Run()`, cleans up (closes) the output on every exceptional exit, and appends outer-scope diagnostics captured after `algorithm->Run` returned. Opens use `GDAL_OF_VERBOSE_ERROR`. Threading and partial-output contracts are documented in the headers, `docs/ARCHITECTURE.md`, `docs/gdal-integration.md`, and `docs/gdal-migration.md`. New regression tests cover release during a blocked operation, runner destruction during a blocked operation, dataset destruction inside a progress callback, Finalize-before-Run, post-success misuse diagnostics, logger-exception cleanup of the output file, post-run diagnostic capture, and verbose open-error assertions.
+
+**Limitations and validation notes:**
+
+- MapWinGIS 5 opens the raster read-only and calls `GDALBuildOverviews` exactly like v6, so external `.ovr` production matches v5 and was recorded as intentional; no behavior change and no user decision was needed.
+- #32 decision: the user had no preference; the recommended default was applied — partial outputs are documented, not deleted.
+- #17: GDAL 3.12 offers no reliable per-operation collection of worker-thread diagnostics; documented instead of implemented.
+- #19: covered by a test that emits a warning from `GDALDataset::GetOpenOptions` while the runner describes the output.
+- The implementation was authored and statically reviewed on a Linux environment; the MSVC Debug/Release builds, both native test executables, and the compile-command parity check could not be run there and must be verified by CI or a Windows build before merge.
 
 ### Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 

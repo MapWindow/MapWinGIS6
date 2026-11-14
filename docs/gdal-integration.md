@@ -98,9 +98,14 @@ const bool succeeded = runner.Run(progress, &cancellation);
 
 Use the token with `WriteCog()` or `RunPipeline()` in the same way. Not every
 GDAL algorithm reports progress, so cancellation may not interrupt those
-algorithms promptly. Cancellation can leave partial output files. Callbacks
+algorithms promptly. Cancellation can leave partial output files; failed and
+cancelled operations never delete output files they created. Callbacks
 must not start another GDAL operation or wait on a thread that needs the GDAL
 execution lock; callback exceptions are returned as operation failures.
+GDAL can also report diagnostics on worker threads (for example with
+`-multi` or `NUM_THREADS` options). Those diagnostics reach the installed
+log handler but not `Errors()`, because GDAL error capture is thread-local;
+GDAL 3.12 offers no reliable per-operation collection for them.
 
 The legacy `GdalUtils::GdalRasterWarp()` accepts `-multi` and threaded warp
 options such as `-wo NUM_THREADS=2`, with or without a progress callback.

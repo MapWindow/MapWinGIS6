@@ -82,6 +82,15 @@ The compatibility methods are native C++ APIs, not binary-compatible COM
 interfaces. The ActiveX wrapper translates its generic COM arguments and
 results to the core API; it does not expose these operation-specific methods.
 
+### Overview building
+
+The v5 `GdalUtils::GdalBuildOverviews` opened the source raster read-only and
+called `GDALBuildOverviews`, so drivers that cannot update the file in place
+(for example GeoTIFF) stored overviews in an external `.ovr` sidecar file. The
+v6 compatibility method uses the same contract: it opens the raster read-only
+and calls `GDALBuildOverviews`, so external `.ovr` files are produced in the
+same situations as v5. This is intentional and matches the v5 behavior.
+
 ### Native error contracts
 
 Configuration helpers now throw `InvalidArgument`, a subclass of `CoreError`,
