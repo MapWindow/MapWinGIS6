@@ -45,8 +45,12 @@ namespace mwg
         static void Initialize();
 
         /// Initializes GDAL with explicit data locations. Returns true when
-        /// these paths are active (including an identical repeated request);
-        /// returns false when GDAL was already initialized with different paths.
+        /// these paths are active on the calling thread (including an identical
+        /// repeated request): GDAL_DATA, including any thread-local override,
+        /// equals gdalDataDir and the PROJ search path is exactly projDataDir.
+        /// An empty path configures nothing and is not checked. Returns false,
+        /// and logs a warning, when GDAL was already initialized with different
+        /// paths or a configured path has since been overridden.
         [[nodiscard]] static bool Initialize(const std::filesystem::path& gdalDataDir,
                                              const std::filesystem::path& projDataDir);
 

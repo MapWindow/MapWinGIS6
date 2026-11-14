@@ -165,6 +165,33 @@ namespace mwg
             g_initialized.store(true, std::memory_order_release);
         }
 
+        // Names the requested path that GDAL does not use on the calling thread,
+        // or returns an empty string. Empty requests configure nothing and are
+        // not checked.
+        std::string FindInactivePath(const std::filesystem::path& gdalDataDir,
+                                     const std::filesystem::path& projDataDir)
+        {
+            if (!gdalDataDir.empty())
+            {
+                // Includes thread-local overrides, which take precedence.
+                const char* const active = CPLGetConfigOption("GDAL_DATA", nullptr);
+                if (active == nullptr || ToUtf8(gdalDataDir) != active)
+                    return "GDAL_DATA";
+            }
+
+            if (!projDataDir.empty())
+            {
+                char** const paths = OSRGetPROJSearchPaths();
+                const bool active = paths != nullptr && paths[0] != nullptr && paths[1] == nullptr &&
+                                    ToUtf8(projDataDir) == paths[0];
+                CSLDestroy(paths);
+                if (!active)
+                    return "the PROJ search path";
+            }
+
+            return {};
+        }
+
         GDALDriverH FindDriver(const std::string& name, const unsigned int kind)
         {
             GdalEnvironment::Initialize();
@@ -244,14 +271,22 @@ namespace mwg
     {
         std::call_once(g_initFlag, DoInitialize, gdalDataDir, projDataDir);
         const GdalProcessState& state = ProcessState();
-        const bool samePaths = state.gdalDataDir == gdalDataDir && state.projDataDir == projDataDir;
-        if (!samePaths)
+        if (state.gdalDataDir != gdalDataDir || state.projDataDir != projDataDir)
         {
             ReportDiagnostic(LogLevel::Warning,
                              "GdalEnvironment is already initialized with different data paths; "
                              "the requested paths were not applied.");
+            return false;
         }
-        return samePaths;
+
+        if (const std::string inactive = FindInactivePath(gdalDataDir, projDataDir); !inactive.empty())
+        {
+            ReportDiagnostic(LogLevel::Warning,
+                             "The requested GDAL data paths are not active: " + inactive +
+                                 " has been overridden after or outside GdalEnvironment initialization.");
+            return false;
+        }
+        return true;
     }
 
     bool GdalEnvironment::IsInitialized() noexcept

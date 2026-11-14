@@ -13,11 +13,14 @@
 #include <string>
 #include <vector>
 
+#include <cpl_conv.h>
 #include <cpl_error.h>
 #include <gdal.h>
+#include <ogr_srs_api.h>
 
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
+#include "mapwingis/gdal/GdalConfig.h"
 #include "mapwingis/gdal/GdalDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
@@ -99,6 +102,29 @@ TEST(GdalInitialization, PreservesHostHandlerAndReportsMissingDataDirectories)
     }
 
     EXPECT_FALSE(mwg::GdalEnvironment::Initialize(root / "other-gdal", root / "other-proj"));
+
+    // The same arguments only succeed while GDAL still uses those paths.
+    const std::string otherPath = (root / "override").string();
+    EXPECT_TRUE(mwg::GdalEnvironment::Initialize(gdalData, projData));
+    {
+        const mwg::ScopedGdalConfigOption globalOverride("GDAL_DATA", otherPath);
+        EXPECT_FALSE(mwg::GdalEnvironment::Initialize(gdalData, projData));
+    }
+    EXPECT_TRUE(mwg::GdalEnvironment::Initialize(gdalData, projData));
+
+    CPLSetThreadLocalConfigOption("GDAL_DATA", otherPath.c_str());
+    EXPECT_FALSE(mwg::GdalEnvironment::Initialize(gdalData, projData));
+    CPLSetThreadLocalConfigOption("GDAL_DATA", nullptr);
+    EXPECT_TRUE(mwg::GdalEnvironment::Initialize(gdalData, projData));
+
+    const std::string projPath = projData.string();
+    const char* const otherProjPaths[] = {otherPath.c_str(), nullptr};
+    const char* const projPaths[] = {projPath.c_str(), nullptr};
+    OSRSetPROJSearchPaths(otherProjPaths);
+    EXPECT_FALSE(mwg::GdalEnvironment::Initialize(gdalData, projData));
+    OSRSetPROJSearchPaths(projPaths);
+    EXPECT_TRUE(mwg::GdalEnvironment::Initialize(gdalData, projData));
+
     mwg::GdalEnvironment::SetLogHandler({});
 }
 
