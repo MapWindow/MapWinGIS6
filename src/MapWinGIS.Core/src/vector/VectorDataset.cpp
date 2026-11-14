@@ -136,6 +136,23 @@ namespace mwg
                                   return std::tolower(x) == std::tolower(y);
                               });
         }
+
+        constexpr std::size_t kMaxWktExcerptBytes = 200;
+
+        std::string WktExcerpt(const std::string_view wkt)
+        {
+            if (wkt.size() <= kMaxWktExcerptBytes)
+                return std::string(wkt);
+
+            std::size_t length = kMaxWktExcerptBytes;
+            while (length > 0 &&
+                   (static_cast<unsigned char>(wkt[length]) & 0xC0) == 0x80)
+            {
+                --length;
+            }
+            return std::string(wkt.substr(0, length)) + "… (" +
+                   std::to_string(wkt.size()) + " bytes total)";
+        }
     }
 
     // ---------------------------------------------------------------- Layer
@@ -255,23 +272,35 @@ namespace mwg
 
         [[nodiscard]] std::int64_t FeatureCount() const
         {
-            if (!_featureCount)
+            if (_featureIdsValid)
+                return static_cast<std::int64_t>(_featureIds.size());
+            if (_featureCount)
+                return *_featureCount;
+
+            const GDALDriver* const driver = _dataset.GetDriver();
+            const char* const driverName = driver != nullptr ? driver->GetDescription() : nullptr;
+            if (driverName != nullptr && std::string_view(driverName) == "ESRI Shapefile")
             {
-                GdalEnvironment::ClearLastError();
-                const GIntBig count = _layer->GetFeatureCount(TRUE);
-                if (count >= 0)
+                // The Shapefile driver's total includes deleted DBF records,
+                // whereas GetNextFeature() (and therefore the index) skips them.
+                EnsureFeatureIds();
+                return static_cast<std::int64_t>(_featureIds.size());
+            }
+
+            GdalEnvironment::ClearLastError();
+            const GIntBig count = _layer->GetFeatureCount(TRUE);
+            if (count >= 0)
+            {
+                _featureCount = static_cast<std::int64_t>(count);
+            }
+            else
+            {
+                if (CPLGetLastErrorType() >= CE_Failure)
                 {
-                    _featureCount = static_cast<std::int64_t>(count);
+                    throw CoreError("Cannot determine vector layer feature count: " +
+                                    GdalEnvironment::LastErrorMessage());
                 }
-                else
-                {
-                    if (CPLGetLastErrorType() >= CE_Failure)
-                    {
-                        throw CoreError("Cannot determine vector layer feature count: " +
-                                        GdalEnvironment::LastErrorMessage());
-                    }
-                    EnsureFeatureIds();
-                }
+                EnsureFeatureIds();
             }
             return *_featureCount;
         }
@@ -643,7 +672,7 @@ namespace mwg
         if (OGRGeometryFactory::createFromWkt(&text, _impl->_layer->GetSpatialRef(), &parsed) != OGRERR_NONE ||
             parsed == nullptr)
         {
-            throw CoreError("Cannot parse WKT: " + wkt);
+            throw CoreError("Cannot parse WKT: " + WktExcerpt(wkt));
         }
 
         if (feature->SetGeometryDirectly(parsed) != OGRERR_NONE)
