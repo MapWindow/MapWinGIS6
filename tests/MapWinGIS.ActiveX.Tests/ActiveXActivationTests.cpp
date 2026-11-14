@@ -843,8 +843,20 @@ namespace
 
 }
 
-TEST_F(ActiveXMapTest, InvalidGdalArgumentsSetComErrorInfo)
+TEST_F(ActiveXMapTest, InvalidArgumentsSetComErrorInfoForEachAutomationInterface)
 {
+    const auto expectDescription = [](const wchar_t* expected)
+    {
+        ComPtr<IErrorInfo> errorInfo;
+        EXPECT_EQ(::GetErrorInfo(0, &errorInfo), S_OK);
+        if (errorInfo == nullptr) return;
+        BSTR description = nullptr;
+        EXPECT_EQ(errorInfo->GetDescription(&description), S_OK);
+        std::unique_ptr<wchar_t, decltype(&::SysFreeString)> text{description, &::SysFreeString};
+        ASSERT_NE(text, nullptr);
+        EXPECT_NE(std::wstring(text.get()).find(expected), std::wstring::npos);
+    };
+
     ComPtr<IMapWinGISControlGdal> gdal;
     ASSERT_EQ(_control.As(&gdal), S_OK);
     BSTR emptyAlgorithm = ::SysAllocStringLen(nullptr, 0);
@@ -852,14 +864,17 @@ TEST_F(ActiveXMapTest, InvalidGdalArgumentsSetComErrorInfo)
     LONGLONG operationId = 0;
     EXPECT_EQ(gdal->BeginGdalOperation(emptyAlgorithm, nullptr, &operationId), E_INVALIDARG);
     ::SysFreeString(emptyAlgorithm);
+    expectDescription(L"algorithm path");
 
-    ComPtr<IErrorInfo> errorInfo;
-    ASSERT_EQ(::GetErrorInfo(0, &errorInfo), S_OK);
-    BSTR description = nullptr;
-    ASSERT_EQ(errorInfo->GetDescription(&description), S_OK);
-    std::unique_ptr<wchar_t, decltype(&::SysFreeString)> text{description, &::SysFreeString};
-    ASSERT_NE(text, nullptr);
-    EXPECT_NE(std::wstring(text.get()).find(L"algorithm path"), std::wstring::npos);
+    ComPtr<IMapWinGISControl> legacy;
+    ASSERT_EQ(_control.As(&legacy), S_OK);
+    EXPECT_EQ(legacy->LoadVectorDataset(nullptr), E_INVALIDARG);
+    expectDescription(L"dataset path");
+
+    ComPtr<IMapWinGISControl4> current;
+    ASSERT_EQ(_control.As(&current), S_OK);
+    EXPECT_EQ(current->ZoomToLayer(0), E_INVALIDARG);
+    expectDescription(L"Layer ID");
 }
 
 TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
