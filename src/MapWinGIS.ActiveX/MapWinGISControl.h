@@ -58,8 +58,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
         IMapWinGISControlGdal,
         &IID_IMapWinGISControlGdal,
         &LIBID_MapWinGISActiveXLib,
-        1,
-        0>
+        0xFFFF,
+        0xFFFF>
 {
 public:
     CMapWinGISControl();
