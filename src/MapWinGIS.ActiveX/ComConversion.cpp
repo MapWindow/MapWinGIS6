@@ -252,4 +252,65 @@ namespace mwg::activex::ComConversion
         *result = array;
         return S_OK;
     }
+    HRESULT DiagnosticToBstr(const std::string_view value, BSTR* result) noexcept
+    {
+        if (result == nullptr) return E_POINTER;
+        *result = nullptr;
+        if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return E_INVALIDARG;
+        try
+        {
+            std::string sanitized;
+            sanitized.reserve(value.size());
+            for (const char ch : value)
+            {
+                if (ch == '\0') sanitized.append("\xEF\xBF\xBD", 3);
+                else sanitized.push_back(ch);
+            }
+            if (sanitized.empty())
+            {
+                *result = ::SysAllocStringLen(nullptr, 0);
+                return *result != nullptr ? S_OK : E_OUTOFMEMORY;
+            }
+            const int required = ::MultiByteToWideChar(CP_UTF8, 0, sanitized.data(),
+                static_cast<int>(sanitized.size()), nullptr, 0);
+            if (required == 0) return HRESULT_FROM_WIN32(::GetLastError());
+            BSTR converted = ::SysAllocStringLen(nullptr, static_cast<UINT>(required));
+            if (converted == nullptr) return E_OUTOFMEMORY;
+            if (::MultiByteToWideChar(CP_UTF8, 0, sanitized.data(),
+                    static_cast<int>(sanitized.size()), converted, required) == 0)
+            {
+                const HRESULT error = HRESULT_FROM_WIN32(::GetLastError());
+                ::SysFreeString(converted);
+                return error;
+            }
+            *result = converted;
+            return S_OK;
+        }
+        catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
+        catch (...) { return E_UNEXPECTED; }
+    }
+
+    HRESULT CreateDiagnosticStringArray(const std::vector<std::string>& values,
+        SAFEARRAY** result) noexcept
+    {
+        if (result == nullptr) return E_POINTER;
+        *result = nullptr;
+        if (values.empty()) return S_OK;
+        if (values.size() > static_cast<std::size_t>(std::numeric_limits<LONG>::max())) return E_INVALIDARG;
+        SAFEARRAY* array = ::SafeArrayCreateVector(VT_BSTR, 0, static_cast<ULONG>(values.size()));
+        if (array == nullptr) return E_OUTOFMEMORY;
+        for (std::size_t i = 0; i < values.size(); ++i)
+        {
+            BSTR item = nullptr;
+            HRESULT status = DiagnosticToBstr(values[i], &item);
+            if (FAILED(status)) { ::SafeArrayDestroy(array); return status; }
+            LONG index = static_cast<LONG>(i);
+            status = ::SafeArrayPutElement(array, &index, item);
+            ::SysFreeString(item);
+            if (FAILED(status)) { ::SafeArrayDestroy(array); return status; }
+        }
+        *result = array;
+        return S_OK;
+    }
+
 }
