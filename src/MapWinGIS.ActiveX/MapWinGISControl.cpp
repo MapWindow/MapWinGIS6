@@ -331,7 +331,7 @@ STDMETHODIMP CMapWinGISControl::get_CoreInitialized(VARIANT_BOOL* initialized)
 {
     if (initialized == nullptr)
     {
-        return SetControlComErrorInfo("The initialized output pointer is null.", IID_IMapWinGISControlGdal, E_POINTER);
+        return SetControlComErrorInfo("The initialized output pointer is null.", IID_IMapWinGISControl, E_POINTER);
     }
 
     *initialized = mwg::GdalEnvironment::IsInitialized() ? VARIANT_TRUE : VARIANT_FALSE;
