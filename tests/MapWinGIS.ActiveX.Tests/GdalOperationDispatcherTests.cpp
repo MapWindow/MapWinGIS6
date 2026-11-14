@@ -548,7 +548,11 @@ TEST(GdalOperationDispatcher, RestartsAfterShutdownWithFreshOperationState)
     dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
     const std::uint64_t newId = dispatcher.Begin("mwg-test-dispatcher diagnostics", {});
     EXPECT_GT(oldId, 0u);
-    EXPECT_GT(newId, 0u);
+    EXPECT_GT(newId, oldId);
+    EXPECT_EQ(dispatcher.GetResult(oldId).status,
+        mwg::activex::GdalEndResult::NotFound);
+    EXPECT_EQ(dispatcher.Cancel(oldId),
+        mwg::activex::GdalCancelResult::NotFound);
     ASSERT_TRUE(WaitForCompletion(dispatcher, signal, newId,
         std::chrono::steady_clock::now() + 10s));
     const auto result = dispatcher.End(newId);
