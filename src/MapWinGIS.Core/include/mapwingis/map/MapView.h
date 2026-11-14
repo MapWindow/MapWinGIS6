@@ -145,16 +145,25 @@ namespace mwg
         /// \throws InvalidArgument as Viewport::Pan does.
         bool Pan(double deltaX, double deltaY);
 
-        /// The render scene of the current map, rebuilt first when the map
-        /// changed since the last call; see rendering::CreateMapRenderScene.
-        /// The reference stays valid for the lifetime of the MapView; a later
-        /// call that rebuilds the scene replaces its contents.
+        /// The render scene of the current map, reassembled from cached
+        /// per-layer scenes when the map or a layer scene changed. The
+        /// reference stays valid for the lifetime of the MapView; a later
+        /// call that reassembles the scene replaces its contents. Geometry
+        /// for a visible uncached layer is read once; visibility changes reuse
+        /// its cache. Reassembly copies cached geometry into the map snapshot.
         /// \throws std::bad_alloc when memory runs out.
         [[nodiscard]] const rendering::MapRenderScene& Scene();
 
-        /// Marks the render scene stale, for example after source geometry
-        /// was edited. Returns true: the frame must be redrawn.
+        /// Marks every cached layer scene stale, for example after edits that
+        /// may affect multiple source layers. Scenes are rebuilt lazily by the
+        /// next Scene() call. Returns true: the frame must be redrawn.
         bool InvalidateScene() noexcept;
+
+        /// Marks one layer's cached scene stale after its source geometry was
+        /// edited. Other layer scenes remain cached. Returns false when id
+        /// does not identify a current layer; otherwise returns true and the
+        /// layer is rebuilt lazily by the next Scene() call.
+        bool InvalidateLayerScene(LayerId id) noexcept;
 
     private:
         /// Clears a pending fit when changed is true and returns changed.
