@@ -163,9 +163,12 @@ namespace mwg
             {
                 if (!gdalPath.empty())
                     CPLSetConfigOption("GDAL_DATA", gdalPath.c_str());
-                GdalEnvironment::ReportDiagnostic(LogLevel::Warning,
-                                 "GDAL data directory is unavailable: " + DescribePath(gdalDataDir) +
-                                     ". GDAL_DATA is still set to this path; no alternate data directory is selected.");
+                GdalEnvironment::ReportDiagnostic(
+                    LogLevel::Warning,
+                    "GDAL data directory is unavailable: " + DescribePath(gdalDataDir) +
+                        (gdalPath.empty()
+                             ? ". No GDAL data directory is configured."
+                             : ". GDAL_DATA is still set to this path; no alternate data directory is selected."));
             }
 
             error.clear();
@@ -178,9 +181,12 @@ namespace mwg
             }
             if (!hasProjData || error)
             {
-                GdalEnvironment::ReportDiagnostic(LogLevel::Warning,
-                                 "PROJ data directory is unavailable: " + DescribePath(projDataDir) +
-                                     ". PROJ search is restricted to this configured path.");
+                GdalEnvironment::ReportDiagnostic(
+                    LogLevel::Warning,
+                    "PROJ data directory is unavailable: " + DescribePath(projDataDir) +
+                        (projPath.empty()
+                             ? ". No PROJ search directory is configured."
+                             : ". PROJ search is restricted to this configured path."));
             }
 
             const GdalInitializer initializer;
