@@ -197,6 +197,10 @@ TEST(GdalDispatchWindow, DoesNotArmRetryTimerWhileIdle)
     auto window = std::make_shared<mwg::activex::GdalDispatchWindow>();
     ASSERT_NE(window->Create(nullptr, nullptr), nullptr);
     EXPECT_FALSE(window->IsRetryTimerArmedForTesting());
+    ASSERT_TRUE(window->StartRetryTimer());
+    EXPECT_TRUE(window->IsRetryTimerArmedForTesting());
+    window->StopRetryTimer();
+    EXPECT_FALSE(window->IsRetryTimerArmedForTesting());
     window->Destroy();
 }
 #endif
