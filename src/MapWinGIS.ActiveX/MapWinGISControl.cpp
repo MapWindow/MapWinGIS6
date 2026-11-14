@@ -958,7 +958,10 @@ LRESULT CMapWinGISControl::OnCancelMode(
 LRESULT CMapWinGISControl::OnCreate(UINT, WPARAM, LPARAM, BOOL& handled)
 {
     const HRESULT result = _gdalEvents.Reactivate();
-    if (FAILED(result)) ::OutputDebugStringW(L"MapWinGIS: unable to reactivate GDAL operations.\\n");
+    if (FAILED(result))
+    {
+        ::OutputDebugStringW(L"MapWinGIS: unable to reactivate GDAL operations.\n");
+    }
     _gdalEvents.OnSize();
     handled = FALSE;
     return 0;

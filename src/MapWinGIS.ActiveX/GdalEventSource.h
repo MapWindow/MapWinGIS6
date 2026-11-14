@@ -56,6 +56,8 @@ namespace mwg::activex
         static bool PostDispatchMessage(void* window) noexcept;
         static void UnlockActiveXModule(void*) noexcept;
         void DestroyDispatchWindow() noexcept;
+        void ArmRetryTimer() noexcept;
+        void UpdateRetryTimer() noexcept;
         [[nodiscard]] HRESULT FireProgress(
             const GdalOperationNotification& notification);
         [[nodiscard]] HRESULT FireCompleted(std::uint64_t operationId);

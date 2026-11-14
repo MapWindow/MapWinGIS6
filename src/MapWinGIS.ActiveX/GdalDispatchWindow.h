@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 
+#include <atlbase.h>
 #include <atlwin.h>
 
 namespace mwg::activex
