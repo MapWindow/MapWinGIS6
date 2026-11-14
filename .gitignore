@@ -439,6 +439,10 @@ CMakeUserPresets.json
 # C++ language server compilation database
 .mscppls/
 
+# Local tools and PowerShell editor state
+.tools/
+PowerShellEditorServices.json
+
 # used by Pi.dev
 /APPEND_SYSTEM.md
 

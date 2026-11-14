@@ -5,10 +5,13 @@
   on for CMake).
 - Core test project: `tests/MapWinGIS.Core.Tests`, built with the solution or
   CMake.
-- ActiveX test project: `tests/MapWinGIS.ActiveX.Tests`, built with the solution.
-- CMake currently registers the Core suite, not the ActiveX-specific tests.
-- ActiveX implementation units shared by the OCX and its tests are built as
-  `MapWinGIS.ActiveX.Impl.lib`.
+- ActiveX test project: `tests/MapWinGIS.ActiveX.Tests`, built with the solution
+  or CMake when `MWG_BUILD_ACTIVEX` is enabled.
+- CMake registers the Core tests independently of ActiveX. It adds the
+  ActiveX-specific suite only when ActiveX is enabled.
+- ActiveX implementation sources used by tests are compiled into the test
+  executable with `MWG_ENABLE_RENDERER_TEST_HOOKS`; MSBuild builds those units
+  in `MapWinGIS.ActiveX.Impl.lib`.
 - Shared fixtures and helpers live in `TestData.h/.cpp` (`TempDirectory`,
   `MakeSampleShapefile`, `MakeProvincesDataset`, `MakeRectanglesDataset`, and
   layer constants). Extend these instead of writing per-file fixture code.
@@ -31,8 +34,8 @@ up automatically).
 
 ### CMake and CTest
 
-The CMake target registers the Core GoogleTest sources and fixtures; the
-ActiveX-specific tests remain MSBuild-only:
+CTest discovers individual cases from both native suites. Core tests remain
+available when `MWG_BUILD_ACTIVEX` is disabled:
 
 ```powershell
 cmake --preset x64-debug
@@ -40,12 +43,13 @@ cmake --build --preset x64-debug
 ctest --preset x64-debug
 ```
 
-`gtest_discover_tests()` registers individual cases for CTest. Each test runs
-from the build's runtime directory, which contains the OCX, dependent DLLs,
-and GDAL/PROJ data. GoogleTest writes per-test XML files under `test-results`
-in the build directory. The `x64-debug` test preset already shows output on
-failure and excludes tests labelled `interactive`, which change per-user COM
-registration or require a desktop. CTest can also write a single JUnit report:
+`gtest_discover_tests()` registers individual cases for CTest. Tests run from
+the build's runtime directory, which contains their dependent DLLs and
+GDAL/PROJ data. When ActiveX is enabled, this directory also contains the OCX.
+GoogleTest writes per-test XML files under `test-results` in the build
+directory. The `x64-debug` test preset shows output on failure and excludes
+tests labelled `interactive`, including the registration-based activation
+check. CTest can also write a single JUnit report:
 
 ```powershell
 ctest --test-dir out\b\x64d --output-on-failure -LE interactive `
@@ -93,11 +97,10 @@ pwsh -File tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1 -Configura
 ```
 
 The native script requires `MapWinGIS.ActiveX.Tests.exe` and its
-`ActiveXHosting.ResizesRepaintsAndRecreatesControl` test, which CMake does not
-currently build. Use the MSBuild output for this verification until CMake
-registers the ActiveX test suite. CMake's `Verify-ActiveXActivation` CTest
-entry currently uses `MapWinGIS.Core.Tests.exe`, which does not contain that
-hosting test and is not a substitute for this check.
+`ActiveXHosting.ResizesRepaintsAndRecreatesControl` test. Both CMake and
+MSBuild build this executable when ActiveX is enabled. CMake's
+`Verify-ActiveXActivation` CTest entry runs the script against the
+ActiveX-specific executable and is labeled `interactive`.
 
 ## Build configuration tests
 

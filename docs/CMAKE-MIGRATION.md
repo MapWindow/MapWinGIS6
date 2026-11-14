@@ -11,11 +11,12 @@ collected with [`build/scripts/Compare-CompileCommands.ps1`](#parity-measurement
 
 ## Targets
 
-| MSBuild project | Output | Type | Planned CMake target |
+| MSBuild project | Output | Type | CMake target |
 |---|---|---|---|
 | `src/MapWinGIS.Core/MapWinGIS.Core.vcxproj` | `MapWinGIS.Core.dll` (+ `.lib`, `.pdb`) | DLL, subsystem `WINDOWS` | `MapWinGIS.Core` |
 | `src/MapWinGIS.ActiveX/MapWinGIS.ActiveX.vcxproj` | `MapWinGIS.ocx` (+ `.lib`, `.pdb`, `MapWinGIS.ActiveX.tlb`) | DLL, subsystem `WINDOWS`, `UseOfAtl=Static` | `MapWinGIS.ActiveX.Interface` (MIDL) + `MapWinGIS.ActiveX` |
 | `tests/MapWinGIS.Core.Tests/MapWinGIS.Core.Tests.vcxproj` | `MapWinGIS.Core.Tests.exe` | Console | `MapWinGIS.Core.Tests` |
+| `tests/MapWinGIS.ActiveX.Tests/MapWinGIS.ActiveX.Tests.vcxproj` | `MapWinGIS.ActiveX.Tests.exe` | Console | `MapWinGIS.ActiveX.Tests` |
 | `samples/Cpp/Translate.vcxproj` (project name `TranslateSample`) | `translate.exe` | Console | `MapWinGIS.Samples.Translate` (`OUTPUT_NAME translate`) |
 | `samples/CSharp/ActiveXTestHost/ActiveXTestHost.csproj` | `ActiveXTestHost.exe` | .NET 10 WinForms | custom targets around `dotnet build` |
 
@@ -57,24 +58,30 @@ and `src` (private).
   `DllUnregisterServer`, `DllInstall`).
 - No `.manifest` file; the linker embeds its default manifest.
 
-**MapWinGIS.Core.Tests** — `MWG_ENABLE_RENDERER_TEST_HOOKS`; include
-directories `src/MapWinGIS.Core/include`, `src/MapWinGIS.ActiveX` and the
-ActiveX MIDL output directory `obj/MapWinGIS.ActiveX/<Config>/<Platform>`.
+**MapWinGIS.Core.Tests** — include directory `src/MapWinGIS.Core/include`.
 
 - Headers: `TestData.h`.
+- Sources: `GdalAlgorithmRunnerTests.cpp`, `GdalEnvironmentTests.cpp`,
+  `GdalModernCapabilitiesTests.cpp`, `GdalRuntimeTests.cpp`,
+  `GdalTypedOptionsTests.cpp`, `GdalUtilsTests.cpp`, `Main.cpp` (defines
+  `main`), `MapRenderSceneTests.cpp`, `MapTests.cpp`, `MapViewTests.cpp`,
+  `PolygonTriangulationTests.cpp`, `TestData.cpp`, `VectorDatasetTests.cpp`,
+  `VectorLayerTests.cpp`, `VectorRenderSceneTests.cpp`, and `ViewportTests.cpp`.
+- Project reference: Core.
+
+**MapWinGIS.ActiveX.Tests** — `MWG_ENABLE_RENDERER_TEST_HOOKS`; include
+directories `src/MapWinGIS.Core/include`, `src/MapWinGIS.ActiveX`,
+`tests/MapWinGIS.Core.Tests` and the ActiveX MIDL output directory.
+
 - Sources: `ActiveXActivationTests.cpp`, `ComConversionTests.cpp`,
-  `GdalAlgorithmRunnerTests.cpp`, `GdalEnvironmentTests.cpp`,
-  `GdalModernCapabilitiesTests.cpp`, `GdalOperationDispatcherTests.cpp`,
-  `GdalRuntimeTests.cpp`, `GdalTypedOptionsTests.cpp`, `GdalUtilsTests.cpp`,
-  `Main.cpp` (defines `main`), `RenderingBaselineTests.cpp`, `TestData.cpp`,
-  `VectorDatasetTests.cpp`, `VectorLayerRendererTests.cpp`,
-  `VectorLayerTests.cpp`, `VectorRenderSceneTests.cpp`.
-- ActiveX sources compiled again with the test hook definition:
-  `GdiVectorLayerRenderer.cpp`, `OpenGlVectorLayerRenderer.cpp`,
-  `GdalOperationDispatcher.cpp`, `ComConversion.cpp`,
-  `VectorLayerRenderer.cpp`, `ViewTransform.cpp`.
-- Project references: Core (linked) and ActiveX (build order only,
-  `LinkLibraryDependencies=false`), so the OCX is beside the test executable.
+  `FrameBufferTests.cpp`, `GdalOperationDispatcherTests.cpp`,
+  `Main.cpp` and `TestData.cpp` from Core.Tests, `RenderingBaselineTests.cpp`,
+  `VectorLayerRendererTests.cpp`, `FrameBuffer.cpp`, and the ActiveX shared
+  implementation sources.
+- Links Core, GDAL, GoogleTest and the COM, GDI, OpenGL and process-status
+  libraries used by the tests. The OCX is a build-order dependency, not a
+  linked library, so activation tests load the built control from the runtime
+  directory.
 
 **Translate sample** — `samples/Cpp/translate.cpp` (`wmain`); include
 directory `src/MapWinGIS.Core/include`. It uses only the Core public API.
@@ -86,7 +93,7 @@ and MSBuild defaults):
 
 | Option | Source |
 |---|---|
-| `/W4 /WX (Debug x64), /WX- (other configurations) /wd4251 /external:W4` | `WarningLevel`, `TreatWarningAsError` for Debug x64, `DisableSpecificWarnings`; `/external:W4` is the MSBuild default for external headers |
+| `/W4 /WX /wd4251 /external:W4` | `WarningLevel`, `TreatWarningAsError` for every configuration and platform, `DisableSpecificWarnings`; `/external:W4` is the MSBuild default for external headers |
 | `/utf-8 /Zc:__cplusplus /Zc:preprocessor /Zc:throwingNew /bigobj` | `AdditionalOptions` |
 | `/permissive- /sdl /EHsc /GS /Gd /Gm- /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline` | `ConformanceMode`, `SDLCheck`, `ExceptionHandling`, MSBuild defaults |
 | `/std:c++20` (`/TP`), `/std:c17` (`/TC`, `_i.c` only) | `LanguageStandard`, `LanguageStandard_C` |
@@ -104,7 +111,7 @@ Per configuration:
 | Release | `/O2 /Oi /Gy /guard:cf /MD /D NDEBUG` |
 
 Per target: `MWG_CORE_BUILD` (Core), `_ATL_APARTMENT_THREADED` (ActiveX),
-`MWG_ENABLE_RENDERER_TEST_HOOKS` (tests).
+`MWG_ENABLE_RENDERER_TEST_HOOKS` (ActiveX.Tests).
 
 Not defined by any project: `WIN32`, `_WINDOWS`, `_USRDLL`, `_CONSOLE`. The
 CMake defaults `/DWIN32 /D_WINDOWS` are therefore removed, so the two builds
@@ -135,7 +142,8 @@ hides what each target uses. From the sources and `dumpbin /dependents`:
 |---|---|
 | Core | `GDAL::GDAL`, `GEOS::geos_c` (`GdalEnvironment.cpp` includes `geos_c.h` and calls `GEOSversion()`). PROJ is reached only through GDAL/OGR (`OSRSetPROJSearchPaths`). Windows: `kernel32` only. |
 | ActiveX | Core, `ole32`, `oleaut32`, `uuid`, `user32`, `gdi32`, `advapi32` (registration), `opengl32` (through `#pragma comment(lib, ...)` in `OpenGlVectorLayerRenderer.cpp`), static ATL. No direct GDAL use. |
-| Tests | Core, `GDAL::GDAL` (`gdal_priv.h`, `gdalalgorithm.h`, `vrtdataset.h`, `cpl_error.h`), `GTest::gtest` (not `gtest_main`: `Main.cpp` defines `main`), ATL headers (`atlbase.h`, `atlhost.h`), `ole32`, `oleaut32`, `uuid`, `user32`, `gdi32`, `opengl32`. |
+| Core.Tests | Core, `GDAL::GDAL`, `GTest::gtest` (not `gtest_main`: `Main.cpp` defines `main`). |
+| ActiveX.Tests | Core, `GDAL::GDAL`, `GTest::gtest`, ATL headers (`atlbase.h`, `atlhost.h`), `ole32`, `oleaut32`, `uuid`, `user32`, `gdi32`, `opengl32`, `psapi`. |
 | Sample | Core only. |
 
 `dumpbin` of the MSBuild tests shows `gmock.dll` instead of `gtest.dll`: the

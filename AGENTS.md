@@ -51,13 +51,9 @@ cmake --build --preset x64-debug
 ctest --preset x64-debug
 ```
 
-Until CMake registers the ActiveX tests, also build the legacy solution and run
-its ActiveX suite:
-
-```powershell
-msbuild MapWinGIS6.slnx -restore -p:Configuration=Debug -p:Platform=x64 -m
-bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
-```
+When `MWG_BUILD_ACTIVEX` is enabled, CMake also registers the ActiveX native
+tests with CTest. The registered-control activation check is labeled
+`interactive` and is excluded from the standard CTest preset.
 
 Every task must leave the tree in this state: CMake `Debug | x64` builds with
 no new Level 4 warnings and all non-interactive tests pass. The legacy

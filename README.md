@@ -84,6 +84,9 @@ CTest runs the CMake-built test cases:
 ctest --preset x64-debug
 ```
 
+CTest discovers both native suites when ActiveX is enabled. Core tests remain
+available when configuring with `-DMWG_BUILD_ACTIVEX=OFF`.
+
 For the legacy MSBuild build, run its test executables from the repository root:
 
 ```powershell
@@ -115,7 +118,8 @@ See the CMake section in the build guide for target names and additional command
 CI Release artifacts use the `full-drivers` feature. Their tests require
 HDF5, NetCDF, KML, SpatiaLite, and PostgreSQL support.
 Pull requests build and test Debug and full-driver Release for x64 using both
-CMake and MSBuild. Each CI build has a 180-minute timeout.
+CMake and MSBuild, and also run CMake Win32 Debug. Pushes to `main` include the
+full Win32 Debug and Release matrix. Each CI build has a 180-minute timeout.
 
 After vector geometry edits, call `VectorDataset::Flush()` before closing to
 persist exact Shapefile and GeoPackage bounds. The flush batches stored-extent
