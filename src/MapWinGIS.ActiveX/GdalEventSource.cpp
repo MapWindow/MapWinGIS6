@@ -103,10 +103,14 @@ namespace mwg::activex
 
         _dispatcher.SetWakeCallback(
             &GdalEventSource::PostDispatchMessage,
-            _dispatchWindow->m_hWnd);
+            _dispatchWindow.get());
         _dispatcher.SetWorkerFinishedCallback(
             &GdalEventSource::UnlockActiveXModule,
             nullptr);
+        if (!_dispatchWindow->StartRetryTimer())
+        {
+            ::OutputDebugStringW(L"MapWinGIS: unable to arm the GDAL operation retry timer.\\n");
+        }
         _AtlModule.Lock();
         try
         {
@@ -117,6 +121,10 @@ namespace mwg::activex
         catch (...)
         {
             _AtlModule.Unlock();
+            if (!_dispatcher.HasOutstandingOperations() && _dispatchWindow != nullptr)
+            {
+                _dispatchWindow->StopRetryTimer();
+            }
             throw;
         }
     }
@@ -135,7 +143,12 @@ namespace mwg::activex
 
     GdalOperationLookup GdalEventSource::End(const std::uint64_t operationId)
     {
-        return _dispatcher.End(operationId);
+        GdalOperationLookup result = _dispatcher.End(operationId);
+        if (!_dispatcher.HasOutstandingOperations() && _dispatchWindow != nullptr)
+        {
+            _dispatchWindow->StopRetryTimer();
+        }
+        return result;
     }
 
     void GdalEventSource::RecordCallbackError(
@@ -163,7 +176,9 @@ namespace mwg::activex
         {
             _dispatcher.SetWakeCallback(
                 &GdalEventSource::PostDispatchMessage,
-                _dispatchWindow->m_hWnd);
+                _dispatchWindow.get());
+            if (_dispatcher.HasOutstandingOperations()) _dispatchWindow->StartRetryTimer();
+            else _dispatchWindow->StopRetryTimer();
         }
     }
 
@@ -243,6 +258,11 @@ namespace mwg::activex
                 }
             }
         }
+        if (_dispatchWindow != nullptr)
+        {
+            if (_dispatcher.HasOutstandingOperations()) _dispatchWindow->StartRetryTimer();
+            else _dispatchWindow->StopRetryTimer();
+        }
         return 0;
     }
 
@@ -258,13 +278,23 @@ namespace mwg::activex
         _dispatcher.Shutdown();
     }
 
+    HRESULT GdalEventSource::Reactivate() noexcept
+    {
+        if (!_closing) return S_OK;
+        try
+        {
+            _dispatcher.Restart();
+            _closing = false;
+            _dispatchWindowDestroyPending = false;
+            return S_OK;
+        }
+        catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
+        catch (...) { return E_UNEXPECTED; }
+    }
+
     bool GdalEventSource::PostDispatchMessage(void* const window) noexcept
     {
-        return ::PostMessageW(
-            static_cast<HWND>(window),
-            kGdalDispatchMessage,
-            0,
-            0) != FALSE;
+        return static_cast<GdalDispatchWindow*>(window)->PostWake();
     }
 
     void GdalEventSource::UnlockActiveXModule(void*) noexcept
@@ -284,6 +314,7 @@ namespace mwg::activex
         if (_dispatchWindow != nullptr)
         {
             _dispatchWindow->Destroy();
+            _dispatchWindow.reset();
         }
     }
 
@@ -291,7 +322,7 @@ namespace mwg::activex
         const GdalOperationNotification& notification)
     {
         BSTR message = nullptr;
-        HRESULT result = ComConversion::Utf8ToBstr(notification.message, &message);
+        HRESULT result = ComConversion::DiagnosticToBstr(notification.message, &message);
         if (FAILED(result))
         {
             return result;

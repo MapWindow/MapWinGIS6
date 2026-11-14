@@ -49,7 +49,8 @@ namespace
     using mwg::activex::ComConversion::BstrToUtf8;
     using mwg::activex::ComConversion::CopyStringArray;
     using mwg::activex::ComConversion::CopyToBstr;
-    using mwg::activex::ComConversion::CreateStringArray;
+    using mwg::activex::ComConversion::CreateDiagnosticStringArray;
+    using mwg::activex::ComConversion::DiagnosticToBstr;
     using mwg::activex::ComConversion::Utf8ToBstr;
 
     [[nodiscard]] HRESULT SetControlComErrorInfo(
@@ -97,7 +98,7 @@ namespace
         }
         catch (const std::bad_alloc&)
         {
-            return E_OUTOFMEMORY;
+            return SetControlComErrorInfo("Out of memory while updating the map view.", IID_IMapWinGISControl4, E_OUTOFMEMORY);
         }
         catch (const mwg::InvalidArgument& exception)
         {
@@ -115,7 +116,7 @@ namespace
         }
         catch (...)
         {
-            return E_FAIL;
+            return SetControlComErrorInfo("An unexpected error occurred while updating the map view.", IID_IMapWinGISControl4, E_UNEXPECTED);
         }
     }
 
@@ -173,13 +174,13 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
 {
     if (operationId == nullptr)
     {
-        return E_POINTER;
+        return SetComErrorInfo("The operation ID output pointer is null.", E_POINTER);
     }
     *operationId = 0;
     const HRESULT dispatchWindowResult = _gdalEvents.EnsureDispatchWindow();
     if (FAILED(dispatchWindowResult))
     {
-        return dispatchWindowResult;
+        return SetComErrorInfo("The GDAL notification window could not be created.", dispatchWindowResult);
     }
 
     std::string algorithm;
@@ -190,18 +191,18 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
         result = BstrToUtf8(algorithmPath, algorithm);
         if (FAILED(result) || algorithm.empty())
         {
-            return E_INVALIDARG;
+            return SetComErrorInfo("The GDAL algorithm path is null or empty.", E_INVALIDARG);
         }
 
         result = CopyStringArray(arguments, commandLineArguments);
         if (FAILED(result))
         {
-            return result;
+            return SetComErrorInfo("The GDAL argument array is invalid.", result);
         }
     }
     catch (const std::bad_alloc&)
     {
-        return E_OUTOFMEMORY;
+        return SetComErrorInfo("Out of memory while preparing the GDAL operation.", E_OUTOFMEMORY);
     }
     catch (const std::exception& exception)
     {
@@ -209,7 +210,7 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
     }
     catch (...)
     {
-        return E_FAIL;
+        return SetComErrorInfo("An unexpected error occurred while preparing the GDAL operation.", E_UNEXPECTED);
     }
 
     try
@@ -222,7 +223,7 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
     }
     catch (const std::bad_alloc&)
     {
-        return E_OUTOFMEMORY;
+        return SetComErrorInfo("Out of memory while starting the GDAL operation.", E_OUTOFMEMORY);
     }
     catch (const std::exception& exception)
     {
@@ -230,7 +231,7 @@ STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
     }
     catch (...)
     {
-        return E_FAIL;
+        return SetComErrorInfo("An unexpected error occurred while starting the GDAL operation.", E_UNEXPECTED);
     }
 }
 
@@ -238,7 +239,7 @@ STDMETHODIMP CMapWinGISControl::CancelGdalOperation(const LONGLONG operationId)
 {
     if (operationId <= 0)
     {
-        return E_INVALIDARG;
+        return SetComErrorInfo("The GDAL operation ID must be positive.", E_INVALIDARG);
     }
 
     switch (_gdalEvents.Cancel(static_cast<std::uint64_t>(operationId)))
@@ -250,28 +251,19 @@ STDMETHODIMP CMapWinGISControl::CancelGdalOperation(const LONGLONG operationId)
         return S_FALSE;
     case mwg::activex::GdalCancelResult::NotFound:
     default:
-        return E_INVALIDARG;
+        return SetComErrorInfo("The GDAL operation ID was not found.", E_INVALIDARG);
     }
 }
 
 STDMETHODIMP CMapWinGISControl::EndGdalOperation(
-    const LONGLONG operationId,
-    VARIANT_BOOL* succeeded,
-    VARIANT_BOOL* cancelled,
-    LONG* errorCode,
-    LONG* callbackErrorCode,
-    BSTR* callbackError,
-    BSTR* summary,
-    BSTR* diagnostics,
-    SAFEARRAY** warnings)
+    const LONGLONG operationId, VARIANT_BOOL* succeeded, VARIANT_BOOL* cancelled,
+    LONG* errorCode, LONG* callbackErrorCode, BSTR* callbackError,
+    BSTR* summary, BSTR* diagnostics, SAFEARRAY** warnings)
 {
     if (succeeded == nullptr || cancelled == nullptr || errorCode == nullptr ||
         callbackErrorCode == nullptr || callbackError == nullptr ||
-        summary == nullptr ||
-        diagnostics == nullptr || warnings == nullptr)
-    {
-        return E_POINTER;
-    }
+        summary == nullptr || diagnostics == nullptr || warnings == nullptr)
+        return SetComErrorInfo("One or more GDAL result output pointers are null.", E_POINTER);
     *succeeded = VARIANT_FALSE;
     *cancelled = VARIANT_FALSE;
     *errorCode = 0;
@@ -281,88 +273,54 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
     *diagnostics = nullptr;
     *warnings = nullptr;
     if (operationId <= 0)
-    {
-        return E_INVALIDARG;
-    }
+        return SetComErrorInfo("The GDAL operation ID must be positive.", E_INVALIDARG);
 
-    mwg::activex::GdalOperationLookup resultLookup;
+    mwg::activex::GdalOperationLookup ended;
     try
     {
-        resultLookup = _gdalEvents.GetResult(static_cast<std::uint64_t>(operationId));
+        // Remove the operation slot before any COM allocations or string conversions.
+        ended = _gdalEvents.End(static_cast<std::uint64_t>(operationId));
     }
     catch (const std::bad_alloc&)
     {
-        return E_OUTOFMEMORY;
+        return SetComErrorInfo("Out of memory while retrieving the GDAL operation result.", E_OUTOFMEMORY);
     }
-    if (resultLookup.status == mwg::activex::GdalEndResult::Pending)
+    catch (const std::exception& exception)
     {
-        return E_PENDING;
+        return SetComErrorInfo(exception.what(), E_FAIL);
     }
-    if (resultLookup.status == mwg::activex::GdalEndResult::NotFound ||
-        !resultLookup.result.has_value())
+    catch (...)
     {
-        return E_INVALIDARG;
+        return SetComErrorInfo("An unexpected error occurred while retrieving the GDAL operation result.", E_UNEXPECTED);
     }
-    const mwg::activex::GdalOperationSnapshot& operationResult =
-        *resultLookup.result;
 
+    if (ended.status == mwg::activex::GdalEndResult::Pending)
+        return SetComErrorInfo("The GDAL operation has not finished or is still delivering events.", E_PENDING);
+    if (ended.status != mwg::activex::GdalEndResult::Ended || !ended.result.has_value())
+        return SetComErrorInfo("The GDAL operation ID was not found.", E_INVALIDARG);
+
+    const auto& value = *ended.result;
+    BSTR callbackText = nullptr;
     BSTR summaryText = nullptr;
-    BSTR callbackErrorText = nullptr;
-    HRESULT result = Utf8ToBstr(
-        operationResult.callbackError,
-        &callbackErrorText);
-    if (FAILED(result))
-    {
-        return result;
-    }
-
-    result = Utf8ToBstr(operationResult.summary, &summaryText);
-    if (FAILED(result))
-    {
-        ::SysFreeString(callbackErrorText);
-        return result;
-    }
-
     BSTR diagnosticText = nullptr;
-    result = Utf8ToBstr(operationResult.diagnostics, &diagnosticText);
-    if (FAILED(result))
-    {
-        ::SysFreeString(callbackErrorText);
-        ::SysFreeString(summaryText);
-        return result;
-    }
-
     SAFEARRAY* warningArray = nullptr;
-    result = CreateStringArray(operationResult.warnings, &warningArray);
+    HRESULT result = DiagnosticToBstr(value.callbackError, &callbackText);
+    if (SUCCEEDED(result)) result = DiagnosticToBstr(value.summary, &summaryText);
+    if (SUCCEEDED(result)) result = DiagnosticToBstr(value.diagnostics, &diagnosticText);
+    if (SUCCEEDED(result)) result = CreateDiagnosticStringArray(value.warnings, &warningArray);
     if (FAILED(result))
     {
-        ::SysFreeString(callbackErrorText);
+        ::SysFreeString(callbackText);
         ::SysFreeString(summaryText);
         ::SysFreeString(diagnosticText);
-        return result;
+        if (warningArray != nullptr) ::SafeArrayDestroy(warningArray);
+        return SetComErrorInfo("The completed GDAL result could not be marshalled to COM.", result);
     }
-
-    const mwg::activex::GdalOperationLookup cleanupResult =
-        _gdalEvents.End(static_cast<std::uint64_t>(operationId));
-    if (cleanupResult.status != mwg::activex::GdalEndResult::Ended)
-    {
-        ::SysFreeString(callbackErrorText);
-        ::SysFreeString(summaryText);
-        ::SysFreeString(diagnosticText);
-        if (warningArray != nullptr)
-        {
-            ::SafeArrayDestroy(warningArray);
-        }
-        return cleanupResult.status == mwg::activex::GdalEndResult::Pending
-            ? E_PENDING
-            : E_INVALIDARG;
-    }
-
-    *succeeded = operationResult.succeeded ? VARIANT_TRUE : VARIANT_FALSE;
-    *cancelled = operationResult.cancelled ? VARIANT_TRUE : VARIANT_FALSE;
-    *errorCode = operationResult.errorCode;
-    *callbackErrorCode = operationResult.callbackErrorCode;
-    *callbackError = callbackErrorText;
+    *succeeded = value.succeeded ? VARIANT_TRUE : VARIANT_FALSE;
+    *cancelled = value.cancelled ? VARIANT_TRUE : VARIANT_FALSE;
+    *errorCode = value.errorCode;
+    *callbackErrorCode = value.callbackErrorCode;
+    *callbackError = callbackText;
     *summary = summaryText;
     *diagnostics = diagnosticText;
     *warnings = warningArray;
@@ -373,7 +331,7 @@ STDMETHODIMP CMapWinGISControl::get_CoreInitialized(VARIANT_BOOL* initialized)
 {
     if (initialized == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The initialized output pointer is null.", IID_IMapWinGISControlGdal, E_POINTER);
     }
 
     *initialized = mwg::GdalEnvironment::IsInitialized() ? VARIANT_TRUE : VARIANT_FALSE;
@@ -391,7 +349,7 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDatasetEx(
 {
     if (layerId == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The layer ID output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
     }
     *layerId = 0;
     return LoadVectorDatasetImpl(path, layerId, IID_IMapWinGISControl4);
@@ -404,13 +362,13 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
 {
     if (path == nullptr)
     {
-        return E_INVALIDARG;
+        return SetControlComErrorInfo("The dataset path is null.", sourceIid, E_INVALIDARG);
     }
 
     const UINT pathLength = ::SysStringLen(path);
     if (pathLength == 0)
     {
-        return E_INVALIDARG;
+        return SetControlComErrorInfo("The dataset path is empty.", sourceIid, E_INVALIDARG);
     }
 
     try
@@ -418,7 +376,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
         const std::wstring pathText(path, static_cast<std::size_t>(pathLength));
         if (pathText.find(L'\0') != std::wstring::npos)
         {
-            return E_INVALIDARG;
+            return SetControlComErrorInfo("The dataset path contains an embedded null character.", sourceIid, E_INVALIDARG);
         }
 
         const std::filesystem::path datasetPath(pathText);
@@ -460,7 +418,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
         if (layerId != nullptr && FAILED(CopyLayerId(id, &convertedId)))
         {
             (void)_view.RemoveLayer(id);
-            return E_UNEXPECTED;
+            return SetControlComErrorInfo("The layer ID could not be represented as a COM integer.", sourceIid, E_UNEXPECTED);
         }
         try
         {
@@ -484,7 +442,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
     }
     catch (const std::bad_alloc&)
     {
-        return E_OUTOFMEMORY;
+        return SetControlComErrorInfo("Out of memory while loading the vector dataset.", sourceIid, E_OUTOFMEMORY);
     }
     catch (const std::exception& exception)
     {
@@ -492,7 +450,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
     }
     catch (...)
     {
-        return E_FAIL;
+        return SetControlComErrorInfo("An unexpected error occurred while loading the vector dataset.", sourceIid, E_UNEXPECTED);
     }
 }
 
@@ -511,7 +469,7 @@ STDMETHODIMP CMapWinGISControl::get_LayerLoaded(VARIANT_BOOL* loaded)
 {
     if (loaded == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The loaded output pointer is null.", IID_IMapWinGISControl, E_POINTER);
     }
 
     *loaded = _view.GetMap().LayerCount() > 0 ? VARIANT_TRUE : VARIANT_FALSE;
@@ -522,7 +480,7 @@ STDMETHODIMP CMapWinGISControl::get_FeatureCount(LONGLONG* count)
 {
     if (count == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The feature count output pointer is null.", IID_IMapWinGISControl, E_POINTER);
     }
 
     *count = _featureCount;
@@ -531,24 +489,30 @@ STDMETHODIMP CMapWinGISControl::get_FeatureCount(LONGLONG* count)
 
 STDMETHODIMP CMapWinGISControl::get_RenderingBackend(BSTR* backend)
 {
-    return CopyToBstr(BackendName(_renderer.GetActiveBackend()), backend);
+    if (backend == nullptr) return SetControlComErrorInfo("The rendering backend output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
+    const HRESULT result = CopyToBstr(BackendName(_renderer.GetActiveBackend()), backend);
+    return FAILED(result) ? SetControlComErrorInfo("The rendering backend could not be returned.", IID_IMapWinGISControl4, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingStatus(BSTR* status)
 {
-    return CopyToBstr(_renderer.GetDiagnostic(), status);
+    if (status == nullptr) return SetControlComErrorInfo("The rendering status output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
+    const HRESULT result = CopyToBstr(_renderer.GetDiagnostic(), status);
+    return FAILED(result) ? SetControlComErrorInfo("The rendering status could not be returned.", IID_IMapWinGISControl4, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingBackendPreference(BSTR* preference)
 {
-    return CopyToBstr(PreferenceName(_renderer.GetPreference()), preference);
+    if (preference == nullptr) return SetControlComErrorInfo("The rendering backend preference output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
+    const HRESULT result = CopyToBstr(PreferenceName(_renderer.GetPreference()), preference);
+    return FAILED(result) ? SetControlComErrorInfo("The rendering backend preference could not be returned.", IID_IMapWinGISControl4, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
 {
     if (preference == nullptr)
     {
-        return E_INVALIDARG;
+        return SetControlComErrorInfo("The rendering backend preference is null.", IID_IMapWinGISControl4, E_INVALIDARG);
     }
 
     const UINT length = ::SysStringLen(preference);
@@ -577,7 +541,7 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
     }
     else
     {
-        return E_INVALIDARG;
+        return SetControlComErrorInfo("The rendering backend preference must be Automatic, OpenGL, or GDI.", IID_IMapWinGISControl4, E_INVALIDARG);
     }
 
     InvalidateLayerCache();
@@ -691,7 +655,7 @@ STDMETHODIMP CMapWinGISControl::get_LayerCount(LONG* count)
 {
     if (count == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The layer count output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
     }
     *count = _view.GetMap().LayerCount();
     return S_OK;
@@ -703,16 +667,19 @@ STDMETHODIMP CMapWinGISControl::GetLayerId(
 {
     if (layerId == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The layer ID output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
     }
     *layerId = 0;
     const mwg::Map& map = _view.GetMap();
     if (index < 0 || index >= map.LayerCount())
     {
-        return E_INVALIDARG;
+        return SetControlComErrorInfo("The layer index is out of range.", IID_IMapWinGISControl4, E_INVALIDARG);
     }
 
-    return CopyLayerId(map.Layer(index).Id(), layerId);
+    const HRESULT result = CopyLayerId(map.Layer(index).Id(), layerId);
+    return FAILED(result)
+        ? SetControlComErrorInfo("The layer ID could not be represented as a COM integer.", IID_IMapWinGISControl4, result)
+        : S_OK;
 }
 
 bool CMapWinGISControl::ResizeView(const LONG width, const LONG height) noexcept
@@ -988,6 +955,15 @@ LRESULT CMapWinGISControl::OnCancelMode(
     return 0;
 }
 
+LRESULT CMapWinGISControl::OnCreate(UINT, WPARAM, LPARAM, BOOL& handled)
+{
+    const HRESULT result = _gdalEvents.Reactivate();
+    if (FAILED(result)) ::OutputDebugStringW(L"MapWinGIS: unable to reactivate GDAL operations.\\n");
+    _gdalEvents.OnSize();
+    handled = FALSE;
+    return 0;
+}
+
 LRESULT CMapWinGISControl::OnSize(
     UINT,
     WPARAM,
@@ -1048,14 +1024,31 @@ STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
 {
     CancelMousePan();
     _gdalEvents.Close();
-    return ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
+    const HRESULT result = ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
+    return FAILED(result)
+        ? SetControlComErrorInfo("The ActiveX control could not be closed.", IID_IMapWinGISControl4, result)
+        : result;
+}
+
+STDMETHODIMP CMapWinGISControl::SetClientSite(IOleClientSite* const clientSite)
+{
+    const HRESULT result = ATL::IOleObjectImpl<CMapWinGISControl>::SetClientSite(clientSite);
+    if (SUCCEEDED(result) && clientSite != nullptr)
+    {
+        const HRESULT reset = _gdalEvents.Reactivate();
+        if (FAILED(reset))
+            return SetControlComErrorInfo("The GDAL operation source could not be reactivated.", IID_IMapWinGISControlGdal, reset);
+    }
+    return FAILED(result)
+        ? SetControlComErrorInfo("The ActiveX client site could not be changed.", IID_IMapWinGISControl4, result)
+        : result;
 }
 
 STDMETHODIMP CMapWinGISControl::SetObjectRects(LPCRECT position, LPCRECT clip)
 {
     if (position == nullptr || clip == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The object position or clip rectangle is null.", IID_IMapWinGISControl4, E_POINTER);
     }
     const HRESULT result =
         ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>::SetObjectRects(position, clip);
@@ -1071,7 +1064,9 @@ STDMETHODIMP CMapWinGISControl::SetObjectRects(LPCRECT position, LPCRECT clip)
             FireViewChange();
         }
     }
-    return result;
+    return FAILED(result)
+        ? SetControlComErrorInfo("The ActiveX object rectangles could not be set.", IID_IMapWinGISControl4, result)
+        : result;
 }
 
 void CMapWinGISControl::InvalidateLayerCache() noexcept

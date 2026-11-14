@@ -16,6 +16,8 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <limits>
+#include <string>
 
 #include <windows.h>
 
@@ -53,6 +55,29 @@ namespace mwg::activex
     namespace
     {
         int g_moduleAnchor = 0;
+
+        [[nodiscard]] std::string ExceptionMessageToUtf8(const char* message)
+        {
+            if (message == nullptr || *message == '\0') return {};
+            const std::size_t length = std::char_traits<char>::length(message);
+            if (length > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+                return "Native exception message was too long to convert.";
+            const int wideLength = ::MultiByteToWideChar(CP_ACP, 0, message,
+                static_cast<int>(length), nullptr, 0);
+            if (wideLength == 0) return "Native exception message could not be converted to UTF-8.";
+            std::wstring wide(static_cast<std::size_t>(wideLength), L'\0');
+            if (::MultiByteToWideChar(CP_ACP, 0, message, static_cast<int>(length),
+                    wide.data(), wideLength) == 0)
+                return "Native exception message could not be converted to UTF-8.";
+            const int utf8Length = ::WideCharToMultiByte(CP_UTF8, 0, wide.data(),
+                wideLength, nullptr, 0, nullptr, nullptr);
+            if (utf8Length == 0) return "Native exception message could not be converted to UTF-8.";
+            std::string utf8(static_cast<std::size_t>(utf8Length), '\0');
+            if (::WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLength,
+                    utf8.data(), utf8Length, nullptr, nullptr) == 0)
+                return "Native exception message could not be converted to UTF-8.";
+            return utf8;
+        }
 
         struct WorkerExitContext final
         {
@@ -264,8 +289,8 @@ namespace mwg::activex
             catch (const std::exception& exception)
             {
                 result.succeeded = false;
-                result.summary = exception.what();
-                result.diagnostics = exception.what();
+                result.summary = ExceptionMessageToUtf8(exception.what());
+                result.diagnostics = result.summary;
             }
             catch (...)
             {
@@ -385,9 +410,11 @@ namespace mwg::activex
     GdalCancelResult GdalOperationDispatcher::Cancel(
         const std::uint64_t operationId) noexcept
     {
-        std::lock_guard lock(_state->mutex);
-        const auto operation = _state->operations.find(operationId);
-        if (operation == _state->operations.end())
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> state = _state;
+        std::lock_guard lock(state->mutex);
+        const auto operation = state->operations.find(operationId);
+        if (operation == state->operations.end())
         {
             return GdalCancelResult::NotFound;
         }
@@ -481,8 +508,10 @@ namespace mwg::activex
 
     bool GdalOperationDispatcher::IsDispatchActive() const noexcept
     {
-        std::lock_guard lock(_state->mutex);
-        return !_state->stopping && !_state->suspended;
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> state = _state;
+        std::lock_guard lock(state->mutex);
+        return !state->stopping && !state->suspended;
     }
 
     std::vector<GdalOperationNotification>
@@ -529,24 +558,57 @@ namespace mwg::activex
 
     void GdalOperationDispatcher::Shutdown() noexcept
     {
-        std::lock_guard lock(_state->mutex);
-        if (_state->stopping)
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> state = _state;
+        std::lock_guard lock(state->mutex);
+        if (state->stopping)
         {
             return;
         }
 
-        _state->stopping = true;
-        _state->suspended = false;
-        _state->wakeCallback = nullptr;
-        _state->wakeContext = nullptr;
-        _state->wakePending = false;
-        for (auto& [operationId, operation] : _state->operations)
+        state->stopping = true;
+        state->suspended = false;
+        state->wakeCallback = nullptr;
+        state->wakeContext = nullptr;
+        state->wakePending = false;
+        for (auto& [operationId, operation] : state->operations)
         {
             static_cast<void>(operationId);
             operation->cancellation.Cancel();
             operation->progress.reset();
             operation->completionPending = false;
         }
+    }
+
+    void GdalOperationDispatcher::Restart()
+    {
+        std::shared_ptr<State> replacement = std::make_shared<State>();
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> previous = _state;
+        {
+            std::lock_guard stateLock(previous->mutex);
+            previous->stopping = true;
+            previous->suspended = false;
+            previous->wakeCallback = nullptr;
+            previous->wakeContext = nullptr;
+            previous->wakePending = false;
+            for (auto& [operationId, operation] : previous->operations)
+            {
+                static_cast<void>(operationId);
+                operation->cancellation.Cancel();
+                operation->progress.reset();
+                operation->completionPending = false;
+            }
+        }
+        _state = std::move(replacement);
+    }
+
+    bool GdalOperationDispatcher::HasOutstandingOperations() const noexcept
+    {
+        std::lock_guard pointerLock(_statePointerMutex);
+        const std::shared_ptr<State> state = _state;
+        std::lock_guard lock(state->mutex);
+        return !state->operations.empty();
     }
 
     void GdalOperationDispatcher::Suspend() noexcept

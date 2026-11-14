@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "GdalOperationDispatcher.h"
+#include "GdalDispatchWindow.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -188,6 +189,21 @@ namespace
         return false;
     }
 }
+
+
+#if defined(MWG_ENABLE_RENDERER_TEST_HOOKS)
+TEST(GdalDispatchWindow, DoesNotArmRetryTimerWhileIdle)
+{
+    auto window = std::make_shared<mwg::activex::GdalDispatchWindow>();
+    ASSERT_NE(window->Create(nullptr, nullptr), nullptr);
+    EXPECT_FALSE(window->IsRetryTimerArmedForTesting());
+    ASSERT_TRUE(window->StartRetryTimer());
+    EXPECT_TRUE(window->IsRetryTimerArmedForTesting());
+    window->StopRetryTimer();
+    EXPECT_FALSE(window->IsRetryTimerArmedForTesting());
+    window->Destroy();
+}
+#endif
 
 TEST(GdalOperationDispatcher, RunsRasterConversionAndDeliversCompletionOnOwnerThread)
 {
@@ -513,6 +529,29 @@ TEST(GdalOperationDispatcher, CompletionRemainsAvailableWhenWakeCallbackFails)
     EXPECT_GT(signal.attempts.load(), 0);
 
     const auto result = dispatcher.End(operationId);
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+    ASSERT_TRUE(result.result.has_value());
+    EXPECT_TRUE(result.result->succeeded);
+}
+
+TEST(GdalOperationDispatcher, RestartsAfterShutdownWithFreshOperationState)
+{
+    mwg::GdalEnvironment::Initialize();
+    RegisterDispatcherAlgorithms();
+
+    DispatchSignal signal;
+    mwg::activex::GdalOperationDispatcher dispatcher;
+    dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
+    const std::uint64_t oldId = dispatcher.Begin("mwg-test-dispatcher diagnostics", {});
+    dispatcher.Shutdown();
+    dispatcher.Restart();
+    dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
+    const std::uint64_t newId = dispatcher.Begin("mwg-test-dispatcher diagnostics", {});
+    EXPECT_GT(oldId, 0u);
+    EXPECT_GT(newId, 0u);
+    ASSERT_TRUE(WaitForCompletion(dispatcher, signal, newId,
+        std::chrono::steady_clock::now() + 10s));
+    const auto result = dispatcher.End(newId);
     ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
     ASSERT_TRUE(result.result.has_value());
     EXPECT_TRUE(result.result->succeeded);

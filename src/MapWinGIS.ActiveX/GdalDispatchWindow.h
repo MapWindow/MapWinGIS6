@@ -9,6 +9,8 @@
  */
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 
 #include <atlwin.h>
@@ -38,20 +40,38 @@ namespace mwg::activex
             {
                 return nullptr;
             }
-            if (::SetTimer(
-                    window,
-                    kGdalDispatchRetryTimerId,
-                    kGdalDispatchRetryIntervalMilliseconds,
-                    nullptr) == 0)
-            {
-                _callback = nullptr;
-                _context = nullptr;
-                ::SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-                DestroyWindow();
-                return nullptr;
-            }
             return window;
         }
+
+        [[nodiscard]] bool PostWake() noexcept
+        {
+            return ::PostMessageW(m_hWnd, kGdalDispatchMessage, 0, 0) != FALSE;
+        }
+
+        [[nodiscard]] bool StartRetryTimer() noexcept
+        {
+            if (_retryTimerArmed.load()) return true;
+            const UINT_PTR timer = ::SetTimer(
+                m_hWnd,
+                kGdalDispatchRetryTimerId,
+                kGdalDispatchRetryIntervalMilliseconds,
+                nullptr);
+            _retryTimerArmed.store(timer != 0);
+            return timer != 0;
+        }
+
+        void StopRetryTimer() noexcept
+        {
+            if (m_hWnd != nullptr) ::KillTimer(m_hWnd, kGdalDispatchRetryTimerId);
+            _retryTimerArmed.store(false);
+        }
+
+#if defined(MWG_ENABLE_RENDERER_TEST_HOOKS)
+        [[nodiscard]] bool IsRetryTimerArmedForTesting() const noexcept
+        {
+            return _retryTimerArmed.load();
+        }
+#endif
 
         void Destroy() noexcept
         {
@@ -67,7 +87,7 @@ namespace mwg::activex
             {
                 _deferredLifetime = shared_from_this();
             }
-            ::KillTimer(m_hWnd, kGdalDispatchRetryTimerId);
+            StopRetryTimer();
             DestroyWindow();
         }
 
@@ -105,10 +125,7 @@ namespace mwg::activex
             const std::shared_ptr<GdalDispatchWindow> lifetime = shared_from_this();
             handled = TRUE;
             MessageGuard messageGuard(*this);
-            if (_callback != nullptr)
-            {
-                _callback(_context);
-            }
+            if (_callback != nullptr) _callback(_context);
             return 0;
         }
 
@@ -117,9 +134,10 @@ namespace mwg::activex
             const std::shared_ptr<GdalDispatchWindow> lifetime = shared_from_this();
             handled = TRUE;
             MessageGuard messageGuard(*this);
-            if (timerId == kGdalDispatchRetryTimerId && _callback != nullptr)
+            if (timerId == kGdalDispatchRetryTimerId)
             {
-                _callback(_context);
+                _retryTimerArmed.store(false);
+                if (_callback != nullptr) _callback(_context);
             }
             return 0;
         }
@@ -129,5 +147,6 @@ namespace mwg::activex
         std::shared_ptr<GdalDispatchWindow> _deferredLifetime;
         std::uint32_t _messageDepth = 0;
         bool _destroyRequested = false;
+        std::atomic_bool _retryTimerArmed = false;
     };
 }
