@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -145,11 +146,13 @@ namespace mwg::activex
         /// Requests cancellation and detaches workers; safe from any thread.
         void Shutdown() noexcept;
         /// Starts a fresh operation lifetime after a previous Close/Shutdown.
+        /// Call on the owner thread; thread-safe cancellation remains supported.
         void Restart();
         /// True while any operation result remains outstanding.
         [[nodiscard]] bool HasOutstandingOperations() const noexcept;
 
     private:
+        mutable std::mutex _statePointerMutex;
         std::shared_ptr<State> _state;
     };
 }
