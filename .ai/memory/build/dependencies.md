@@ -17,6 +17,11 @@ the sibling `..\vcpkg` directory, then `VCPKG_ROOT`. It installs to a
 platform-specific tree because vcpkg can remove another triplet from a shared
 install directory.
 
+In a git worktree under `.worktrees\<name>`, the sibling `..\vcpkg` resolves
+inside `.worktrees`, so set `MWG_VCPKG_ROOT` to the real vcpkg root before
+configuring. On the primary development machine `VCPKG_ROOT` points to an
+unrelated vcpkg checkout and must not be used.
+
 The build deploys GDAL and PROJ runtime data beside the output binaries.
 Only the Core project's target deploys this shared data. Consumer projects
 reference Core so parallel solution builds do not copy the same files at once.

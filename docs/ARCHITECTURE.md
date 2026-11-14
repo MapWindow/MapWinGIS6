@@ -94,6 +94,10 @@ expect.
   lock. GDAL can report progress on worker threads. The shared progress adapter
   serializes callbacks, which cannot re-enter these operations.
   Direct dataset access still needs caller synchronization.
+  Releasing a dataset reference or destroying a runner never takes the
+  execution lock, so release cannot block behind or deadlock with an
+  in-flight operation; the released dataset must not be in active use by
+  another thread.
   See [operation results and threading](gdal-modern-capabilities.md#operation-results-logging-and-cancellation)
   for result, cancellation, and callback lifetime contracts.
 - The supported GDAL version and dependency pin are documented in
