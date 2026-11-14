@@ -98,7 +98,7 @@ namespace
         }
         catch (const std::bad_alloc&)
         {
-            return E_OUTOFMEMORY;
+            return SetControlComErrorInfo("Out of memory while updating the map view.", IID_IMapWinGISControl4, E_OUTOFMEMORY);
         }
         catch (const mwg::InvalidArgument& exception)
         {
@@ -116,7 +116,7 @@ namespace
         }
         catch (...)
         {
-            return E_FAIL;
+            return SetControlComErrorInfo("An unexpected error occurred while updating the map view.", IID_IMapWinGISControl4, E_UNEXPECTED);
         }
     }
 
@@ -418,7 +418,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
         if (layerId != nullptr && FAILED(CopyLayerId(id, &convertedId)))
         {
             (void)_view.RemoveLayer(id);
-            return E_UNEXPECTED;
+            return SetControlComErrorInfo("The layer ID could not be represented as a COM integer.", sourceIid, E_UNEXPECTED);
         }
         try
         {
@@ -469,7 +469,7 @@ STDMETHODIMP CMapWinGISControl::get_LayerLoaded(VARIANT_BOOL* loaded)
 {
     if (loaded == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The loaded output pointer is null.", IID_IMapWinGISControl, E_POINTER);
     }
 
     *loaded = _view.GetMap().LayerCount() > 0 ? VARIANT_TRUE : VARIANT_FALSE;
@@ -480,7 +480,7 @@ STDMETHODIMP CMapWinGISControl::get_FeatureCount(LONGLONG* count)
 {
     if (count == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The feature count output pointer is null.", IID_IMapWinGISControl, E_POINTER);
     }
 
     *count = _featureCount;
@@ -489,16 +489,19 @@ STDMETHODIMP CMapWinGISControl::get_FeatureCount(LONGLONG* count)
 
 STDMETHODIMP CMapWinGISControl::get_RenderingBackend(BSTR* backend)
 {
+    if (backend == nullptr) return SetControlComErrorInfo("The rendering backend output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
     return CopyToBstr(BackendName(_renderer.GetActiveBackend()), backend);
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingStatus(BSTR* status)
 {
+    if (status == nullptr) return SetControlComErrorInfo("The rendering status output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
     return CopyToBstr(_renderer.GetDiagnostic(), status);
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingBackendPreference(BSTR* preference)
 {
+    if (preference == nullptr) return SetControlComErrorInfo("The rendering backend preference output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
     return CopyToBstr(PreferenceName(_renderer.GetPreference()), preference);
 }
 
@@ -649,7 +652,7 @@ STDMETHODIMP CMapWinGISControl::get_LayerCount(LONG* count)
 {
     if (count == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The layer count output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
     }
     *count = _view.GetMap().LayerCount();
     return S_OK;
@@ -661,7 +664,7 @@ STDMETHODIMP CMapWinGISControl::GetLayerId(
 {
     if (layerId == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The layer ID output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
     }
     *layerId = 0;
     const mwg::Map& map = _view.GetMap();
@@ -670,7 +673,10 @@ STDMETHODIMP CMapWinGISControl::GetLayerId(
         return SetControlComErrorInfo("The layer index is out of range.", IID_IMapWinGISControl4, E_INVALIDARG);
     }
 
-    return CopyLayerId(map.Layer(index).Id(), layerId);
+    const HRESULT result = CopyLayerId(map.Layer(index).Id(), layerId);
+    return FAILED(result)
+        ? SetControlComErrorInfo("The layer ID could not be represented as a COM integer.", IID_IMapWinGISControl4, result)
+        : S_OK;
 }
 
 bool CMapWinGISControl::ResizeView(const LONG width, const LONG height) noexcept
@@ -1034,7 +1040,7 @@ STDMETHODIMP CMapWinGISControl::SetObjectRects(LPCRECT position, LPCRECT clip)
 {
     if (position == nullptr || clip == nullptr)
     {
-        return E_POINTER;
+        return SetControlComErrorInfo("The object position or clip rectangle is null.", IID_IMapWinGISControl4, E_POINTER);
     }
     const HRESULT result =
         ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>::SetObjectRects(position, clip);
