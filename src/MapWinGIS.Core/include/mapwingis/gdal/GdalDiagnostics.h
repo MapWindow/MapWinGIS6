@@ -36,7 +36,11 @@ namespace mwg
     /// Captures GDAL diagnostics raised on the current thread during its lifetime.
     ///
     /// The scope uses GDAL's thread-local error-handler stack and must be
-    /// destroyed on the same thread on which it was constructed. Call
+    /// destroyed on the same thread on which it was constructed. Diagnostics
+    /// raised on GDAL worker threads (for example with "-multi" or
+    /// NUM_THREADS options) reach the installed log handler but not this
+    /// scope, because error handlers are thread-local; GDAL 3.12 offers no
+    /// reliable per-operation collection for them. Call
     /// RethrowCaptureException() after the operation to report capture failures.
     /// Diagnostics also reach GdalEnvironment's logger. Logger exceptions are
     /// preserved by the scope and rethrown by RethrowCaptureException().

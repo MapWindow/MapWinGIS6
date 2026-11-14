@@ -27,6 +27,16 @@ namespace mwg
     /// thread-safe. GDAL calls from independent runners are serialized with
     /// convenience and compatibility operations. Direct dataset access still
     /// requires caller synchronization.
+    ///
+    /// Destruction releases the runner's own references (algorithm, output
+    /// datasets) without taking the shared GDAL execution lock, so it cannot
+    /// block behind or deadlock with an operation running on another thread,
+    /// including release from inside a GDAL progress callback. The released
+    /// datasets must not be in active use by another thread.
+    ///
+    /// Diagnostics raised by GDAL worker threads (for example "-multi" or
+    /// NUM_THREADS options) reach the installed log handler but not Errors(),
+    /// because error capture is thread-local.
     class MWG_CORE_API GdalAlgorithmRunner
     {
     public:
@@ -74,6 +84,8 @@ namespace mwg
         /// failure diagnostics, not user cancellation. Token/callback lifetimes
         /// must cover this call. Capture/logger exceptions propagate after
         /// finalization of a successful GDAL run.
+        /// A failed or cancelled run can leave a partial output file behind;
+        /// the runner does not delete outputs it created.
         [[nodiscard]] bool Run(GdalProgressAdapter::Callback progress = {},
                                const GdalCancellationToken* cancellationToken = nullptr);
 
