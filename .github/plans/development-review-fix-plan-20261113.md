@@ -303,6 +303,11 @@ Suggested fix:
 - **Decision**: replacing the nested `vector<vector<vector<Point>>>` with flat coordinate and offset buffers changes a public header and both renderers. Ask the user whether to do it in this phase or as a separate follow-up. If the user agrees, add a test that renders the same scene before and after (the rendering baseline tests) to show the output is unchanged.
 - Measure before and after on a generated layer (for example 100,000 polygons) and put the numbers in the PR description.
 
+
+**Phase 7 implementation:** Per-layer scene caching and extent traversal optimization are implemented in PR [#77](https://github.com/MapWindow/MapWinGIS6/pull/77). Local builds and tests were intentionally skipped; CI validation is pending.
+
+**Limitations:** The public MapRenderScene remains an owning snapshot, so assembling it copies cached geometry. The cache prevents repeated GDAL reads and triangulation on visibility changes, but does not eliminate snapshot-copy cost. The nested polygon representation was retained; flat coordinate buffers remain a separate design decision.
+
 ### Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
 
 **#21 – Sub-pixel check in the pan blit is dead code** (`src/MapWinGIS.ActiveX/MapWinGISControl.cpp:1124-1127`, `TryBlitCachedLayers`)

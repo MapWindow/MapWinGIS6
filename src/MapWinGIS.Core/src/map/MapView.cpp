@@ -7,11 +7,15 @@
 #include "mapwingis/map/MapView.h"
 
 #include <cmath>
+#include <map>
+#include <new>
 #include <optional>
 #include <utility>
+#include <variant>
 
 #include "mapwingis/core/Error.h"
 #include "mapwingis/vector/VectorDataset.h"
+#include "internal/VectorRenderSceneBuilder.h"
 
 namespace mwg
 {
@@ -60,8 +64,11 @@ namespace mwg
             return false;
         }
 
+        using LayerScene = std::variant<rendering::LayerRenderScene, rendering::SkippedLayer>;
+
         Map _map;
         Viewport _viewport;
+        std::map<LayerId, LayerScene> _layerScenes;
         rendering::MapRenderScene _scene;
         bool _sceneStale = false;
         std::optional<PendingFit> _pendingFit;
@@ -118,18 +125,32 @@ namespace mwg
             _impl->_scene.layers.reserve(_impl->_scene.layers.size() + 1);
         }
 
-        // Allocate before AddLayer can change the map or its pending fit.
-        const LayerId id = AddLayer(std::move(dataset), layerIndex);
+        // Stage the cache node before AddLayer can change the map or pending
+        // fit. Updating a node handle's key and inserting it later cannot allocate.
+        std::map<LayerId, Impl::LayerScene> staged;
         if (empty)
         {
-            _impl->_scene.skippedLayers.push_back(
-                {id, rendering::LayerSkipReason::NoGeometry, {}});
+            staged.emplace(LayerId{}, rendering::SkippedLayer{
+                LayerId{}, rendering::LayerSkipReason::NoGeometry, {}});
         }
         else
         {
-            _impl->_scene.layers.push_back({id, std::move(scene)});
+            staged.emplace(LayerId{}, rendering::LayerRenderScene{LayerId{}, std::move(scene)});
         }
-        _impl->_sceneStale = false;
+        auto cachedScene = staged.extract(staged.begin());
+
+        const LayerId id = AddLayer(std::move(dataset), layerIndex);
+        cachedScene.key() = id;
+        if (empty)
+        {
+            std::get<rendering::SkippedLayer>(cachedScene.mapped()).layerId = id;
+        }
+        else
+        {
+            std::get<rendering::LayerRenderScene>(cachedScene.mapped()).layerId = id;
+        }
+        _impl->_layerScenes.insert(std::move(cachedScene));
+        _impl->_sceneStale = true;
         return id;
     }
 
@@ -139,6 +160,7 @@ namespace mwg
         {
             return false;
         }
+        _impl->_layerScenes.erase(id);
         _impl->_sceneStale = true;
         return true;
     }
@@ -150,6 +172,7 @@ namespace mwg
             return false;
         }
         _impl->_map.Clear();
+        _impl->_layerScenes.clear();
         _impl->_sceneStale = true;
         return true;
     }
@@ -241,7 +264,64 @@ namespace mwg
     {
         if (_impl->_sceneStale)
         {
-            _impl->_scene = rendering::CreateMapRenderScene(_impl->_map);
+            rendering::MapRenderScene scene;
+            scene.layers.reserve(static_cast<std::size_t>(_impl->_map.LayerCount()));
+            scene.skippedLayers.reserve(static_cast<std::size_t>(_impl->_map.LayerCount()));
+
+            for (int position = 0; position < _impl->_map.LayerCount(); ++position)
+            {
+                const MapLayer& layer = _impl->_map.Layer(position);
+                if (!layer.IsVisible())
+                {
+                    scene.skippedLayers.push_back(
+                        {layer.Id(), rendering::LayerSkipReason::Hidden, {}});
+                    continue;
+                }
+
+                auto cached = _impl->_layerScenes.find(layer.Id());
+                if (cached == _impl->_layerScenes.end())
+                {
+                    Impl::LayerScene layerScene;
+                    try
+                    {
+                        rendering::VectorRenderScene vectorScene =
+                            rendering::detail::BuildVectorRenderScene(layer.Source());
+                        if (vectorScene.polygons.empty())
+                        {
+                            layerScene = rendering::SkippedLayer{
+                                layer.Id(), rendering::LayerSkipReason::NoGeometry, {}};
+                        }
+                        else
+                        {
+                            layerScene = rendering::LayerRenderScene{
+                                layer.Id(), std::move(vectorScene)};
+                        }
+                    }
+                    catch (const std::bad_alloc&)
+                    {
+                        throw;
+                    }
+                    catch (const std::exception& error)
+                    {
+                        layerScene = rendering::SkippedLayer{
+                            layer.Id(), rendering::LayerSkipReason::Failed, error.what()};
+                    }
+                    cached = _impl->_layerScenes.emplace(layer.Id(), std::move(layerScene)).first;
+                }
+
+                if (const auto* drawable =
+                        std::get_if<rendering::LayerRenderScene>(&cached->second))
+                {
+                    scene.layers.push_back(*drawable);
+                }
+                else
+                {
+                    scene.skippedLayers.push_back(
+                        std::get<rendering::SkippedLayer>(cached->second));
+                }
+            }
+
+            _impl->_scene = std::move(scene);
             _impl->_sceneStale = false;
         }
         return _impl->_scene;
@@ -249,6 +329,18 @@ namespace mwg
 
     bool MapView::InvalidateScene() noexcept
     {
+        _impl->_layerScenes.clear();
+        _impl->_sceneStale = true;
+        return true;
+    }
+
+    bool MapView::InvalidateLayerScene(const LayerId id) noexcept
+    {
+        if (_impl->_map.FindLayer(id) == nullptr)
+        {
+            return false;
+        }
+        _impl->_layerScenes.erase(id);
         _impl->_sceneStale = true;
         return true;
     }

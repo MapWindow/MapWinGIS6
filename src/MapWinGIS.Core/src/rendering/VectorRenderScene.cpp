@@ -106,13 +106,18 @@ namespace mwg::rendering
         }
 
         VectorRenderScene scene;
-        scene.extent = layer.GetExtent();
+        const bool hasFastExtent = mwg::detail::VectorLayerAccess::HasFastExtent(layer);
+        if (hasFastExtent)
+        {
+            scene.extent = layer.GetExtent();
+        }
         scene.sourceFeatureCount = mwg::detail::VectorLayerAccess::ForEachGeometry(
             layer,
             [&scene](const OGRGeometry& geometry)
             {
                 AppendGeometry(geometry, scene);
-            });
+            },
+            hasFastExtent ? nullptr : &scene.extent);
 
         // Prepare one fill mesh per polygon while the scene is created, so
         // renderers never triangulate per frame. A polygon that cannot be
