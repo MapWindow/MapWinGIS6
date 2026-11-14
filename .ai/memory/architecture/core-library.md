@@ -22,7 +22,10 @@ otherwise.
 
 Call `GdalEnvironment::Initialize()` before direct GDAL use. It configures
 GDAL/PROJ runtime data deployed beside the Core DLL. Do not rely on
-`GDAL_DATA` or `PROJ_LIB` environment variables. GDAL datasets and execution
+`GDAL_DATA` or `PROJ_LIB` environment variables. The GDAL error callback is
+registered for process lifetime: Core pins its module and deliberately keeps
+callback state alive until process exit, while forwarding diagnostics to a
+host handler installed before initialization. GDAL datasets and execution
 remain Core responsibilities; COM callbacks and host dispatch stay in
 ActiveX.
 

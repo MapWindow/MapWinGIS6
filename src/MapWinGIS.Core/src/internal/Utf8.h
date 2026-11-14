@@ -9,14 +9,33 @@
 #pragma once
 
 #include <filesystem>
+#include <stdexcept>
 #include <string>
+#include <system_error>
+
+#include "mapwingis/core/Error.h"
 
 namespace mwg::detail
 {
     /// GDAL expects UTF-8 paths, so this is the only conversion the core uses.
+    /// Invalid native path sequences are reported through the normal Core API
+    /// exception contract rather than leaking a filesystem conversion exception.
     inline std::string ToUtf8(const std::filesystem::path& path)
     {
-        const std::u8string utf8 = path.u8string();
-        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+        try
+        {
+            const std::u8string utf8 = path.u8string();
+            return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+        }
+        catch (const std::system_error& error)
+        {
+            throw InvalidArgument("Filesystem path cannot be converted to UTF-8: " +
+                                  std::string(error.what()));
+        }
+        catch (const std::range_error& error)
+        {
+            throw InvalidArgument("Filesystem path cannot be converted to UTF-8: " +
+                                  std::string(error.what()));
+        }
     }
 }

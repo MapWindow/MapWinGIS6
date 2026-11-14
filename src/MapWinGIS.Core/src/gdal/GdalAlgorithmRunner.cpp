@@ -17,11 +17,15 @@
 #include <gdal.h>
 #include <gdalalgorithm.h>
 #include <gdal_priv.h>
+#include <gdal_version.h>
 
 #include <exception>
 #include <optional>
 #include <sstream>
 #include <utility>
+
+static_assert(GDAL_VERSION_NUM >= GDAL_COMPUTE_VERSION(3, 12, 4),
+              "MapWinGIS6 requires GDAL 3.12.4 or later.");
 
 namespace mwg
 {
