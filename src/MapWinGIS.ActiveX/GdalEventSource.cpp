@@ -107,6 +107,10 @@ namespace mwg::activex
         _dispatcher.SetWorkerFinishedCallback(
             &GdalEventSource::UnlockActiveXModule,
             nullptr);
+        if (!_dispatchWindow->StartRetryTimer())
+        {
+            ::OutputDebugStringW(L"MapWinGIS: unable to arm the GDAL operation retry timer.\\n");
+        }
         _AtlModule.Lock();
         try
         {
@@ -135,7 +139,12 @@ namespace mwg::activex
 
     GdalOperationLookup GdalEventSource::End(const std::uint64_t operationId)
     {
-        return _dispatcher.End(operationId);
+        GdalOperationLookup result = _dispatcher.End(operationId);
+        if (!_dispatcher.HasOutstandingOperations() && _dispatchWindow != nullptr)
+        {
+            _dispatchWindow->StopRetryTimer();
+        }
+        return result;
     }
 
     void GdalEventSource::RecordCallbackError(
@@ -242,6 +251,11 @@ namespace mwg::activex
                     RecordCallbackError(notification.operationId, result);
                 }
             }
+        }
+        if (_dispatchWindow != nullptr)
+        {
+            if (_dispatcher.HasOutstandingOperations()) _dispatchWindow->StartRetryTimer();
+            else _dispatchWindow->StopRetryTimer();
         }
         return 0;
     }
