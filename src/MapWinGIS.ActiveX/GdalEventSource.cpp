@@ -235,16 +235,15 @@ namespace mwg::activex
                     GdalOperationDispatcher& dispatcher;
                     std::uint64_t operationId;
                     std::uint64_t generation;
-                    GdalOperationDispatcher& owner;
 
                     ~NotificationGuard()
                     {
-                        if (owner.GetGeneration() == generation)
+                        if (dispatcher.GetGeneration() == generation)
                         {
                             dispatcher.EndNotificationDelivery(operationId);
                         }
                     }
-                } notificationGuard{_dispatcher, notification.operationId, generation, _dispatcher};
+                } notificationGuard{_dispatcher, notification.operationId, generation};
 
                 const HRESULT result =
                     notification.kind == GdalNotificationKind::Progress
