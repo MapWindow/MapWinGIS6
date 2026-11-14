@@ -490,19 +490,22 @@ STDMETHODIMP CMapWinGISControl::get_FeatureCount(LONGLONG* count)
 STDMETHODIMP CMapWinGISControl::get_RenderingBackend(BSTR* backend)
 {
     if (backend == nullptr) return SetControlComErrorInfo("The rendering backend output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
-    return CopyToBstr(BackendName(_renderer.GetActiveBackend()), backend);
+    const HRESULT result = CopyToBstr(BackendName(_renderer.GetActiveBackend()), backend);
+    return FAILED(result) ? SetControlComErrorInfo("The rendering backend could not be returned.", IID_IMapWinGISControl4, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingStatus(BSTR* status)
 {
     if (status == nullptr) return SetControlComErrorInfo("The rendering status output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
-    return CopyToBstr(_renderer.GetDiagnostic(), status);
+    const HRESULT result = CopyToBstr(_renderer.GetDiagnostic(), status);
+    return FAILED(result) ? SetControlComErrorInfo("The rendering status could not be returned.", IID_IMapWinGISControl4, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingBackendPreference(BSTR* preference)
 {
     if (preference == nullptr) return SetControlComErrorInfo("The rendering backend preference output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
-    return CopyToBstr(PreferenceName(_renderer.GetPreference()), preference);
+    const HRESULT result = CopyToBstr(PreferenceName(_renderer.GetPreference()), preference);
+    return FAILED(result) ? SetControlComErrorInfo("The rendering backend preference could not be returned.", IID_IMapWinGISControl4, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
@@ -1021,7 +1024,10 @@ STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
 {
     CancelMousePan();
     _gdalEvents.Close();
-    return ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
+    const HRESULT result = ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
+    return FAILED(result)
+        ? SetControlComErrorInfo("The ActiveX control could not be closed.", IID_IMapWinGISControl4, result)
+        : result;
 }
 
 STDMETHODIMP CMapWinGISControl::SetClientSite(IOleClientSite* const clientSite)
@@ -1033,7 +1039,9 @@ STDMETHODIMP CMapWinGISControl::SetClientSite(IOleClientSite* const clientSite)
         if (FAILED(reset))
             return SetControlComErrorInfo("The GDAL operation source could not be reactivated.", IID_IMapWinGISControlGdal, reset);
     }
-    return result;
+    return FAILED(result)
+        ? SetControlComErrorInfo("The ActiveX client site could not be changed.", IID_IMapWinGISControl4, result)
+        : result;
 }
 
 STDMETHODIMP CMapWinGISControl::SetObjectRects(LPCRECT position, LPCRECT clip)
@@ -1056,7 +1064,9 @@ STDMETHODIMP CMapWinGISControl::SetObjectRects(LPCRECT position, LPCRECT clip)
             FireViewChange();
         }
     }
-    return result;
+    return FAILED(result)
+        ? SetControlComErrorInfo("The ActiveX object rectangles could not be set.", IID_IMapWinGISControl4, result)
+        : result;
 }
 
 void CMapWinGISControl::InvalidateLayerCache() noexcept
