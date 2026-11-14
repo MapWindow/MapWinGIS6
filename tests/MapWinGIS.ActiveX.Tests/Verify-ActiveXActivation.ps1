@@ -77,6 +77,25 @@ if ($registerResult.ExitCode -ne 0) {
 }
 
 try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace MapWinGIS.ActiveX.Tests {
+    public static class OleRegistration {
+        [DllImport("ole32.dll", ExactSpelling = true)]
+        public static extern int OleRegGetMiscStatus(
+            ref Guid clsid, uint aspect, out uint miscStatus);
+    }
+}
+'@
+    $controlClsid = [Guid]'2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F'
+    [uint32]$miscStatus = 0
+    $miscStatusResult = [MapWinGIS.ActiveX.Tests.OleRegistration]::OleRegGetMiscStatus(
+        [ref]$controlClsid, 1, [ref]$miscStatus)
+    if ($miscStatusResult -ne 0 -or $miscStatus -ne 913) {
+        throw "OleRegGetMiscStatus returned HRESULT 0x$('{0:X8}' -f $miscStatusResult) and flags $miscStatus; expected 913."
+    }
+
     $control = New-Object -ComObject 'MapWinGIS6.Control'
     if ($null -eq $control) {
         throw 'COM activation returned no control instance.'

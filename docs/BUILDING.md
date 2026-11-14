@@ -66,6 +66,16 @@ build's registration. It also embeds the control in an ATL OLE host, resizes
 the host, repaints, and recreates the control. Use 32-bit PowerShell with
 `-Platform Win32`.
 
+### COM registration
+
+For a per-user registration, run the OCX registration entry point with
+`regsvr32 /n /i:user MapWinGIS.ocx` from a process matching the control's
+architecture. The `/n` switch suppresses the separate machine-wide
+`DllRegisterServer` call. Using `/i:user` without `/n` first performs the
+machine-wide registration and then the per-user `DllInstall` registration.
+An empty or omitted `DllInstall` argument selects machine-wide registration;
+`user` is case-insensitive.
+
 ### C# ActiveX test host
 
 Build the solution for the same architecture as the native control. The host
