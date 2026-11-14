@@ -10,6 +10,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MapWinGIS.Core.Tests/MapWinGIS.Core.Tests.vcxproj" Id="2b6a9a3b-0c5e-4e6e-9e31-3e8f5a2d1c02" />
+    <Project Path="tests/MapWinGIS.Core.Tests/MapWinGIS.Core.GdalInitialization.Tests.vcxproj" Id="a4e66175-b418-464d-b728-824a0d98b25e" />
     <Project Path="tests/MapWinGIS.ActiveX.Tests/MapWinGIS.ActiveX.Tests.vcxproj" Id="67bb3e1c-8382-48d5-8a19-10a73f8d3a64" />
   </Folder>
   <Folder Name="/samples/">

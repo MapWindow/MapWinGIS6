@@ -12,6 +12,7 @@
 #include <atomic>
 #include <exception>
 #include <mutex>
+#include <system_error>
 #include <utility>
 
 #include <cpl_conv.h>
@@ -25,7 +26,9 @@
 #include <windows.h>
 
 #include "internal/Utf8.h"
+#include "internal/GdalDiagnosticDispatch.h"
 #include "internal/GdalExecution.h"
+#include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalConfig.h"
 
 namespace mwg
@@ -37,8 +40,26 @@ namespace mwg
         std::once_flag g_initFlag;
         std::atomic_bool g_initialized{false};
 
-        std::mutex g_logHandlerMutex;
-        LogHandler g_logHandler;
+        // GDAL keeps ErrorHandler registered process-wide. This state must
+        // therefore outlive static destruction in both Core and its host.
+        // Core is pinned for the process lifetime before registering the callback.
+        struct GdalProcessState final
+        {
+            std::mutex logHandlerMutex;
+            LogHandler logHandler;
+            std::atomic<CPLErrorHandler> previousErrorHandler{nullptr};
+            std::filesystem::path gdalDataDir;
+            std::filesystem::path projDataDir;
+            bool errorHandlerInstalled = false;
+        };
+
+        GdalProcessState& ProcessState()
+        {
+            // Deliberately leaked: GDAL may invoke the registered callback until
+            // process exit, after ordinary C++ static objects would be destroyed.
+            static GdalProcessState* const state = new GdalProcessState();
+            return *state;
+        }
 
         thread_local std::string t_lastError;
         thread_local std::exception_ptr t_logException;
@@ -57,38 +78,118 @@ namespace mwg
             }
         }
 
-        void CPL_STDCALL ErrorHandler(const CPLErr severity, CPLErrorNum, const char* message) noexcept
+        std::string DescribePath(const std::filesystem::path& path)
         {
-            if (message == nullptr) return;
-
             try
             {
-                GdalEnvironment::ReportDiagnostic(ToLogLevel(severity), message);
+                return ToUtf8(path);
             }
             catch (...)
             {
-                if (!t_logException)
-                    t_logException = std::current_exception();
+                return "<path cannot be represented as UTF-8>";
             }
         }
 
-        void DoInitialize(const std::filesystem::path& gdalDataDir, const std::filesystem::path& projDataDir)
+        void CPL_STDCALL ErrorHandler(const CPLErr severity, CPLErrorNum errorNumber,
+                                      const char* message) noexcept
         {
-            CPLSetErrorHandler(&ErrorHandler);
+            detail::DispatchGdalDiagnostic(severity, errorNumber, message, t_logException);
+        }
 
-            if (!gdalDataDir.empty() && std::filesystem::is_directory(gdalDataDir))
-                CPLSetConfigOption("GDAL_DATA", ToUtf8(gdalDataDir).c_str());
-
-            if (!projDataDir.empty() && std::filesystem::is_directory(projDataDir))
+        void DoInitialize(const std::filesystem::path& gdalDataDir,
+                          const std::filesystem::path& projDataDir)
+        {
+            HMODULE module = nullptr;
+            if (!GetModuleHandleExW(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                    reinterpret_cast<LPCWSTR>(&DoInitialize), &module))
             {
-                const std::string proj = ToUtf8(projDataDir);
-                const char* paths[] = {proj.c_str(), nullptr};
+                throw CoreError("Could not pin MapWinGIS.Core.dll for the lifetime of GDAL's error handler.");
+            }
+
+            GdalProcessState& state = ProcessState();
+            const std::string gdalPath = gdalDataDir.empty() ? std::string{} : ToUtf8(gdalDataDir);
+            const std::string projPath = projDataDir.empty() ? std::string{} : ToUtf8(projDataDir);
+
+            if (!GDALCheckVersion(GDAL_VERSION_MAJOR, GDAL_VERSION_MINOR, "MapWinGIS.Core"))
+                throw CoreError("The loaded GDAL runtime is incompatible with the headers used to build MapWinGIS.Core.");
+
+            state.gdalDataDir = gdalDataDir;
+            state.projDataDir = projDataDir;
+            if (!state.errorHandlerInstalled)
+            {
+                state.previousErrorHandler.store(CPLSetErrorHandler(&ErrorHandler),
+                                                 std::memory_order_release);
+                state.errorHandlerInstalled = true;
+            }
+
+            std::error_code error;
+            const bool hasGdalData = !gdalDataDir.empty() &&
+                                     std::filesystem::is_directory(gdalDataDir, error);
+            if (hasGdalData && !error)
+            {
+                CPLSetConfigOption("GDAL_DATA", gdalPath.c_str());
+            }
+            else
+            {
+                if (!gdalPath.empty())
+                    CPLSetConfigOption("GDAL_DATA", gdalPath.c_str());
+                GdalEnvironment::ReportDiagnostic(
+                    LogLevel::Warning,
+                    "GDAL data directory is unavailable: " + DescribePath(gdalDataDir) +
+                        (gdalPath.empty()
+                             ? ". No GDAL data directory is configured."
+                             : ". GDAL_DATA is still set to this path; no alternate data directory is selected."));
+            }
+
+            error.clear();
+            const bool hasProjData = !projDataDir.empty() &&
+                                     std::filesystem::is_directory(projDataDir, error);
+            if (!projPath.empty())
+            {
+                const char* paths[] = {projPath.c_str(), nullptr};
                 OSRSetPROJSearchPaths(paths);
+            }
+            if (!hasProjData || error)
+            {
+                GdalEnvironment::ReportDiagnostic(
+                    LogLevel::Warning,
+                    "PROJ data directory is unavailable: " + DescribePath(projDataDir) +
+                        (projPath.empty()
+                             ? ". No PROJ search directory is configured."
+                             : ". PROJ search is restricted to this configured path."));
             }
 
             const GdalInitializer initializer;
             (void)initializer;
             g_initialized.store(true, std::memory_order_release);
+        }
+
+        // Names the requested path that GDAL does not use on the calling thread,
+        // or returns an empty string. Empty requests configure nothing and are
+        // not checked.
+        std::string FindInactivePath(const std::filesystem::path& gdalDataDir,
+                                     const std::filesystem::path& projDataDir)
+        {
+            if (!gdalDataDir.empty())
+            {
+                // Includes thread-local overrides, which take precedence.
+                const char* const active = CPLGetConfigOption("GDAL_DATA", nullptr);
+                if (active == nullptr || ToUtf8(gdalDataDir) != active)
+                    return "GDAL_DATA";
+            }
+
+            if (!projDataDir.empty())
+            {
+                char** const paths = OSRGetPROJSearchPaths();
+                const bool active = paths != nullptr && paths[0] != nullptr && paths[1] == nullptr &&
+                                    ToUtf8(projDataDir) == paths[0];
+                CSLDestroy(paths);
+                if (!active)
+                    return "the PROJ search path";
+            }
+
+            return {};
         }
 
         GDALDriverH FindDriver(const std::string& name, const unsigned int kind)
@@ -117,16 +218,75 @@ namespace mwg
         }
     }
 
-    void GdalEnvironment::Initialize()
+    void detail::DispatchGdalDiagnostic(const CPLErr severity, const CPLErrorNum errorNumber,
+                                        const char* message, std::exception_ptr& firstException) noexcept
     {
-        const std::filesystem::path moduleDir = ModuleDirectory();
-        Initialize(moduleDir / "gdal-data", moduleDir / "proj");
+        if (message == nullptr) return;
+
+        try
+        {
+            GdalEnvironment::ReportDiagnostic(ToLogLevel(severity), message);
+        }
+        catch (...)
+        {
+            if (!firstException)
+                firstException = std::current_exception();
+        }
+
+        // Preserve a host-installed process-wide handler. Do not forward
+        // to GDAL's default/quiet handlers or recursively to ourselves.
+        const CPLErrorHandler previous = ProcessState().previousErrorHandler.load(std::memory_order_acquire);
+        if (previous == nullptr ||
+            previous == &ErrorHandler ||
+            previous == CPLDefaultErrorHandler ||
+            previous == CPLQuietErrorHandler)
+        {
+            return;
+        }
+
+        try
+        {
+            // Like the MapWinGIS logger, the host handler must not start
+            // GDAL work: on a worker thread that would wait for the
+            // execution lock held by the thread waiting for this worker.
+            const GdalCallbackScope callbackScope;
+            previous(severity, errorNumber, message);
+        }
+        catch (...)
+        {
+            if (!firstException)
+                firstException = std::current_exception();
+        }
     }
 
-    void GdalEnvironment::Initialize(const std::filesystem::path& gdalDataDir,
+    void GdalEnvironment::Initialize()
+    {
+        if (IsInitialized()) return;
+        const std::filesystem::path moduleDir = ModuleDirectory();
+        (void)Initialize(moduleDir / "gdal-data", moduleDir / "proj");
+    }
+
+    bool GdalEnvironment::Initialize(const std::filesystem::path& gdalDataDir,
                                      const std::filesystem::path& projDataDir)
     {
         std::call_once(g_initFlag, DoInitialize, gdalDataDir, projDataDir);
+        const GdalProcessState& state = ProcessState();
+        if (state.gdalDataDir != gdalDataDir || state.projDataDir != projDataDir)
+        {
+            ReportDiagnostic(LogLevel::Warning,
+                             "GdalEnvironment is already initialized with different data paths; "
+                             "the requested paths were not applied.");
+            return false;
+        }
+
+        if (const std::string inactive = FindInactivePath(gdalDataDir, projDataDir); !inactive.empty())
+        {
+            ReportDiagnostic(LogLevel::Warning,
+                             "The requested GDAL data paths are not active: " + inactive +
+                                 " has been overridden after or outside GdalEnvironment initialization.");
+            return false;
+        }
+        return true;
     }
 
     bool GdalEnvironment::IsInitialized() noexcept
@@ -136,8 +296,9 @@ namespace mwg
 
     void GdalEnvironment::SetLogHandler(LogHandler handler)
     {
-        std::lock_guard lock(g_logHandlerMutex);
-        g_logHandler = std::move(handler);
+        GdalProcessState& state = ProcessState();
+        std::lock_guard lock(state.logHandlerMutex);
+        state.logHandler = std::move(handler);
     }
 
     void GdalEnvironment::ReportDiagnostic(const LogLevel level, const std::string_view message)
@@ -146,9 +307,10 @@ namespace mwg
             t_lastError = message;
 
         LogHandler handler;
+        GdalProcessState& state = ProcessState();
         {
-            std::lock_guard lock(g_logHandlerMutex);
-            handler = g_logHandler;
+            std::lock_guard lock(state.logHandlerMutex);
+            handler = state.logHandler;
         }
         if (handler)
         {
@@ -188,8 +350,7 @@ namespace mwg
 
     std::string GdalEnvironment::GeosVersion()
     {
-        const char* version = GEOSversion();
-        return version != nullptr ? version : std::string{};
+        return GEOSversion();
     }
 
     std::string GdalEnvironment::ProjVersion()
