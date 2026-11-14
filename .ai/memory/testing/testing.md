@@ -37,6 +37,13 @@ resolution`), and both backends draw through the same transform. Sampling raw
 map coordinates checks the wrong location; convert through `MapPixel`/`ToPixel`
 or compute device coordinates explicitly (cost a test iteration in PR #68).
 
+The Shapefile driver defaults to `AUTO_REPACK=YES`: a `DeleteFeature()` fixture
+is physically repacked on flush or close, so a test for deleted DBF records must
+open the update handle with the `AUTO_REPACK=NO` open option. Assert that the raw
+`GetFeatureCount(TRUE)` still includes the record, so the fixture provably
+keeps it (PR #75). Direct `OGRLayer` use in tests needs `<ogrsf_frmts.h>`;
+`<gdal_priv.h>` only forward-declares it.
+
 ## References
 
 - [Testing guide](../../../docs/TESTING.md)
