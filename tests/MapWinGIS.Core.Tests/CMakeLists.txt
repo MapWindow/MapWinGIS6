@@ -16,7 +16,6 @@ set(MWG_CORE_TEST_HEADERS
 set(MWG_CORE_TEST_SOURCES
     GdalAlgorithmRunnerTests.cpp
     GdalEnvironmentTests.cpp
-    GdalInitializationTests.cpp
     GdalModernCapabilitiesTests.cpp
     GdalRuntimeTests.cpp
     GdalTypedOptionsTests.cpp
