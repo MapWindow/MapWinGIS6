@@ -103,7 +103,7 @@ namespace mwg::activex
 
         _dispatcher.SetWakeCallback(
             &GdalEventSource::PostDispatchMessage,
-            _dispatchWindow->m_hWnd);
+            _dispatchWindow.get());
         _dispatcher.SetWorkerFinishedCallback(
             &GdalEventSource::UnlockActiveXModule,
             nullptr);
@@ -258,13 +258,23 @@ namespace mwg::activex
         _dispatcher.Shutdown();
     }
 
+    HRESULT GdalEventSource::Reactivate() noexcept
+    {
+        if (!_closing) return S_OK;
+        try
+        {
+            _dispatcher.Restart();
+            _closing = false;
+            _dispatchWindowDestroyPending = false;
+            return S_OK;
+        }
+        catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
+        catch (...) { return E_UNEXPECTED; }
+    }
+
     bool GdalEventSource::PostDispatchMessage(void* const window) noexcept
     {
-        return ::PostMessageW(
-            static_cast<HWND>(window),
-            kGdalDispatchMessage,
-            0,
-            0) != FALSE;
+        return static_cast<GdalDispatchWindow*>(window)->PostWake();
     }
 
     void GdalEventSource::UnlockActiveXModule(void*) noexcept
@@ -291,7 +301,7 @@ namespace mwg::activex
         const GdalOperationNotification& notification)
     {
         BSTR message = nullptr;
-        HRESULT result = ComConversion::Utf8ToBstr(notification.message, &message);
+        HRESULT result = ComConversion::DiagnosticToBstr(notification.message, &message);
         if (FAILED(result))
         {
             return result;
