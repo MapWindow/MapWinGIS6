@@ -31,5 +31,10 @@ namespace mwg::detail
             throw InvalidArgument("Filesystem path cannot be converted to UTF-8: " +
                                   std::string(error.what()));
         }
+        catch (const std::range_error& error)
+        {
+            throw InvalidArgument("Filesystem path cannot be converted to UTF-8: " +
+                                  std::string(error.what()));
+        }
     }
 }
