@@ -1200,14 +1200,25 @@ TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughStream)
     ASSERT_EQ(CreateStreamOnHGlobal(nullptr, TRUE, &stream), S_OK);
     ASSERT_EQ(persistence->Save(stream.Get(), TRUE), S_OK);
 
-    ATL::CComBSTR gdi(L"GDI");
-    ASSERT_EQ(control->put_RenderingBackendPreference(gdi), S_OK);
+    using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+    const auto getClassObject = reinterpret_cast<GetClassObject>(
+        GetProcAddress(_module->Get(), "DllGetClassObject"));
+    ASSERT_NE(getClassObject, nullptr);
+    ComPtr<IClassFactory> factory;
+    ASSERT_EQ(getClassObject(
+        __uuidof(MapWinGISControl), IID_PPV_ARGS(&factory)), S_OK);
+    ComPtr<IMapWinGISControl2> restoredControl;
+    ASSERT_EQ(factory->CreateInstance(
+        nullptr, IID_PPV_ARGS(&restoredControl)), S_OK);
+    ComPtr<IPersistStreamInit> restoredPersistence;
+    ASSERT_EQ(restoredControl.As(&restoredPersistence), S_OK);
+
     LARGE_INTEGER beginning{};
     ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
-    ASSERT_EQ(persistence->Load(stream.Get()), S_OK);
+    ASSERT_EQ(restoredPersistence->Load(stream.Get()), S_OK);
 
     ATL::CComBSTR actual;
-    ASSERT_EQ(control->get_RenderingBackendPreference(&actual), S_OK);
+    ASSERT_EQ(restoredControl->get_RenderingBackendPreference(&actual), S_OK);
     EXPECT_STREQ(actual, L"OpenGL");
 }
 
