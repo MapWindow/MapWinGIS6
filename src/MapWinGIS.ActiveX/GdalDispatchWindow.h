@@ -44,15 +44,25 @@ namespace mwg::activex
 
         [[nodiscard]] bool PostWake() noexcept
         {
-            if (::PostMessageW(m_hWnd, kGdalDispatchMessage, 0, 0)) return true;
-            if (::SetTimer(m_hWnd, kGdalDispatchRetryTimerId,
-                    kGdalDispatchRetryIntervalMilliseconds, nullptr) != 0)
-            {
-                _retryTimerArmed.store(true);
-                return false;
-            }
-            ::OutputDebugStringW(L"MapWinGIS: unable to post a GDAL wakeup or arm its retry timer.\n");
-            return false;
+            return ::PostMessageW(m_hWnd, kGdalDispatchMessage, 0, 0) != FALSE;
+        }
+
+        [[nodiscard]] bool StartRetryTimer() noexcept
+        {
+            if (_retryTimerArmed.load()) return true;
+            const UINT_PTR timer = ::SetTimer(
+                m_hWnd,
+                kGdalDispatchRetryTimerId,
+                kGdalDispatchRetryIntervalMilliseconds,
+                nullptr);
+            _retryTimerArmed.store(timer != 0);
+            return timer != 0;
+        }
+
+        void StopRetryTimer() noexcept
+        {
+            if (m_hWnd != nullptr) ::KillTimer(m_hWnd, kGdalDispatchRetryTimerId);
+            _retryTimerArmed.store(false);
         }
 
 #if defined(MWG_ENABLE_RENDERER_TEST_HOOKS)
@@ -76,8 +86,7 @@ namespace mwg::activex
             {
                 _deferredLifetime = shared_from_this();
             }
-            ::KillTimer(m_hWnd, kGdalDispatchRetryTimerId);
-            _retryTimerArmed.store(false);
+            StopRetryTimer();
             DestroyWindow();
         }
 
@@ -115,8 +124,6 @@ namespace mwg::activex
             const std::shared_ptr<GdalDispatchWindow> lifetime = shared_from_this();
             handled = TRUE;
             MessageGuard messageGuard(*this);
-            ::KillTimer(m_hWnd, kGdalDispatchRetryTimerId);
-            _retryTimerArmed.store(false);
             if (_callback != nullptr) _callback(_context);
             return 0;
         }
@@ -128,7 +135,6 @@ namespace mwg::activex
             MessageGuard messageGuard(*this);
             if (timerId == kGdalDispatchRetryTimerId)
             {
-                ::KillTimer(m_hWnd, kGdalDispatchRetryTimerId);
                 _retryTimerArmed.store(false);
                 if (_callback != nullptr) _callback(_context);
             }
