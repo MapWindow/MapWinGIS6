@@ -59,12 +59,16 @@ namespace mwg::activex
         void ArmRetryTimer() noexcept;
         void UpdateRetryTimer() noexcept;
         [[nodiscard]] HRESULT FireProgress(
-            const GdalOperationNotification& notification);
-        [[nodiscard]] HRESULT FireCompleted(std::uint64_t operationId);
+            const GdalOperationNotification& notification,
+            std::uint64_t generation);
+        [[nodiscard]] HRESULT FireCompleted(
+            std::uint64_t operationId,
+            std::uint64_t generation);
         [[nodiscard]] HRESULT FireEvent(
             DISPID eventId,
             DISPPARAMS& parameters,
-            std::uint64_t operationId);
+            std::uint64_t operationId,
+            std::uint64_t generation);
 
         GdalOperationDispatcher _dispatcher;
         ATL::CComDynamicUnkArray& _sinks;
