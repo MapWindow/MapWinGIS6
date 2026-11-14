@@ -121,6 +121,10 @@ namespace mwg::activex
         catch (...)
         {
             _AtlModule.Unlock();
+            if (!_dispatcher.HasOutstandingOperations() && _dispatchWindow != nullptr)
+            {
+                _dispatchWindow->StopRetryTimer();
+            }
             throw;
         }
     }
@@ -173,6 +177,8 @@ namespace mwg::activex
             _dispatcher.SetWakeCallback(
                 &GdalEventSource::PostDispatchMessage,
                 _dispatchWindow.get());
+            if (_dispatcher.HasOutstandingOperations()) _dispatchWindow->StartRetryTimer();
+            else _dispatchWindow->StopRetryTimer();
         }
     }
 
