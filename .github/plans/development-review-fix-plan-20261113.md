@@ -321,7 +321,7 @@ Suggested fix:
 **#21 – Sub-pixel check in the pan blit is dead code** (`src/MapWinGIS.ActiveX/MapWinGISControl.cpp:1124-1127`, `TryBlitCachedLayers`)
 
 - Decide from the code which behaviour was intended. Recommended: blit only whole-pixel shifts and fall back to a full render when the offset is not within a small epsilon of an integer. Compare against the rounded value correctly (for example `std::abs(offset - std::round(offset)) > 1e-6`), and fix the comment to match.
-- Clamp the shift to `±width`/ `±height` before computing `width + shiftX` (a shift of a full width or more needs a full render anyway).
+- Clamp the shift to `±width`/`±height` before computing `width + shiftX` (a shift of a full width or more needs a full render anyway).
 - Tests: a mid-drag `OnDraw` with a whole-pixel shift uses the blit path; a fractional shift re-renders; a huge shift does not overflow and re-renders.
 
 **#26 – No redraw after a failed resize** (`MapWinGISControl.cpp:718-728`, `ResizeView`)
