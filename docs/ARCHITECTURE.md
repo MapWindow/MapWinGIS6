@@ -19,6 +19,10 @@ Generic GDAL algorithms are exposed through the native `MapWinGIS.Core.dll`
 API and the ActiveX wrapper's separate `IMapWinGISControlGdal` interface.
 The wrapper handles COM translation, worker dispatch, progress, cancellation,
 and operation results; GDAL execution and dataset ownership remain in Core.
+The GDAL automation interface is an independent, early-bound COM capability.
+Its `SAFEARRAY(BSTR)` arguments and 64-bit (`hyper`) operation IDs are intended
+for clients that consume its type information; it is not a late-bound scripting
+contract. The primary control interface remains the default `IDispatch` surface.
 
 ## Module design
 
