@@ -50,6 +50,7 @@ namespace mwg::activex
         [[nodiscard]] LRESULT OnDispatch(BOOL& handled);
         void Close() noexcept;
         void Shutdown() noexcept;
+        [[nodiscard]] HRESULT Reactivate() noexcept;
 
     private:
         static bool PostDispatchMessage(void* window) noexcept;
