@@ -16,6 +16,8 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <limits>
+#include <string>
 
 #include <windows.h>
 
@@ -53,6 +55,29 @@ namespace mwg::activex
     namespace
     {
         int g_moduleAnchor = 0;
+
+        [[nodiscard]] std::string ExceptionMessageToUtf8(const char* message)
+        {
+            if (message == nullptr || *message == '\0') return {};
+            const std::size_t length = std::char_traits<char>::length(message);
+            if (length > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+                return "Native exception message was too long to convert.";
+            const int wideLength = ::MultiByteToWideChar(CP_ACP, 0, message,
+                static_cast<int>(length), nullptr, 0);
+            if (wideLength == 0) return "Native exception message could not be converted to UTF-8.";
+            std::wstring wide(static_cast<std::size_t>(wideLength), L'\0');
+            if (::MultiByteToWideChar(CP_ACP, 0, message, static_cast<int>(length),
+                    wide.data(), wideLength) == 0)
+                return "Native exception message could not be converted to UTF-8.";
+            const int utf8Length = ::WideCharToMultiByte(CP_UTF8, 0, wide.data(),
+                wideLength, nullptr, 0, nullptr, nullptr);
+            if (utf8Length == 0) return "Native exception message could not be converted to UTF-8.";
+            std::string utf8(static_cast<std::size_t>(utf8Length), '\0');
+            if (::WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLength,
+                    utf8.data(), utf8Length, nullptr, nullptr) == 0)
+                return "Native exception message could not be converted to UTF-8.";
+            return utf8;
+        }
 
         struct WorkerExitContext final
         {
@@ -264,8 +289,8 @@ namespace mwg::activex
             catch (const std::exception& exception)
             {
                 result.succeeded = false;
-                result.summary = exception.what();
-                result.diagnostics = exception.what();
+                result.summary = ExceptionMessageToUtf8(exception.what());
+                result.diagnostics = result.summary;
             }
             catch (...)
             {
@@ -547,6 +572,12 @@ namespace mwg::activex
             operation->progress.reset();
             operation->completionPending = false;
         }
+    }
+
+    void GdalOperationDispatcher::Restart()
+    {
+        Shutdown();
+        _state = std::make_shared<State>();
     }
 
     void GdalOperationDispatcher::Suspend() noexcept
