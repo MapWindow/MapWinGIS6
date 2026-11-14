@@ -21,6 +21,7 @@
 namespace
 {
     std::atomic<int> g_hostHandlerCalls{0};
+    std::atomic<int> g_dataDirectoryWarnings{0};
     std::mutex g_messagesMutex;
     std::vector<std::string> g_messages;
 
@@ -45,27 +46,27 @@ TEST(GdalInitialization, PreservesHostHandlerAndReportsMissingDataDirectories)
     std::filesystem::remove_all(root, error);
 
     g_hostHandlerCalls = 0;
+    g_dataDirectoryWarnings = 0;
     {
         std::lock_guard lock(g_messagesMutex);
         g_messages.clear();
     }
 
     CPLSetErrorHandler(&HostErrorHandler);
-    int mapWinGisWarnings = 0;
     mwg::GdalEnvironment::SetLogHandler(
-        [&mapWinGisWarnings](mwg::LogLevel level, std::string_view message)
+        [](mwg::LogLevel level, std::string_view message)
         {
             if (level == mwg::LogLevel::Warning &&
                 (message.find("GDAL data directory") != std::string_view::npos ||
                  message.find("PROJ data directory") != std::string_view::npos))
             {
-                ++mapWinGisWarnings;
+                ++g_dataDirectoryWarnings;
             }
         });
 
     ASSERT_TRUE(mwg::GdalEnvironment::Initialize(gdalData, projData));
     EXPECT_TRUE(mwg::GdalEnvironment::IsInitialized());
-    EXPECT_GE(mapWinGisWarnings, 2);
+    EXPECT_GE(g_dataDirectoryWarnings.load(), 2);
 
     CPLError(CE_Warning, CPLE_AppDefined, "%s", "host forwarding check");
     EXPECT_GE(g_hostHandlerCalls.load(), 1);
