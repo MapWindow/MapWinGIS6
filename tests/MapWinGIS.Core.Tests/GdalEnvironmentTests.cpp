@@ -140,6 +140,7 @@ TEST(GdalEnvironment, QuietScopeRestoresTheHandler)
     EXPECT_EQ(seen, 1);
 
     GdalEnvironment::SetLogHandler({});
+    EXPECT_NO_THROW(CPLError(CE_Warning, CPLE_AppDefined, "%s", "logger removed"));
     GdalEnvironment::ClearLastError();
 }
 

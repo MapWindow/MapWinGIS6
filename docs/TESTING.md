@@ -5,6 +5,11 @@
   on for CMake).
 - Core test project: `tests/MapWinGIS.Core.Tests`, built with the solution or
   CMake.
+- First-call GDAL initialization test project:
+  `MapWinGIS.Core.GdalInitialization.Tests` in `tests/MapWinGIS.Core.Tests`,
+  built with the solution or CMake. It runs in its own process because GDAL's error
+  handler and data paths are process-wide and `GdalEnvironment` initializes
+  only once.
 - ActiveX test project: `tests/MapWinGIS.ActiveX.Tests`, built with the solution
   or CMake when `MWG_BUILD_ACTIVEX` is enabled.
 - CMake registers the Core tests independently of ActiveX. It adds the
@@ -24,6 +29,7 @@ Run the MSBuild test executables from the repository root:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.Core.GdalInitialization.Tests.exe
 bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml   # CI
 bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresults.xml

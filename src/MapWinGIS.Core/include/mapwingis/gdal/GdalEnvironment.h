@@ -27,8 +27,7 @@ namespace mwg
 
     /// Receives GDAL diagnostics on the thread that raised them.
     /// Must not re-enter GDAL or wait for GDAL work on another thread.
-    /// Capture owned/shared state rather than borrowed
-    /// state when other threads can log concurrently.
+    /// Capture owned/shared state rather than borrowed state when other threads can log concurrently.
     using LogHandler = std::function<void(LogLevel level, std::string_view message)>;
 
     /// Process-wide GDAL setup.
@@ -40,19 +39,26 @@ namespace mwg
     public:
         GdalEnvironment() = delete;
 
-        /// Registers the drivers and points GDAL at the data files deployed
-        /// beside MapWinGIS.Core.dll. Runs at most once per process.
+        /// Registers drivers and configures the data files deployed beside
+        /// MapWinGIS.Core.dll. Core is pinned in memory because GDAL retains
+        /// its error-handler callback until process exit.
         static void Initialize();
 
-        /// Same, but with explicit data locations. Only has an effect on the
-        /// first call.
-        static void Initialize(const std::filesystem::path& gdalDataDir,
-                               const std::filesystem::path& projDataDir);
+        /// Initializes GDAL with explicit data locations. Returns true when
+        /// these paths are active on the calling thread (including an identical
+        /// repeated request): GDAL_DATA, including any thread-local override,
+        /// equals gdalDataDir and the PROJ search path is exactly projDataDir.
+        /// An empty path configures nothing and is not checked. Returns false,
+        /// and logs a warning, when GDAL was already initialized with different
+        /// paths or a configured path has since been overridden.
+        [[nodiscard]] static bool Initialize(const std::filesystem::path& gdalDataDir,
+                                             const std::filesystem::path& projDataDir);
 
         [[nodiscard]] static bool IsInitialized() noexcept;
 
         /// Installs a handler for GDAL diagnostics. Pass {} to remove it.
         /// An invocation already in progress retains its copy of the handler.
+        /// The host's process-wide GDAL handler is also called after this handler.
         static void SetLogHandler(LogHandler handler);
 
         /// Routes a captured diagnostic through the installed logger and updates
