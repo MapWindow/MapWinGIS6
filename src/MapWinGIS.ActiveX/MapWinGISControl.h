@@ -14,6 +14,8 @@
 #include "resource.h"
 
 #include <cstdint>
+#include <memory>
+#include <unordered_map>
 
 #include <atlbase.h>
 #include <atlcom.h>
@@ -56,8 +58,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
     // Load the default dispatch type information from this OCX, not a
     // potentially older registered copy of the same type library.
     public ATL::IDispatchImpl<
-        IMapWinGISControl4,
-        &IID_IMapWinGISControl4,
+        IMapWinGISControl5,
+        &IID_IMapWinGISControl5,
         &LIBID_MapWinGISActiveXLib,
         0xFFFF,
         0xFFFF>,
@@ -76,6 +78,7 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CMapWinGISControl)
+        COM_INTERFACE_ENTRY(IMapWinGISControl5)
         COM_INTERFACE_ENTRY(IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IMapWinGISControl3)
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
@@ -86,7 +89,7 @@ public:
         COM_INTERFACE_ENTRY(IProvideClassInfo2)
         COM_INTERFACE_ENTRY(IPersistPropertyBag)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
-        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl4)
+        COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl5)
         COM_INTERFACE_ENTRY(IViewObjectEx)
         COM_INTERFACE_ENTRY(IViewObject2)
         COM_INTERFACE_ENTRY(IViewObject)
@@ -143,6 +146,15 @@ public:
     STDMETHOD(ZoomToLayer)(LONGLONG layerId) override;
     STDMETHOD(get_LayerCount)(LONG* count) override;
     STDMETHOD(LoadVectorDatasetEx)(BSTR path, LONGLONG* layerId) override;
+    STDMETHOD(BeginLoadVectorDataset)(BSTR path, LONGLONG* operationId) override;
+    STDMETHOD(CancelLoadVectorDataset)(LONGLONG operationId) override;
+    STDMETHOD(EndLoadVectorDataset)(
+        LONGLONG operationId,
+        VARIANT_BOOL* succeeded,
+        VARIANT_BOOL* cancelled,
+        LONGLONG* layerId,
+        BSTR* summary,
+        BSTR* diagnostics) override;
     STDMETHOD(GetLayerId)(LONG index, LONGLONG* layerId) override;
     STDMETHOD(BeginGdalOperation)(
         BSTR algorithmPath,
@@ -181,7 +193,10 @@ public:
 private:
     friend class mwg::activex::testing::MapWinGISControlTestAccess;
 
+    struct VectorLoadState;
     HRESULT LoadVectorDatasetImpl(BSTR path, LONGLONG* layerId, REFIID sourceIid);
+    static void CompleteVectorLoad(void* context, std::uint64_t operationId) noexcept;
+    void CompleteVectorLoad(std::uint64_t operationId) noexcept;
 
     /// Resizes the view to a host size, clamped to the supported range, and
     /// returns true when the frame must be redrawn.
@@ -234,6 +249,9 @@ private:
     bool _layerCacheValid = false;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
+    std::unordered_map<
+        std::uint64_t,
+        std::shared_ptr<VectorLoadState>> _vectorLoadOperations;
     POINT _lastPanPoint{};
     bool _isPanning = false;
 };

@@ -72,12 +72,18 @@ The initial `MapWinGIS.ocx` exposes a deliberately small v6 automation
 contract. `IMapWinGISControl` reports Core initialization, loads a vector
 dataset, and reports whether a layer is loaded and its feature count.
 `IMapWinGISControl2` adds renderer preference, active backend, and status.
-`IMapWinGISControl3` adds `ClearLayers`. `IMapWinGISControl4` derives from it
-and is the default automation interface; it adds view navigation, layer count,
-`LoadVectorDatasetEx`, and stable layer-ID lookup by 0-based position. Loads
-add layers, including duplicate loads of one dataset. Each successful load
-requests a fit to the combined map extent, replacing any previous pan or zoom
-when the extent is valid and the viewport has a size.
+`IMapWinGISControl3` adds `ClearLayers`. `IMapWinGISControl4` adds view
+navigation, layer count, `LoadVectorDatasetEx`, and stable layer-ID lookup by
+0-based position. `IMapWinGISControl5` derives from it and is the default
+automation interface; it adds asynchronous vector loading, cancellation, and
+result retrieval. It reuses the `GdalOperationCompleted` event and shares the
+dispatcher and operation limit with asynchronous GDAL calls. The worker
+prepares a candidate dataset and scene; the control commits them on its owning
+apartment before the completion event. Cancelling before completion leaves the
+map unchanged. The synchronous load methods retain their existing behavior.
+Loads add layers, including duplicate loads of one dataset. Each successful
+load requests a fit to the combined map extent, replacing any previous pan or
+zoom when the extent is valid and the viewport has a size.
 Call `ClearLayers` before switching
 or refreshing datasets. It releases all layers and resets the cached feature
 total while keeping the viewport.

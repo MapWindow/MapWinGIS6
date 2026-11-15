@@ -27,6 +27,8 @@ namespace mwg::activex
     class GdalEventSource final
     {
     public:
+        using CompletionCallback = void(*)(void*, std::uint64_t) noexcept;
+
         GdalEventSource(
             ATL::CComDynamicUnkArray& sinks,
             GdalDispatchWindow::Callback callback,
@@ -40,10 +42,20 @@ namespace mwg::activex
         [[nodiscard]] std::uint64_t Begin(
             std::string algorithmPath,
             std::vector<std::string> arguments);
+        [[nodiscard]] std::uint64_t BeginWork(
+            GdalOperationDispatcher::WorkCallback work);
         [[nodiscard]] GdalCancelResult Cancel(std::uint64_t operationId) noexcept;
         [[nodiscard]] GdalOperationLookup GetResult(
             std::uint64_t operationId) const;
+        [[nodiscard]] GdalOperationLookup GetResultForDelivery(
+            std::uint64_t operationId) const;
+        void UpdateCompletedResult(
+            std::uint64_t operationId,
+            GdalOperationSnapshot result);
         [[nodiscard]] GdalOperationLookup End(std::uint64_t operationId);
+        void SetCompletionCallback(
+            CompletionCallback callback,
+            void* context) noexcept;
         void RecordCallbackError(
             std::uint64_t operationId,
             HRESULT result) noexcept;
@@ -76,6 +88,8 @@ namespace mwg::activex
         ATL::CComDynamicUnkArray& _sinks;
         GdalDispatchWindow::Callback _dispatchCallback = nullptr;
         void* _dispatchContext = nullptr;
+        CompletionCallback _completionCallback = nullptr;
+        void* _completionContext = nullptr;
         std::shared_ptr<GdalDispatchWindow> _dispatchWindow;
         bool _dispatching = false;
         bool _dispatchWindowDestroyPending = false;

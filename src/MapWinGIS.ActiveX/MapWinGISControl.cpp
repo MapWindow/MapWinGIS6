@@ -89,6 +89,56 @@ namespace
         return S_OK;
     }
 
+    struct PreparedVectorDataset final
+    {
+        std::shared_ptr<mwg::VectorDataset> dataset;
+        mwg::rendering::VectorRenderScene scene;
+        LONGLONG featureCount = 0;
+    };
+
+    [[nodiscard]] PreparedVectorDataset PrepareVectorDataset(
+        const std::filesystem::path& datasetPath)
+    {
+        std::shared_ptr<mwg::VectorDataset> dataset =
+            mwg::VectorDataset::Open(datasetPath);
+        if (dataset->LayerCount() == 0)
+        {
+            throw mwg::CoreError("Vector dataset contains no layers");
+        }
+
+        mwg::Map candidate;
+        candidate.AddLayer(dataset);
+        mwg::rendering::MapRenderScene scene =
+            mwg::rendering::CreateMapRenderScene(candidate);
+        for (const mwg::rendering::SkippedLayer& skipped : scene.skippedLayers)
+        {
+            if (skipped.reason == mwg::rendering::LayerSkipReason::Failed)
+            {
+                throw mwg::CoreError(skipped.message);
+            }
+        }
+
+        mwg::rendering::VectorRenderScene preparedScene;
+        if (scene.layers.empty())
+        {
+            preparedScene.sourceFeatureCount = dataset->Layer(0).FeatureCount();
+        }
+        else
+        {
+            preparedScene = std::move(scene.layers.front().scene);
+        }
+
+        if (std::cmp_greater(
+                preparedScene.sourceFeatureCount,
+                std::numeric_limits<LONGLONG>::max()))
+        {
+            throw mwg::CoreError("Map feature count is out of range");
+        }
+        const LONGLONG count =
+            static_cast<LONGLONG>(preparedScene.sourceFeatureCount);
+        return {std::move(dataset), std::move(preparedScene), count};
+    }
+
     template <typename Operation>
     [[nodiscard]] HRESULT RunViewOperation(
         Operation&& operation,
@@ -153,12 +203,25 @@ namespace
     }
 }
 
+struct CMapWinGISControl::VectorLoadState final
+{
+    std::shared_ptr<mwg::VectorDataset> dataset;
+    mwg::rendering::VectorRenderScene scene;
+    LONGLONG featureCount = 0;
+    LONGLONG layerId = 0;
+    bool cancelRequestedOnOwner = false;
+    bool committed = false;
+};
+
 CMapWinGISControl::CMapWinGISControl()
     : _gdalEvents(
           m_vec,
           &CMapWinGISControl::DispatchGdalNotifications,
           this)
 {
+    _gdalEvents.SetCompletionCallback(
+        &CMapWinGISControl::CompleteVectorLoad,
+        this);
 }
 
 STDMETHODIMP CMapWinGISControl::Load(IStream* stream)
@@ -188,6 +251,7 @@ STDMETHODIMP CMapWinGISControl::InterfaceSupportsErrorInfo(REFIID interfaceId)
         IsEqualIID(interfaceId, IID_IMapWinGISControl2) ||
         IsEqualIID(interfaceId, IID_IMapWinGISControl3) ||
         IsEqualIID(interfaceId, IID_IMapWinGISControl4) ||
+        IsEqualIID(interfaceId, IID_IMapWinGISControl5) ||
         IsEqualIID(interfaceId, IID_IMapWinGISControlGdal) ? S_OK : S_FALSE;
 }
 
@@ -265,6 +329,13 @@ STDMETHODIMP CMapWinGISControl::CancelGdalOperation(const LONGLONG operationId)
     {
         return SetComErrorInfo("The GDAL operation ID must be positive.", E_INVALIDARG);
     }
+    if (_vectorLoadOperations.contains(
+            static_cast<std::uint64_t>(operationId)))
+    {
+        return SetComErrorInfo(
+            "The operation ID belongs to an asynchronous vector load.",
+            E_INVALIDARG);
+    }
 
     switch (_gdalEvents.Cancel(static_cast<std::uint64_t>(operationId)))
     {
@@ -298,6 +369,13 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
     *warnings = nullptr;
     if (operationId <= 0)
         return SetComErrorInfo("The GDAL operation ID must be positive.", E_INVALIDARG);
+    if (_vectorLoadOperations.contains(
+            static_cast<std::uint64_t>(operationId)))
+    {
+        return SetComErrorInfo(
+            "The operation ID belongs to an asynchronous vector load.",
+            E_INVALIDARG);
+    }
 
     mwg::activex::GdalOperationLookup ended;
     try
@@ -379,6 +457,509 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDatasetEx(
     return LoadVectorDatasetImpl(path, layerId, IID_IMapWinGISControl4);
 }
 
+STDMETHODIMP CMapWinGISControl::BeginLoadVectorDataset(
+    BSTR path,
+    LONGLONG* operationId)
+{
+    if (operationId == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The operation ID output pointer is null.",
+            IID_IMapWinGISControl5,
+            E_POINTER);
+    }
+    *operationId = 0;
+    if (path == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The dataset path is null.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+
+    const UINT pathLength = ::SysStringLen(path);
+    if (pathLength == 0)
+    {
+        return SetControlComErrorInfo(
+            "The dataset path is empty.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+
+    try
+    {
+        const std::wstring pathText(path, static_cast<std::size_t>(pathLength));
+        if (pathText.find(L'\0') != std::wstring::npos)
+        {
+            return SetControlComErrorInfo(
+                "The dataset path contains an embedded null character.",
+                IID_IMapWinGISControl5,
+                E_INVALIDARG);
+        }
+
+        const HRESULT windowResult = _gdalEvents.EnsureDispatchWindow();
+        if (FAILED(windowResult))
+        {
+            return SetControlComErrorInfo(
+                "The GDAL notification window could not be created.",
+                IID_IMapWinGISControl5,
+                windowResult);
+        }
+
+        auto state = std::make_shared<VectorLoadState>();
+        _vectorLoadOperations.reserve(_vectorLoadOperations.size() + 1);
+        const auto [placeholder, inserted] =
+            _vectorLoadOperations.emplace(0, state);
+        if (!inserted)
+        {
+            return SetControlComErrorInfo(
+                "A vector dataset load is already being prepared.",
+                IID_IMapWinGISControl5,
+                E_UNEXPECTED);
+        }
+
+        std::uint64_t id = 0;
+        try
+        {
+            const std::filesystem::path datasetPath(pathText);
+            id = _gdalEvents.BeginWork(
+                [state, datasetPath](
+                    mwg::GdalCancellationToken& cancellation,
+                    const mwg::activex::GdalOperationDispatcher::ProgressCallback&)
+                {
+                    mwg::activex::GdalOperationSnapshot result;
+                    if (cancellation.IsCancellationRequested())
+                    {
+                        result.cancelled = true;
+                        result.summary = "Vector dataset loading was cancelled.";
+                        return result;
+                    }
+
+                    try
+                    {
+                        PreparedVectorDataset prepared =
+                            PrepareVectorDataset(datasetPath);
+                        if (cancellation.IsCancellationRequested())
+                        {
+                            result.cancelled = true;
+                            result.summary =
+                                "Vector dataset loading was cancelled.";
+                            return result;
+                        }
+
+                        state->dataset = std::move(prepared.dataset);
+                        state->scene = std::move(prepared.scene);
+                        state->featureCount = prepared.featureCount;
+                        result.succeeded = true;
+                        result.summary = "Vector dataset loaded.";
+                        return result;
+                    }
+                    catch (const std::bad_alloc&)
+                    {
+                        throw;
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        result.summary = exception.what();
+                        result.diagnostics = result.summary;
+                        return result;
+                    }
+                    catch (...)
+                    {
+                        result.summary =
+                            "An unexpected error occurred while loading the vector dataset.";
+                        result.diagnostics = result.summary;
+                        return result;
+                    }
+                });
+        }
+        catch (...)
+        {
+            _vectorLoadOperations.erase(placeholder);
+            throw;
+        }
+
+        auto operation = _vectorLoadOperations.extract(placeholder);
+        operation.key() = id;
+        _vectorLoadOperations.insert(std::move(operation));
+        *operationId = static_cast<LONGLONG>(id);
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while starting the vector dataset load.",
+            IID_IMapWinGISControl5,
+            E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControl5,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while starting the vector dataset load.",
+            IID_IMapWinGISControl5,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::CancelLoadVectorDataset(
+    const LONGLONG operationId)
+{
+    if (operationId <= 0)
+    {
+        return SetControlComErrorInfo(
+            "The vector load operation ID must be positive.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+
+    const auto found = _vectorLoadOperations.find(
+        static_cast<std::uint64_t>(operationId));
+    if (found == _vectorLoadOperations.end())
+    {
+        return SetControlComErrorInfo(
+            "The vector load operation ID was not found.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+    switch (_gdalEvents.Cancel(static_cast<std::uint64_t>(operationId)))
+    {
+    case mwg::activex::GdalCancelResult::Requested:
+        return S_OK;
+    case mwg::activex::GdalCancelResult::Completed:
+        if (!found->second->committed)
+        {
+            try
+            {
+                const mwg::activex::GdalOperationLookup completed =
+                    _gdalEvents.GetResult(
+                        static_cast<std::uint64_t>(operationId));
+                if (completed.status == mwg::activex::GdalEndResult::Ended &&
+                    completed.result.has_value() &&
+                    completed.result->succeeded &&
+                    !completed.result->cancelled)
+                {
+                    found->second->cancelRequestedOnOwner = true;
+                    return S_OK;
+                }
+            }
+            catch (const std::bad_alloc&)
+            {
+                return SetControlComErrorInfo(
+                    "Out of memory while checking the vector load result.",
+                    IID_IMapWinGISControl5,
+                    E_OUTOFMEMORY);
+            }
+            catch (...)
+            {
+                return SetControlComErrorInfo(
+                    "The vector load result could not be checked.",
+                    IID_IMapWinGISControl5,
+                    E_FAIL);
+            }
+        }
+        return S_FALSE;
+    case mwg::activex::GdalCancelResult::AlreadyRequested:
+        return S_FALSE;
+    case mwg::activex::GdalCancelResult::NotFound:
+    default:
+        return SetControlComErrorInfo(
+            "The vector load operation ID was not found.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::EndLoadVectorDataset(
+    const LONGLONG operationId,
+    VARIANT_BOOL* succeeded,
+    VARIANT_BOOL* cancelled,
+    LONGLONG* layerId,
+    BSTR* summary,
+    BSTR* diagnostics)
+{
+    if (succeeded == nullptr || cancelled == nullptr || layerId == nullptr ||
+        summary == nullptr || diagnostics == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "One or more vector load result output pointers are null.",
+            IID_IMapWinGISControl5,
+            E_POINTER);
+    }
+    *succeeded = VARIANT_FALSE;
+    *cancelled = VARIANT_FALSE;
+    *layerId = 0;
+    *summary = nullptr;
+    *diagnostics = nullptr;
+    if (operationId <= 0)
+    {
+        return SetControlComErrorInfo(
+            "The vector load operation ID must be positive.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+
+    const auto found = _vectorLoadOperations.find(
+        static_cast<std::uint64_t>(operationId));
+    if (found == _vectorLoadOperations.end())
+    {
+        return SetControlComErrorInfo(
+            "The vector load operation ID was not found.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+
+    mwg::activex::GdalOperationLookup ended;
+    try
+    {
+        ended = _gdalEvents.End(static_cast<std::uint64_t>(operationId));
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while retrieving the vector load result.",
+            IID_IMapWinGISControl5,
+            E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControl5,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while retrieving the vector load result.",
+            IID_IMapWinGISControl5,
+            E_UNEXPECTED);
+    }
+
+    if (ended.status == mwg::activex::GdalEndResult::Pending)
+    {
+        return SetControlComErrorInfo(
+            "The vector load has not finished or is still delivering events.",
+            IID_IMapWinGISControl5,
+            E_PENDING);
+    }
+    if (ended.status != mwg::activex::GdalEndResult::Ended ||
+        !ended.result.has_value())
+    {
+        _vectorLoadOperations.erase(found);
+        return SetControlComErrorInfo(
+            "The vector load operation ID was not found.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+
+    const auto state = found->second;
+    _vectorLoadOperations.erase(found);
+    BSTR summaryText = nullptr;
+    BSTR diagnosticText = nullptr;
+    HRESULT result = DiagnosticToBstr(ended.result->summary, &summaryText);
+    if (SUCCEEDED(result))
+    {
+        result = DiagnosticToBstr(ended.result->diagnostics, &diagnosticText);
+    }
+    if (FAILED(result))
+    {
+        ::SysFreeString(summaryText);
+        ::SysFreeString(diagnosticText);
+        return SetControlComErrorInfo(
+            "The completed vector load result could not be marshalled to COM.",
+            IID_IMapWinGISControl5,
+            result);
+    }
+
+    *succeeded = ended.result->succeeded ? VARIANT_TRUE : VARIANT_FALSE;
+    *cancelled = ended.result->cancelled ? VARIANT_TRUE : VARIANT_FALSE;
+    *layerId = state->committed ? state->layerId : 0;
+    *summary = summaryText;
+    *diagnostics = diagnosticText;
+    return S_OK;
+}
+
+void CMapWinGISControl::CompleteVectorLoad(
+    void* const context,
+    const std::uint64_t operationId) noexcept
+{
+    static_cast<CMapWinGISControl*>(context)->CompleteVectorLoad(operationId);
+}
+
+void CMapWinGISControl::CompleteVectorLoad(
+    const std::uint64_t operationId) noexcept
+{
+    const auto found = _vectorLoadOperations.find(operationId);
+    if (found == _vectorLoadOperations.end())
+    {
+        return;
+    }
+
+    mwg::activex::GdalOperationSnapshot result;
+    try
+    {
+        const mwg::activex::GdalOperationLookup completed =
+            _gdalEvents.GetResultForDelivery(operationId);
+        if (completed.status != mwg::activex::GdalEndResult::Ended ||
+            !completed.result.has_value())
+        {
+            return;
+        }
+        result = *completed.result;
+        const auto& state = found->second;
+        if (state->cancelRequestedOnOwner)
+        {
+            result.succeeded = false;
+            result.cancelled = true;
+            result.summary = "Vector dataset loading was cancelled.";
+            result.diagnostics.clear();
+            state->dataset.reset();
+            state->scene = {};
+            state->featureCount = 0;
+            _gdalEvents.UpdateCompletedResult(operationId, std::move(result));
+            return;
+        }
+        if (result.cancelled)
+        {
+            result.succeeded = false;
+            result.summary = "Vector dataset loading was cancelled.";
+            result.diagnostics.clear();
+            state->dataset.reset();
+            state->scene = {};
+            state->featureCount = 0;
+            _gdalEvents.UpdateCompletedResult(operationId, std::move(result));
+            return;
+        }
+        if (!result.succeeded)
+        {
+            state->dataset.reset();
+            state->scene = {};
+            state->featureCount = 0;
+            return;
+        }
+
+        if (state->featureCount >
+            std::numeric_limits<LONGLONG>::max() - _featureCount)
+        {
+            throw mwg::CoreError("Map feature count is out of range");
+        }
+        const mwg::LayerId id = _view.AddLayer(
+            std::move(state->dataset),
+            std::move(state->scene));
+        LONGLONG convertedId = 0;
+        if (FAILED(CopyLayerId(id, &convertedId)))
+        {
+            (void)_view.RemoveLayer(id);
+            throw mwg::CoreError("The layer ID could not be represented as a COM integer.");
+        }
+        try
+        {
+            (void)_view.FitToMap();
+        }
+        catch (...)
+        {
+            (void)_view.RemoveLayer(id);
+            throw;
+        }
+
+        _featureCount += state->featureCount;
+        state->layerId = convertedId;
+        state->committed = true;
+        state->featureCount = 0;
+        InvalidateLayerCache();
+        FireViewChange();
+    }
+    catch (const std::bad_alloc&)
+    {
+        result.succeeded = false;
+        result.cancelled = false;
+        result.summary.clear();
+        result.diagnostics.clear();
+        try
+        {
+            result.summary = "Out of memory while committing the vector dataset.";
+            result.diagnostics = result.summary;
+        }
+        catch (...)
+        {
+        }
+        found->second->dataset.reset();
+        found->second->scene = {};
+        found->second->featureCount = 0;
+        try
+        {
+            _gdalEvents.UpdateCompletedResult(operationId, std::move(result));
+        }
+        catch (...)
+        {
+            ::OutputDebugStringW(
+                L"MapWinGIS: unable to retain the vector load commit failure.\n");
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        result.succeeded = false;
+        result.cancelled = false;
+        try
+        {
+            result.summary = exception.what();
+            result.diagnostics = result.summary;
+        }
+        catch (...)
+        {
+            result.summary.clear();
+            result.diagnostics.clear();
+        }
+        found->second->dataset.reset();
+        found->second->scene = {};
+        found->second->featureCount = 0;
+        try
+        {
+            _gdalEvents.UpdateCompletedResult(operationId, std::move(result));
+        }
+        catch (...)
+        {
+            ::OutputDebugStringW(
+                L"MapWinGIS: unable to retain the vector load commit failure.\n");
+        }
+    }
+    catch (...)
+    {
+        result.succeeded = false;
+        result.cancelled = false;
+        try
+        {
+            result.summary =
+                "An unexpected error occurred while committing the vector dataset.";
+            result.diagnostics = result.summary;
+        }
+        catch (...)
+        {
+            result.summary.clear();
+            result.diagnostics.clear();
+        }
+        found->second->dataset.reset();
+        found->second->scene = {};
+        found->second->featureCount = 0;
+        try
+        {
+            _gdalEvents.UpdateCompletedResult(operationId, std::move(result));
+        }
+        catch (...)
+        {
+            ::OutputDebugStringW(
+                L"MapWinGIS: unable to retain the vector load commit failure.\n");
+        }
+    }
+}
+
 HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
     BSTR path,
     LONGLONG* layerId,
@@ -403,41 +984,18 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
             return SetControlComErrorInfo("The dataset path contains an embedded null character.", sourceIid, E_INVALIDARG);
         }
 
-        const std::filesystem::path datasetPath(pathText);
-        std::shared_ptr<mwg::VectorDataset> dataset = mwg::VectorDataset::Open(datasetPath);
-        if (dataset->LayerCount() == 0)
-        {
-            throw mwg::CoreError("Vector dataset contains no layers");
-        }
-
         // Validate before AddLayer can auto-fit or schedule a pending fit.
-        mwg::Map candidate;
-        candidate.AddLayer(dataset);
-        mwg::rendering::MapRenderScene scene =
-            mwg::rendering::CreateMapRenderScene(candidate);
-        for (const mwg::rendering::SkippedLayer& skipped : scene.skippedLayers)
-        {
-            if (skipped.reason == mwg::rendering::LayerSkipReason::Failed)
-            {
-                throw mwg::CoreError(skipped.message);
-            }
-        }
-        mwg::rendering::VectorRenderScene preparedScene;
-        if (scene.layers.empty())
-        {
-            preparedScene.sourceFeatureCount = dataset->Layer(0).FeatureCount();
-        }
-        else
-        {
-            preparedScene = std::move(scene.layers.front().scene);
-        }
-        const LONGLONG count = static_cast<LONGLONG>(preparedScene.sourceFeatureCount);
-        if (count < 0 || count > std::numeric_limits<LONGLONG>::max() - _featureCount)
+        PreparedVectorDataset prepared =
+            PrepareVectorDataset(std::filesystem::path(pathText));
+        if (prepared.featureCount >
+            std::numeric_limits<LONGLONG>::max() - _featureCount)
         {
             throw mwg::CoreError("Map feature count is out of range");
         }
 
-        const mwg::LayerId id = _view.AddLayer(std::move(dataset), std::move(preparedScene));
+        const mwg::LayerId id = _view.AddLayer(
+            std::move(prepared.dataset),
+            std::move(prepared.scene));
         LONGLONG convertedId = 0;
         if (layerId != nullptr && FAILED(CopyLayerId(id, &convertedId)))
         {
@@ -455,7 +1013,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
             throw;
         }
 
-        _featureCount += count;
+        _featureCount += prepared.featureCount;
         if (layerId != nullptr)
         {
             *layerId = convertedId;
@@ -1065,6 +1623,7 @@ STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
 {
     CancelMousePan();
     _gdalEvents.Close();
+    _vectorLoadOperations.clear();
     const HRESULT result = ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
     return FAILED(result)
         ? SetControlComErrorInfo("The ActiveX control could not be closed.", IID_IMapWinGISControl4, result)

@@ -12,7 +12,7 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 - [x] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
 - [x] Phase 7 – Rebuild render scenes per layer (#7, #34)
 - [x] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
-- [ ] Phase 9 – Load vector datasets asynchronously (#36)
+- [x] Phase 9 – Load vector datasets asynchronously (#36)
 
 Finding coverage: every finding is assigned to exactly one phase:
 
@@ -401,3 +401,9 @@ Suggested fix:
 - GDAL objects created on the worker must not be used concurrently; follow the threading contract documented in Phase 3.
 
 After approval, implement it with tests: load completes and fires the event; cancel leaves the map unchanged; a failed open reports error details; destroying the control during a load is safe.
+
+**Phase 9 result:** Added asynchronous vector loading to `IMapWinGISControl5` at DISPIDs 18-20. The worker prepares the dataset and render scene; the owning apartment commits them before raising the shared `GdalOperationCompleted` event. Cancellation discards the candidate, and the synchronous load methods retain their behavior.
+
+**Validation:** CMake Debug x64 build and all 430 CTest cases passed; three opt-in cases were skipped. MSBuild Debug x64 built with zero warnings. Its Core suite passed 335 tests with one skip, and its ActiveX suite passed 88 tests with three skips. The existing CMake D9025 command-line warning remains.
+
+**Limitations:** Interactive registered-control hosting and network-dependent/opt-in rendering tests were not run locally.

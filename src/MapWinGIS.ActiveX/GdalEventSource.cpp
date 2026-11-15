@@ -123,6 +123,36 @@ namespace mwg::activex
         }
     }
 
+    std::uint64_t GdalEventSource::BeginWork(
+        GdalOperationDispatcher::WorkCallback work)
+    {
+        if (_closing || _dispatchWindow == nullptr ||
+            !_dispatchWindow->IsWindow())
+        {
+            throw std::runtime_error(
+                "The GDAL event source is not available for new operations.");
+        }
+
+        _dispatcher.SetWakeCallback(
+            &GdalEventSource::PostDispatchMessage,
+            _dispatchWindow.get());
+        _dispatcher.SetWorkerFinishedCallback(
+            &GdalEventSource::UnlockActiveXModule,
+            nullptr);
+        ArmRetryTimer();
+        _AtlModule.Lock();
+        try
+        {
+            return _dispatcher.BeginWork(std::move(work), true);
+        }
+        catch (...)
+        {
+            _AtlModule.Unlock();
+            UpdateRetryTimer();
+            throw;
+        }
+    }
+
     GdalCancelResult GdalEventSource::Cancel(
         const std::uint64_t operationId) noexcept
     {
@@ -135,11 +165,32 @@ namespace mwg::activex
         return _dispatcher.GetResult(operationId);
     }
 
+    GdalOperationLookup GdalEventSource::GetResultForDelivery(
+        const std::uint64_t operationId) const
+    {
+        return _dispatcher.GetResultForDelivery(operationId);
+    }
+
+    void GdalEventSource::UpdateCompletedResult(
+        const std::uint64_t operationId,
+        GdalOperationSnapshot result)
+    {
+        _dispatcher.UpdateCompletedResult(operationId, std::move(result));
+    }
+
     GdalOperationLookup GdalEventSource::End(const std::uint64_t operationId)
     {
         GdalOperationLookup result = _dispatcher.End(operationId);
         UpdateRetryTimer();
         return result;
+    }
+
+    void GdalEventSource::SetCompletionCallback(
+        const CompletionCallback callback,
+        void* const context) noexcept
+    {
+        _completionCallback = callback;
+        _completionContext = context;
     }
 
     void GdalEventSource::RecordCallbackError(
@@ -245,6 +296,11 @@ namespace mwg::activex
                     }
                 } notificationGuard{_dispatcher, notification.operationId, generation};
 
+                if (notification.kind == GdalNotificationKind::Completed &&
+                    _completionCallback != nullptr)
+                {
+                    _completionCallback(_completionContext, notification.operationId);
+                }
                 const HRESULT result =
                     notification.kind == GdalNotificationKind::Progress
                     ? FireProgress(notification, generation)

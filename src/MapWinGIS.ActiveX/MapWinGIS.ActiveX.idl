@@ -116,6 +116,35 @@ library MapWinGISActiveXLib
         HRESULT GetLayerId([in] LONG index, [out, retval] hyper* layerId);
     };
 
+    [
+        object,
+        dual,
+        oleautomation,
+        uuid(4F8CE31A-60D1-4B9D-A4AF-2C80C5F63A91),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControl5 : IMapWinGISControl4
+    {
+        // The completion notification is GdalOperationCompleted. Call the
+        // matching End method to retrieve the result and release the slot.
+        [id(18)]
+        HRESULT BeginLoadVectorDataset(
+            [in] BSTR path,
+            [out, retval] hyper* operationId);
+
+        [id(19)]
+        HRESULT CancelLoadVectorDataset([in] hyper operationId);
+
+        [id(20)]
+        HRESULT EndLoadVectorDataset(
+            [in] hyper operationId,
+            [out] VARIANT_BOOL* succeeded,
+            [out] VARIANT_BOOL* cancelled,
+            [out] hyper* layerId,
+            [out] BSTR* summary,
+            [out] BSTR* diagnostics);
+    };
+
     // GDAL operations are an independent capability, not a version of the
     // control's core automation contract. This interface is early-bound only:
     // SAFEARRAY(BSTR) arguments and hyper operation IDs are not suitable for
@@ -176,7 +205,7 @@ library MapWinGISActiveXLib
     ]
     coclass MapWinGISControl
     {
-        [default] interface IMapWinGISControl4;
+        [default] interface IMapWinGISControl5;
         interface IMapWinGISControlGdal;
         [default, source] dispinterface IMapWinGISControlEvents;
     };

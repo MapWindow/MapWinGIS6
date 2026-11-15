@@ -287,6 +287,50 @@ namespace
         void* _completionContext = nullptr;
     };
 
+    class GdalEventSubscription final
+    {
+    public:
+        explicit GdalEventSubscription(IUnknown* control)
+        {
+            ATL::CComQIPtr<IConnectionPointContainer> connectionPoints(control);
+            if (connectionPoints == nullptr)
+            {
+                _result = E_NOINTERFACE;
+                return;
+            }
+            _result = connectionPoints->FindConnectionPoint(
+                __uuidof(IMapWinGISControlEvents),
+                &_connectionPoint);
+            if (FAILED(_result))
+            {
+                return;
+            }
+
+            _sink.Attach(new GdalEventSink());
+            _result = _connectionPoint->Advise(_sink.Get(), &_cookie);
+        }
+
+        ~GdalEventSubscription()
+        {
+            if (_connectionPoint != nullptr && _cookie != 0)
+            {
+                _connectionPoint->Unadvise(_cookie);
+            }
+        }
+
+        GdalEventSubscription(const GdalEventSubscription&) = delete;
+        GdalEventSubscription& operator=(const GdalEventSubscription&) = delete;
+
+        [[nodiscard]] HRESULT Result() const noexcept { return _result; }
+        [[nodiscard]] GdalEventSink* Sink() const noexcept { return _sink.Get(); }
+
+    private:
+        ATL::CComPtr<IConnectionPoint> _connectionPoint;
+        ComPtr<GdalEventSink> _sink;
+        DWORD _cookie = 0;
+        HRESULT _result = E_FAIL;
+    };
+
     class HostedProgressAlgorithm final : public GDALAlgorithm
     {
     public:
@@ -956,6 +1000,188 @@ TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
     EXPECT_EQ(count, 1);
 }
 
+TEST_F(ActiveXMapTest, LoadsVectorDatasetAsynchronouslyAndCommitsBeforeCompletionEvent)
+{
+    ComPtr<IMapWinGISControl5> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    GdalEventSubscription subscription(control.Get());
+    ASSERT_EQ(subscription.Result(), S_OK);
+
+    const std::vector<mwg::Extent> rectangles{{0, 0, 2, 2}, {3, 0, 5, 2}};
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "async-load.gpkg",
+        rectangles);
+    LONGLONG operationId = 0;
+    ASSERT_EQ(control->BeginLoadVectorDataset(
+        ATL::CComBSTR(path.c_str()),
+        &operationId), S_OK);
+    ASSERT_GT(operationId, 0);
+
+    LONG layerCount = -1;
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+    ASSERT_TRUE(PumpUntilGdalCompletion(
+        *subscription.Sink(),
+        operationId,
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    EXPECT_TRUE(subscription.Sink()->WasDeliveredOn(std::this_thread::get_id()));
+
+    VARIANT_BOOL succeeded = VARIANT_FALSE;
+    VARIANT_BOOL cancelled = VARIANT_TRUE;
+    LONGLONG layerId = 0;
+    BSTR rawSummary = nullptr;
+    BSTR rawDiagnostics = nullptr;
+    ASSERT_EQ(control->EndLoadVectorDataset(
+        operationId,
+        &succeeded,
+        &cancelled,
+        &layerId,
+        &rawSummary,
+        &rawDiagnostics), S_OK);
+    std::unique_ptr<wchar_t, decltype(&SysFreeString)> summary(
+        rawSummary,
+        &SysFreeString);
+    std::unique_ptr<wchar_t, decltype(&SysFreeString)> diagnostics(
+        rawDiagnostics,
+        &SysFreeString);
+    EXPECT_EQ(succeeded, VARIANT_TRUE);
+    EXPECT_EQ(cancelled, VARIANT_FALSE);
+    EXPECT_GT(layerId, 0);
+    ASSERT_NE(summary, nullptr);
+    EXPECT_NE(std::wstring(summary.get()).find(L"loaded"), std::wstring::npos);
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+    LONGLONG featureCount = 0;
+    ASSERT_EQ(_control->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(featureCount, 2);
+}
+
+TEST_F(ActiveXMapTest, CancellingVectorDatasetLoadLeavesTheMapUnchanged)
+{
+    ComPtr<IMapWinGISControl5> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    GdalEventSubscription subscription(control.Get());
+    ASSERT_EQ(subscription.Result(), S_OK);
+
+    const std::vector<mwg::Extent> rectangles{{0, 0, 2, 2}};
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "async-cancel.gpkg",
+        rectangles);
+    LONGLONG operationId = 0;
+    ASSERT_EQ(control->BeginLoadVectorDataset(
+        ATL::CComBSTR(path.c_str()),
+        &operationId), S_OK);
+    ASSERT_GT(operationId, 0);
+    EXPECT_EQ(control->CancelLoadVectorDataset(operationId), S_OK);
+    ASSERT_TRUE(PumpUntilGdalCompletion(
+        *subscription.Sink(),
+        operationId,
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+
+    VARIANT_BOOL succeeded = VARIANT_TRUE;
+    VARIANT_BOOL cancelled = VARIANT_FALSE;
+    LONGLONG layerId = -1;
+    BSTR summary = nullptr;
+    BSTR diagnostics = nullptr;
+    ASSERT_EQ(control->EndLoadVectorDataset(
+        operationId,
+        &succeeded,
+        &cancelled,
+        &layerId,
+        &summary,
+        &diagnostics), S_OK);
+    ::SysFreeString(summary);
+    ::SysFreeString(diagnostics);
+    EXPECT_EQ(succeeded, VARIANT_FALSE);
+    EXPECT_EQ(cancelled, VARIANT_TRUE);
+    EXPECT_EQ(layerId, 0);
+    LONG layerCount = -1;
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+    LONGLONG featureCount = -1;
+    ASSERT_EQ(_control->get_FeatureCount(&featureCount), S_OK);
+    EXPECT_EQ(featureCount, 0);
+}
+
+TEST_F(ActiveXMapTest, FailedVectorDatasetLoadReportsThePath)
+{
+    ComPtr<IMapWinGISControl5> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    GdalEventSubscription subscription(control.Get());
+    ASSERT_EQ(subscription.Result(), S_OK);
+    const auto path = _directory.Path() / "missing.gpkg";
+    const mwg::GdalEnvironment::QuietScope quiet;
+
+    LONGLONG operationId = 0;
+    ASSERT_EQ(control->BeginLoadVectorDataset(
+        ATL::CComBSTR(path.c_str()),
+        &operationId), S_OK);
+    ASSERT_TRUE(PumpUntilGdalCompletion(
+        *subscription.Sink(),
+        operationId,
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+
+    VARIANT_BOOL succeeded = VARIANT_TRUE;
+    VARIANT_BOOL cancelled = VARIANT_TRUE;
+    LONGLONG layerId = -1;
+    BSTR rawSummary = nullptr;
+    BSTR rawDiagnostics = nullptr;
+    ASSERT_EQ(control->EndLoadVectorDataset(
+        operationId,
+        &succeeded,
+        &cancelled,
+        &layerId,
+        &rawSummary,
+        &rawDiagnostics), S_OK);
+    std::unique_ptr<wchar_t, decltype(&SysFreeString)> summary(
+        rawSummary,
+        &SysFreeString);
+    std::unique_ptr<wchar_t, decltype(&SysFreeString)> diagnostics(
+        rawDiagnostics,
+        &SysFreeString);
+    EXPECT_EQ(succeeded, VARIANT_FALSE);
+    EXPECT_EQ(cancelled, VARIANT_FALSE);
+    EXPECT_EQ(layerId, 0);
+    ASSERT_NE(summary, nullptr);
+    EXPECT_NE(std::wstring(summary.get()).find(path.filename().wstring()), std::wstring::npos);
+    ASSERT_NE(diagnostics, nullptr);
+    EXPECT_NE(std::wstring(diagnostics.get()).find(path.filename().wstring()), std::wstring::npos);
+    LONG layerCount = -1;
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 0);
+}
+
+TEST_F(ActiveXMapTest, DestroyingControlDuringVectorLoadDoesNotAccessTheControlFromWorker)
+{
+    using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+    const auto getClassObject = reinterpret_cast<GetClassObject>(
+        GetProcAddress(_module->Get(), "DllGetClassObject"));
+    ASSERT_NE(getClassObject, nullptr);
+    ComPtr<IClassFactory> factory;
+    ASSERT_EQ(getClassObject(
+        __uuidof(MapWinGISControl),
+        IID_PPV_ARGS(&factory)), S_OK);
+    ComPtr<IMapWinGISControl5> control;
+    ASSERT_EQ(factory->CreateInstance(
+        nullptr,
+        IID_PPV_ARGS(&control)), S_OK);
+
+    const std::vector<mwg::Extent> rectangles{{0, 0, 2, 2}};
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "async-destroy.gpkg",
+        rectangles);
+    LONGLONG operationId = 0;
+    ASSERT_EQ(control->BeginLoadVectorDataset(
+        ATL::CComBSTR(path.c_str()),
+        &operationId), S_OK);
+    ASSERT_GT(operationId, 0);
+    control.Reset();
+    Sleep(50);
+}
+
 TEST_F(ActiveXMapTest, ExposesStableLayerIdsAndMapNavigation)
 {
     constexpr int width = 120;
@@ -1138,10 +1364,12 @@ TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
     ComPtr<IMapWinGISControl2> second;
     ComPtr<IMapWinGISControl3> third;
     ComPtr<IMapWinGISControl4> fourth;
+    ComPtr<IMapWinGISControl5> fifth;
     ASSERT_EQ(_control.As(&first), S_OK);
     ASSERT_EQ(_control.As(&second), S_OK);
     ASSERT_EQ(_control.As(&third), S_OK);
     ASSERT_EQ(_control.As(&fourth), S_OK);
+    ASSERT_EQ(_control.As(&fifth), S_OK);
     ComPtr<IUnknown> identity;
     ASSERT_EQ(fourth.As(&identity), S_OK);
     ComPtr<IUnknown> other;
@@ -1153,6 +1381,9 @@ TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
     other.Reset();
     ASSERT_EQ(third.As(&other), S_OK);
     EXPECT_EQ(identity.Get(), other.Get());
+    other.Reset();
+    ASSERT_EQ(fifth.As(&other), S_OK);
+    EXPECT_EQ(identity.Get(), other.Get());
 
     const IID firstIid{0x1B6D4167, 0xB2D7, 0x4AE4, {0x8F, 0x88, 0x92, 0xC5, 0x75, 0xBF, 0x4A, 0xF7}};
     const IID secondIid{0x2C386A29, 0xC378, 0x45C1, {0xB8, 0xD5, 0x56, 0x24, 0x50, 0x0C, 0xCF, 0xF2}};
@@ -1160,6 +1391,8 @@ TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
     EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl), firstIid));
     EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl2), secondIid));
     EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl3), thirdIid));
+    const IID fifthIid{0x4F8CE31A, 0x60D1, 0x4B9D, {0xA4, 0xAF, 0x2C, 0x80, 0xC5, 0xF6, 0x3A, 0x91}};
+    EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl5), fifthIid));
 
     ComPtr<IDispatch> dispatch;
     ASSERT_EQ(_control.As(&dispatch), S_OK);
@@ -1168,7 +1401,9 @@ TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
         {L"LoadVectorDataset", 2}, {L"FitToMap", 9}, {L"ZoomIn", 10},
         {L"ZoomOut", 11}, {L"Pan", 12}, {L"ZoomAt", 13},
         {L"ZoomToLayer", 14}, {L"LayerCount", 15},
-        {L"LoadVectorDatasetEx", 16}, {L"GetLayerId", 17}};
+        {L"LoadVectorDatasetEx", 16}, {L"GetLayerId", 17},
+        {L"BeginLoadVectorDataset", 18}, {L"CancelLoadVectorDataset", 19},
+        {L"EndLoadVectorDataset", 20}};
     for (const auto& member : members)
     {
         std::wstring name(member.name);

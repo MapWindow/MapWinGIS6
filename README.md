@@ -26,10 +26,10 @@ cancellation events.
 
 The core also supports a shared map viewport with pan, center zoom, anchored
 zoom, and fitting to the visible map or a named layer. These navigation calls
-do not depend on a window. `IMapWinGISControl4` exposes this programmatic
-navigation and stable layer IDs through ActiveX. The control also supports
-left-button drag panning and cursor-anchored mouse-wheel zoom. Resizing keeps
-the current map center and resolution.
+do not depend on a window. `IMapWinGISControl5` exposes this programmatic
+navigation, stable layer IDs, and asynchronous vector loading through ActiveX.
+The control also supports left-button drag panning and cursor-anchored
+mouse-wheel zoom. Resizing keeps the current map center and resolution.
 
 Cached drag frames are reused only for whole-pixel shifts.
 Scaled and print draws use temporary rendering buffers and keep the screen

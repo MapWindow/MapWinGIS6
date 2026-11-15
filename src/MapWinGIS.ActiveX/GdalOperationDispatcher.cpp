@@ -34,6 +34,7 @@ namespace mwg::activex
             bool completed = false;
             bool completionPending = false;
             bool notificationDeliveryInProgress = false;
+            bool honorCancellationAtCompletion = false;
             int callbackErrorCode = 0;
             std::string callbackError;
             std::optional<GdalOperationNotification> progress;
@@ -241,8 +242,7 @@ namespace mwg::activex
         void Execute(
             const std::shared_ptr<GdalOperationDispatcher::State>& state,
             const std::shared_ptr<GdalOperationDispatcher::State::Operation>& operation,
-            std::string algorithmPath,
-            std::vector<std::string> arguments,
+            GdalOperationDispatcher::WorkCallback work,
             const GdalOperationDispatcher::WorkerFinishedCallback workerFinishedCallback,
             void* const workerFinishedContext) noexcept
         {
@@ -270,21 +270,15 @@ namespace mwg::activex
                 }
                 else
                 {
-                    mwg::GdalAlgorithmRunner runner(algorithmPath);
-                    if (runner.ParseCommandLineArgs(arguments) &&
-                        runner.ValidateArguments())
+                    const GdalOperationDispatcher::ProgressCallback progress =
+                        [state, operationId = operation->id](
+                            const double fraction,
+                            const std::string_view message)
                     {
-                        static_cast<void>(runner.Run(
-                            [state, operationId = operation->id](
-                                const double progress,
-                                const std::string_view message)
-                            {
-                                QueueProgress(state, operationId, progress, message);
-                                return true;
-                            },
-                            &operation->cancellation));
-                    }
-                    result = MakeSnapshot(runner.Result());
+                        QueueProgress(state, operationId, fraction, message);
+                        return true;
+                    };
+                    result = work(operation->cancellation, progress);
                 }
             }
             catch (const std::exception& exception)
@@ -326,6 +320,24 @@ namespace mwg::activex
                 return;
             }
 
+            if (operation->honorCancellationAtCompletion &&
+                operation->cancellation.IsCancellationRequested() &&
+                result.succeeded)
+            {
+                result.succeeded = false;
+                result.cancelled = true;
+                if (result.summary.empty())
+                {
+                    try
+                    {
+                        result.summary = "GDAL operation was cancelled.";
+                    }
+                    catch (...)
+                    {
+                        result.summary.clear();
+                    }
+                }
+            }
             operation->result = std::move(result);
             operation->completed = true;
             if (!state->stopping)
@@ -371,6 +383,39 @@ namespace mwg::activex
         std::string algorithmPath,
         std::vector<std::string> arguments)
     {
+        return BeginWork(
+            [algorithmPath = std::move(algorithmPath),
+             arguments = std::move(arguments)](
+                GdalCancellationToken& cancellation,
+                const ProgressCallback& progress)
+            {
+                if (cancellation.IsCancellationRequested())
+                {
+                    GdalOperationSnapshot result;
+                    result.cancelled = true;
+                    result.summary = "GDAL operation was cancelled before execution.";
+                    return result;
+                }
+
+                mwg::GdalAlgorithmRunner runner(algorithmPath);
+                if (runner.ParseCommandLineArgs(arguments) &&
+                    runner.ValidateArguments())
+                {
+                    static_cast<void>(runner.Run(progress, &cancellation));
+                }
+                return MakeSnapshot(runner.Result());
+            });
+    }
+
+    std::uint64_t GdalOperationDispatcher::BeginWork(
+        WorkCallback work,
+        const bool honorCancellationAtCompletion)
+    {
+        if (!work)
+        {
+            throw std::invalid_argument("The GDAL worker callback is empty.");
+        }
+
         std::shared_ptr<State::Operation> operation;
         std::uint64_t operationId = 0;
         HMODULE workerModule = nullptr;
@@ -393,6 +438,8 @@ namespace mwg::activex
                 operationId = _state->nextId++;
             } while (operationId == 0 || _state->operations.contains(operationId));
             operation->id = operationId;
+            operation->honorCancellationAtCompletion =
+                honorCancellationAtCompletion;
             _state->operations.emplace(operationId, operation);
             workerFinishedCallback = _state->workerFinishedCallback;
             workerFinishedContext = _state->workerFinishedContext;
@@ -405,8 +452,7 @@ namespace mwg::activex
                 Execute,
                 _state,
                 operation,
-                std::move(algorithmPath),
-                std::move(arguments),
+                std::move(work),
                 workerFinishedCallback,
                 workerFinishedContext);
             RetainModuleUntilWorkerExit(worker, workerModule);
@@ -498,6 +544,42 @@ namespace mwg::activex
         result.callbackErrorCode = operation->second->callbackErrorCode;
         result.callbackError = operation->second->callbackError;
         return {GdalEndResult::Ended, std::move(result)};
+    }
+
+    GdalOperationLookup GdalOperationDispatcher::GetResultForDelivery(
+        const std::uint64_t operationId) const
+    {
+        std::lock_guard lock(_state->mutex);
+        const auto operation = _state->operations.find(operationId);
+        if (operation == _state->operations.end())
+        {
+            return {GdalEndResult::NotFound, std::nullopt};
+        }
+        if (!operation->second->completed)
+        {
+            return {GdalEndResult::Pending, std::nullopt};
+        }
+
+        GdalOperationSnapshot result = operation->second->result;
+        result.callbackErrorCode = operation->second->callbackErrorCode;
+        result.callbackError = operation->second->callbackError;
+        return {GdalEndResult::Ended, std::move(result)};
+    }
+
+    void GdalOperationDispatcher::UpdateCompletedResult(
+        const std::uint64_t operationId,
+        GdalOperationSnapshot result)
+    {
+        std::lock_guard lock(_state->mutex);
+        const auto operation = _state->operations.find(operationId);
+        if (operation == _state->operations.end() ||
+            !operation->second->completed)
+        {
+            throw std::runtime_error(
+                "The completed GDAL operation result is not available for update.");
+        }
+
+        operation->second->result = std::move(result);
     }
 
     bool GdalOperationDispatcher::BeginNotificationDelivery(
