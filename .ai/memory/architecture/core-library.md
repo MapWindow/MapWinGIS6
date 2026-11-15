@@ -39,9 +39,11 @@ caller-owned, so the runner can check their flush but not their final close.
 See `GdalAlgorithmRunner` and its output-failure and ownership tests.
 
 Core render scenes are owned, backend-neutral snapshots. They are distinct
-from viewport state and are rebuilt when relevant map data changes. Source
-geometry edits made outside the map are not automatically observed; callers
-must invalidate the scene as documented by `MapView`.
+from viewport state. `MapView` caches scenes and failure diagnostics by
+`LayerId`, not by source identity. Duplicate map layers that share a source
+need separate `InvalidateLayerScene` calls after an edit, or one
+`InvalidateScene` call for the whole map. Invalidating a failed layer also
+allows retrying its source. Visibility changes alone retain the cached result.
 
 ## References
 

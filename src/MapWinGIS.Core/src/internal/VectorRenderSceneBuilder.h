@@ -4,15 +4,23 @@
  * @file VectorRenderSceneBuilder.h
  * @brief Declares private scene building shared by layer and map scenes.
  *
- * Lets map scene creation tell layers without polygon geometry apart from
- * layers that cannot be rendered, without parsing exception messages.
+ * Shares polygon preparation and per-layer failure classification between
+ * standalone map snapshots and the map view's scene cache.
  */
 #pragma once
 
-#include "mapwingis/rendering/VectorRenderScene.h"
+#include <variant>
+
+#include "mapwingis/rendering/MapRenderScene.h"
 
 namespace mwg::rendering::detail
 {
+    using LayerScene = std::variant<LayerRenderScene, SkippedLayer>;
+
+    /// Builds drawable geometry or a skip diagnostic for one map layer.
+    /// Allocation failures and non-standard exceptions propagate.
+    [[nodiscard]] LayerScene BuildLayerRenderScene(const MapLayer& layer);
+
     /// Copies polygon geometry from a layer into scene data. Unlike
     /// CreateVectorRenderScene, a layer without polygon geometry gives a
     /// scene with no polygons instead of an error.

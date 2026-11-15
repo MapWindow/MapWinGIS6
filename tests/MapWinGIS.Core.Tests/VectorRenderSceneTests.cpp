@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -371,6 +372,125 @@ TEST(VectorRenderScene, CountsAllFeaturesDuringTheGeometryTraversal)
     EXPECT_EQ(dataset->Layer(0).FeatureCount(), 3);
     EXPECT_EQ(driver.readCalls, 4);
     EXPECT_EQ(driver.countCalls, 0);
+}
+
+TEST(VectorRenderScene, ComputesSlowExtentWithoutReadingAttributesOrRequestingAnExtent)
+{
+    VectorReadTestDriver driver;
+    driver.failExtent = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+
+    const auto scene = rendering::CreateVectorRenderScene(*dataset);
+
+    EXPECT_DOUBLE_EQ(scene.extent.xMin, 0.0);
+    EXPECT_DOUBLE_EQ(scene.extent.yMin, 0.0);
+    EXPECT_DOUBLE_EQ(scene.extent.xMax, 1.0);
+    EXPECT_DOUBLE_EQ(scene.extent.yMax, 1.0);
+    EXPECT_EQ(driver.extentCalls, 0);
+    EXPECT_EQ(driver.readCalls, 4);
+    EXPECT_EQ(driver.attributeReadCalls, 0);
+    EXPECT_FALSE(driver.ignoredFields);
+    EXPECT_FALSE(driver.ignoredGeometry);
+    EXPECT_DOUBLE_EQ(dataset->Layer(0).GetExtent().xMax, 1.0);
+    EXPECT_EQ(driver.extentCalls, 0);
+    EXPECT_EQ(driver.readCalls, 4);
+    EXPECT_EQ(dataset->Layer(0).CellString(0, 0), driver.storedName);
+}
+
+TEST(VectorRenderScene, UsesFastExtentWithoutAnExtraGeometryTraversal)
+{
+    VectorReadTestDriver driver;
+    driver.fastExtent = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+
+    const auto scene = rendering::CreateVectorRenderScene(*dataset);
+
+    EXPECT_DOUBLE_EQ(scene.extent.xMax, 1.0);
+    EXPECT_EQ(driver.extentCalls, 1);
+    EXPECT_EQ(driver.readCalls, 4);
+    EXPECT_EQ(driver.attributeReadCalls, 0);
+}
+
+TEST(VectorRenderScene, PropagatesAllocationFailureFromExtentCapabilityProbe)
+{
+    VectorReadTestDriver driver;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    driver.failExtentCapabilityAllocation = true;
+
+    EXPECT_THROW((void)rendering::CreateVectorRenderScene(*dataset), std::bad_alloc);
+}
+
+TEST(VectorRenderScene, RestoresAttributeReadsAndCursorAfterAGeometryReadFailure)
+{
+    VectorReadTestDriver driver;
+    driver.failOnSecondRead = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    const GdalEnvironment::QuietScope quiet;
+
+    EXPECT_THROW((void)rendering::CreateVectorRenderScene(*dataset), CoreError);
+    EXPECT_FALSE(driver.ignoredFields);
+    EXPECT_FALSE(driver.ignoredGeometry);
+    EXPECT_EQ(driver.nextFeature, 0);
+    EXPECT_EQ(driver.attributeReadCalls, 0);
+
+    driver.failOnSecondRead = false;
+    EXPECT_EQ(dataset->Layer(0).CellString(0, 0), driver.storedName);
+    EXPECT_EQ(rendering::CreateVectorRenderScene(*dataset).sourceFeatureCount, 3);
+}
+
+TEST(PolygonBuffer, AppendsMultipartRingsToContiguousOwnedStorage)
+{
+    rendering::PolygonBuffer buffer;
+    const std::vector<rendering::Point> points = {
+        {0, 0}, {4, 0}, {4, 4}, {0, 0},
+        {1, 1}, {2, 1}, {1, 2}, {1, 1}};
+    const std::vector<std::size_t> ends = {4, 8};
+    buffer.AppendPolygon(points, ends);
+    buffer.AppendPolygon({{{10, 10}, {12, 10}, {10, 12}, {10, 10}}});
+
+    ASSERT_EQ(buffer.size(), 2U);
+    ASSERT_EQ(buffer[0].size(), 2U);
+    ASSERT_EQ(buffer[1].size(), 1U);
+    EXPECT_EQ(buffer.Coordinates().size(), 12U);
+    EXPECT_EQ(buffer.Rings().size(), 3U);
+    EXPECT_EQ(buffer[0][0].data(), buffer.Coordinates().data());
+    EXPECT_EQ(buffer[0][1].data(), buffer.Coordinates().data() + 4);
+    EXPECT_EQ(buffer[1][0].data(), buffer.Coordinates().data() + 8);
+
+    auto copy = buffer;
+    buffer.Coordinates().front().x = 99;
+    EXPECT_DOUBLE_EQ(copy[0][0].front().x, 0.0);
+    buffer = {};
+    EXPECT_DOUBLE_EQ(copy[1][0].front().x, 10.0);
+    rendering::PolygonBuffer moved = std::move(copy);
+    EXPECT_DOUBLE_EQ(moved[0][1].front().x, 1.0);
+    EXPECT_DOUBLE_EQ(moved[1][0].back().y, 10.0);
+}
+
+TEST(PolygonBuffer, RejectsInvalidRingPartitionsWithoutChangingExistingGeometry)
+{
+    rendering::PolygonBuffer buffer = {{{{0, 0}, {1, 0}, {0, 1}}}};
+    const std::vector<rendering::Point> points = {{2, 2}, {3, 2}, {2, 3}};
+    const std::vector<std::vector<std::size_t>> invalidEnds = {{}, {2}, {4}, {2, 1, 3}};
+    for (const auto& ends : invalidEnds)
+    {
+        EXPECT_THROW(buffer.AppendPolygon(points, ends), InvalidArgument);
+        ASSERT_EQ(buffer.size(), 1U);
+        ASSERT_EQ(buffer.front().front().size(), 3U);
+        EXPECT_DOUBLE_EQ(buffer.front().front().front().x, 0.0);
+    }
+
+    buffer.AppendPolygon(rendering::Polygon{});
+    buffer.AppendPolygon({rendering::Ring{}, {{4, 4}, {5, 4}, {4, 5}}});
+    ASSERT_EQ(buffer.size(), 3U);
+    EXPECT_TRUE(buffer[1].empty());
+    EXPECT_THROW((void)buffer[1].front(), InvalidArgument);
+    EXPECT_THROW((void)buffer[3], InvalidArgument);
+    ASSERT_EQ(buffer[2].size(), 2U);
+    EXPECT_TRUE(buffer[2][0].empty());
+    EXPECT_DOUBLE_EQ(buffer[2][1].front().x, 4.0);
+    EXPECT_THROW((void)buffer[2][2], InvalidArgument);
+    EXPECT_THROW((void)rendering::PolygonBuffer{}.front(), InvalidArgument);
 }
 
 TEST(VectorRenderScene, LinearizesCurvedPolygonGeometry)

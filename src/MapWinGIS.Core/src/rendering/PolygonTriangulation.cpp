@@ -29,7 +29,7 @@ namespace mwg::rendering
 {
     namespace
     {
-        std::unique_ptr<OGRLinearRing> MakeRing(const Ring& ring)
+        std::unique_ptr<OGRLinearRing> MakeRing(const std::span<const Point> ring)
         {
             auto result = std::make_unique<OGRLinearRing>();
             for (const Point& point : ring)
@@ -43,7 +43,7 @@ namespace mwg::rendering
             return result;
         }
 
-        void ValidateRing(const Ring& ring, const char* role)
+        void ValidateRing(const std::span<const Point> ring, const char* role)
         {
             if (ring.size() < 3)
             {
@@ -60,7 +60,8 @@ namespace mwg::rendering
             }
         }
 
-        std::unique_ptr<OGRPolygon> MakeOgrPolygon(const Polygon& polygon)
+        template <typename PolygonType>
+        std::unique_ptr<OGRPolygon> MakeOgrPolygon(const PolygonType& polygon)
         {
             if (polygon.empty())
             {
@@ -72,7 +73,7 @@ namespace mwg::rendering
             result->addRingDirectly(MakeRing(polygon.front()).release());
             for (std::size_t index = 1; index < polygon.size(); ++index)
             {
-                const Ring& hole = polygon[index];
+                const auto& hole = polygon[index];
                 if (hole.size() < 3)
                 {
                     continue;
@@ -183,7 +184,8 @@ namespace mwg::rendering
         }
     }
 
-    TriangleMesh TriangulatePolygon(const Polygon& polygon)
+    template <typename PolygonType>
+    TriangleMesh Triangulate(const PolygonType& polygon)
     {
         GdalEnvironment::Initialize();
         const std::unique_ptr<OGRPolygon> source = MakeOgrPolygon(polygon);
@@ -231,5 +233,15 @@ namespace mwg::rendering
             throw CoreError("Polygon triangulation produced no triangles");
         }
         return mesh;
+    }
+
+    TriangleMesh TriangulatePolygon(const Polygon& polygon)
+    {
+        return Triangulate(polygon);
+    }
+
+    TriangleMesh TriangulatePolygon(const PolygonView polygon)
+    {
+        return Triangulate(polygon);
     }
 }

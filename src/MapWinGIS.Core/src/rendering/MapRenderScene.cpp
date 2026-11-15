@@ -14,39 +14,48 @@
 
 namespace mwg::rendering
 {
+    detail::LayerScene detail::BuildLayerRenderScene(const MapLayer& layer)
+    {
+        if (!layer.IsVisible())
+        {
+            return SkippedLayer{layer.Id(), LayerSkipReason::Hidden, {}};
+        }
+
+        VectorRenderScene scene;
+        try
+        {
+            scene = detail::BuildVectorRenderScene(layer.Source());
+        }
+        catch (const std::bad_alloc&)
+        {
+            throw;
+        }
+        catch (const std::exception& error)
+        {
+            return SkippedLayer{layer.Id(), LayerSkipReason::Failed, error.what()};
+        }
+
+        if (scene.polygons.empty())
+        {
+            return SkippedLayer{layer.Id(), LayerSkipReason::NoGeometry, {}};
+        }
+        return LayerRenderScene{layer.Id(), std::move(scene)};
+    }
+
     MapRenderScene CreateMapRenderScene(const Map& map)
     {
         MapRenderScene result;
         for (int position = 0; position < map.LayerCount(); ++position)
         {
-            const MapLayer& layer = map.Layer(position);
-            if (!layer.IsVisible())
+            detail::LayerScene layerScene = detail::BuildLayerRenderScene(map.Layer(position));
+            if (auto* drawable = std::get_if<LayerRenderScene>(&layerScene))
             {
-                result.skippedLayers.push_back({layer.Id(), LayerSkipReason::Hidden, {}});
-                continue;
+                result.layers.push_back(std::move(*drawable));
             }
-
-            VectorRenderScene scene;
-            try
+            else
             {
-                scene = detail::BuildVectorRenderScene(layer.Source());
+                result.skippedLayers.push_back(std::get<SkippedLayer>(std::move(layerScene)));
             }
-            catch (const std::bad_alloc&)
-            {
-                throw;
-            }
-            catch (const std::exception& error)
-            {
-                result.skippedLayers.push_back({layer.Id(), LayerSkipReason::Failed, error.what()});
-                continue;
-            }
-
-            if (scene.polygons.empty())
-            {
-                result.skippedLayers.push_back({layer.Id(), LayerSkipReason::NoGeometry, {}});
-                continue;
-            }
-            result.layers.push_back({layer.Id(), std::move(scene)});
         }
         return result;
     }
