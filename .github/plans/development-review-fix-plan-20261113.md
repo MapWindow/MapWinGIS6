@@ -8,7 +8,7 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 - [x] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
 - [x] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 - [x] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
-- [ ] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
+- [x] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 - [ ] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
 - [ ] Phase 7 – Rebuild render scenes per layer (#7, #34)
 - [ ] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
@@ -275,6 +275,13 @@ Suggested fix:
 - Resume event delivery when the window is created again (`WM_CREATE`/`OnCreate`) and on in-place activation, not only on `WM_SIZE` or `Begin`.
 - **Decision**: ask the user whether `IOleObject::Close` followed by re-activation should allow GDAL operations again (recommended: yes, reset the closing state on `SetClientSite` with a non-null site or on activation) or permanently disable them (then document it in `ARCHITECTURE.md` and the IDL).
 - Tests: destroy and re-create the control window while an operation runs, and check that the completion event arrives without a `WM_SIZE`. Add a Close-then-reactivate test for the chosen behaviour.
+
+**Phase 5 result:** Implemented in [PR #78](https://github.com/MapWindow/MapWinGIS6/pull/78). Diagnostic text uses the lossy `DiagnosticToBstr` (invalid UTF-8 and embedded NUL become U+FFFD), native exception messages are converted from the active code page in one helper, and `EndGdalOperation` releases the slot before any COM allocation and maps exceptions to distinct HRESULTs with error info. Failing automation calls set error info. The retry timer is armed only while operations are outstanding, is owner-thread-only, and is stopped when the last slot is ended. Decision #23: `IOleObject::Close` followed by reactivation (`SetClientSite` with a site, or window creation) allows GDAL operations again; the dispatch window is recreated on the next `BeginGdalOperation`.
+
+**Limitations and validation notes:**
+
+- The initial GitHub Actions run failed because `StartRetryTimer()` results were discarded (`C4834` as error). Retry-timer updates now go through one helper that reports a failure to arm it. `GdalDispatchWindow.h` now includes `<atlbase.h>` itself, because the ActiveX tests include it directly.
+- Local Windows validation after merging `development`: CMake `x64-debug` build passed and CTest ran 399 tests with zero failures (three skipped: the public COG network test and two rendering benchmarks). MSBuild Debug x64 passed; `MapWinGIS.Core.Tests.exe` (322 passed, 1 skipped), `MapWinGIS.Core.GdalInitialization.Tests.exe` (3 passed) and `MapWinGIS.ActiveX.Tests.exe` (70 passed, 2 skipped, interactive hosting test excluded) all passed. Compile-command parity passed with no lost flags and no new CMake warnings.
 
 ### Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
 

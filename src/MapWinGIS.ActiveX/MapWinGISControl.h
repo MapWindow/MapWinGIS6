@@ -91,6 +91,7 @@ public:
     END_PROP_MAP()
 
     BEGIN_MSG_MAP(CMapWinGISControl)
+        MESSAGE_HANDLER(WM_CREATE, OnCreate)
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
         MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
         MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
@@ -140,8 +141,10 @@ public:
         BSTR* diagnostics,
         SAFEARRAY** warnings) override;
     STDMETHOD(Close)(DWORD saveOption) override;
+    STDMETHOD(SetClientSite)(IOleClientSite* clientSite) override;
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
+    LRESULT OnCreate(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonDown(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseMove(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonUp(UINT, WPARAM, LPARAM, BOOL& handled);

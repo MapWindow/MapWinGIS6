@@ -103,10 +103,11 @@ namespace mwg::activex
 
         _dispatcher.SetWakeCallback(
             &GdalEventSource::PostDispatchMessage,
-            _dispatchWindow->m_hWnd);
+            _dispatchWindow.get());
         _dispatcher.SetWorkerFinishedCallback(
             &GdalEventSource::UnlockActiveXModule,
             nullptr);
+        ArmRetryTimer();
         _AtlModule.Lock();
         try
         {
@@ -117,6 +118,7 @@ namespace mwg::activex
         catch (...)
         {
             _AtlModule.Unlock();
+            UpdateRetryTimer();
             throw;
         }
     }
@@ -135,7 +137,9 @@ namespace mwg::activex
 
     GdalOperationLookup GdalEventSource::End(const std::uint64_t operationId)
     {
-        return _dispatcher.End(operationId);
+        GdalOperationLookup result = _dispatcher.End(operationId);
+        UpdateRetryTimer();
+        return result;
     }
 
     void GdalEventSource::RecordCallbackError(
@@ -163,7 +167,8 @@ namespace mwg::activex
         {
             _dispatcher.SetWakeCallback(
                 &GdalEventSource::PostDispatchMessage,
-                _dispatchWindow->m_hWnd);
+                _dispatchWindow.get());
+            UpdateRetryTimer();
         }
     }
 
@@ -189,6 +194,7 @@ namespace mwg::activex
         }
 
         _dispatching = true;
+        const std::uint64_t generation = _dispatcher.GetGeneration();
         struct DispatchGuard final
         {
             GdalEventSource& source;
@@ -203,7 +209,8 @@ namespace mwg::activex
             }
         } dispatchGuard{*this};
 
-        while (_dispatcher.IsDispatchActive())
+        while (_dispatcher.GetGeneration() == generation &&
+               _dispatcher.IsDispatchActive())
         {
             const auto notifications = _dispatcher.DrainNotifications();
             if (notifications.empty())
@@ -213,7 +220,8 @@ namespace mwg::activex
 
             for (const GdalOperationNotification& notification : notifications)
             {
-                if (!_dispatcher.IsDispatchActive())
+                if (_dispatcher.GetGeneration() != generation ||
+                    !_dispatcher.IsDispatchActive())
                 {
                     break;
                 }
@@ -226,22 +234,34 @@ namespace mwg::activex
                 {
                     GdalOperationDispatcher& dispatcher;
                     std::uint64_t operationId;
+                    std::uint64_t generation;
 
                     ~NotificationGuard()
                     {
-                        dispatcher.EndNotificationDelivery(operationId);
+                        if (dispatcher.GetGeneration() == generation)
+                        {
+                            dispatcher.EndNotificationDelivery(operationId);
+                        }
                     }
-                } notificationGuard{_dispatcher, notification.operationId};
+                } notificationGuard{_dispatcher, notification.operationId, generation};
 
                 const HRESULT result =
                     notification.kind == GdalNotificationKind::Progress
-                    ? FireProgress(notification)
-                    : FireCompleted(notification.operationId);
-                if (FAILED(result))
+                    ? FireProgress(notification, generation)
+                    : FireCompleted(notification.operationId, generation);
+                if (FAILED(result) && _dispatcher.GetGeneration() == generation)
                 {
                     RecordCallbackError(notification.operationId, result);
                 }
+                if (_dispatcher.GetGeneration() != generation)
+                {
+                    break;
+                }
             }
+        }
+        if (_dispatcher.GetGeneration() == generation)
+        {
+            UpdateRetryTimer();
         }
         return 0;
     }
@@ -258,13 +278,23 @@ namespace mwg::activex
         _dispatcher.Shutdown();
     }
 
+    HRESULT GdalEventSource::Reactivate() noexcept
+    {
+        if (!_closing) return S_OK;
+        try
+        {
+            _dispatcher.Restart();
+            _closing = false;
+            _dispatchWindowDestroyPending = false;
+            return S_OK;
+        }
+        catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
+        catch (...) { return E_UNEXPECTED; }
+    }
+
     bool GdalEventSource::PostDispatchMessage(void* const window) noexcept
     {
-        return ::PostMessageW(
-            static_cast<HWND>(window),
-            kGdalDispatchMessage,
-            0,
-            0) != FALSE;
+        return static_cast<GdalDispatchWindow*>(window)->PostWake();
     }
 
     void GdalEventSource::UnlockActiveXModule(void*) noexcept
@@ -284,14 +314,41 @@ namespace mwg::activex
         if (_dispatchWindow != nullptr)
         {
             _dispatchWindow->Destroy();
+            _dispatchWindow.reset();
+        }
+    }
+
+    void GdalEventSource::ArmRetryTimer() noexcept
+    {
+        if (_dispatchWindow != nullptr && !_dispatchWindow->StartRetryTimer())
+        {
+            ::OutputDebugStringW(
+                L"MapWinGIS: unable to arm the GDAL operation retry timer.\n");
+        }
+    }
+
+    void GdalEventSource::UpdateRetryTimer() noexcept
+    {
+        if (_dispatchWindow == nullptr)
+        {
+            return;
+        }
+        if (_dispatcher.HasOutstandingOperations())
+        {
+            ArmRetryTimer();
+        }
+        else
+        {
+            _dispatchWindow->StopRetryTimer();
         }
     }
 
     HRESULT GdalEventSource::FireProgress(
-        const GdalOperationNotification& notification)
+        const GdalOperationNotification& notification,
+        const std::uint64_t generation)
     {
         BSTR message = nullptr;
-        HRESULT result = ComConversion::Utf8ToBstr(notification.message, &message);
+        HRESULT result = ComConversion::DiagnosticToBstr(notification.message, &message);
         if (FAILED(result))
         {
             return result;
@@ -308,12 +365,15 @@ namespace mwg::activex
         result = FireEvent(
             kGdalProgressDispId,
             parameters,
-            notification.operationId);
+            notification.operationId,
+            generation);
         ::SysFreeString(message);
         return result;
     }
 
-    HRESULT GdalEventSource::FireCompleted(const std::uint64_t operationId)
+    HRESULT GdalEventSource::FireCompleted(
+        const std::uint64_t operationId,
+        const std::uint64_t generation)
     {
         VARIANTARG argument{};
         argument.vt = VT_I8;
@@ -322,13 +382,15 @@ namespace mwg::activex
         return FireEvent(
             kGdalOperationCompletedDispId,
             parameters,
-            operationId);
+            operationId,
+            generation);
     }
 
     HRESULT GdalEventSource::FireEvent(
         const DISPID eventId,
         DISPPARAMS& parameters,
-        const std::uint64_t operationId)
+        const std::uint64_t operationId,
+        const std::uint64_t generation)
     {
         if (parameters.cArgs > kMaxEventArguments)
         {
@@ -356,7 +418,8 @@ namespace mwg::activex
         HRESULT firstError = S_OK;
         for (const ATL::CComPtr<IUnknown>& unknown : sinks)
         {
-            if (!_dispatcher.IsDispatchActive())
+            if (_dispatcher.GetGeneration() != generation ||
+                !_dispatcher.IsDispatchActive())
             {
                 break;
             }
@@ -367,7 +430,10 @@ namespace mwg::activex
                 {
                     firstError = E_NOINTERFACE;
                 }
-                RecordCallbackError(operationId, E_NOINTERFACE);
+                if (_dispatcher.GetGeneration() == generation)
+                {
+                    RecordCallbackError(operationId, E_NOINTERFACE);
+                }
                 continue;
             }
 
@@ -394,7 +460,10 @@ namespace mwg::activex
                 {
                     firstError = result;
                 }
-                RecordCallbackError(operationId, result);
+                if (_dispatcher.GetGeneration() == generation)
+                {
+                    RecordCallbackError(operationId, result);
+                }
                 continue;
             }
 
@@ -416,13 +485,20 @@ namespace mwg::activex
             {
                 ::VariantClear(&arguments[index]);
             }
+            if (_dispatcher.GetGeneration() != generation)
+            {
+                break;
+            }
             if (FAILED(invokeResult))
             {
                 if (SUCCEEDED(firstError))
                 {
                     firstError = invokeResult;
                 }
-                RecordCallbackError(operationId, invokeResult);
+                if (_dispatcher.GetGeneration() == generation)
+                {
+                    RecordCallbackError(operationId, invokeResult);
+                }
             }
         }
         return firstError;
