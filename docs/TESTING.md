@@ -281,6 +281,18 @@ the OpenGL driver and context.
   resizing, and scene invalidation; and `VectorLayerRendererTests.cpp` draws
   layers with different extents into memory bitmaps and samples the pixels at
   `Viewport::MapToScreen` positions, for GDI and, when available, OpenGL.
+- Map view tests count source reads across visibility changes, lazy preparation,
+  layer removal, clearing, and selective invalidation. They also cover retrying
+  a failed layer without rebuilding other layers and retaining transferred
+  scene storage when another prepared layer is added.
+- Scene tests cover both extent paths, ignored attributes, and restoring
+  attribute reads after a traversal failure. Slow extent calculation also
+  seeds the vector layer cache, so later extent queries need no scan.
+  Flat-buffer tests cover multipart and interior-ring ranges, rejected
+  offsets, and independent coordinate storage after copying and moving.
+  Existing renderer pixel assertions cover the same shapes with flat buffers.
+  A copied-scene case compares every pixel after releasing the original
+  coordinate buffers, for GDI and for OpenGL when available.
 - Native `ActiveXMapTest` cases activate the real OCX through its class factory
   without registration. They cover stacked loads, rejected loads, cached
   feature totals, dataset release through `ClearLayers`, `WM_SIZE`, and draws

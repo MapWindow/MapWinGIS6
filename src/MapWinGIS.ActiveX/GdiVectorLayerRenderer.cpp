@@ -130,18 +130,12 @@ namespace mwg::activex
             const double originX,
             const double originY) noexcept
         {
-            for (const rendering::Polygon& polygon : scene.polygons)
+            for (const rendering::Point& point : scene.polygons.Coordinates())
             {
-                for (const rendering::Ring& ring : polygon)
+                if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
+                    !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
                 {
-                    for (const rendering::Point& point : ring)
-                    {
-                        if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
-                            !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
-                        {
-                            return false;
-                        }
-                    }
+                    return false;
                 }
             }
 
@@ -169,12 +163,14 @@ namespace mwg::activex
             const double originX,
             const double originY)
         {
-            for (const rendering::Polygon& polygon : scene.polygons)
+            for (std::size_t polygonIndex = 0; polygonIndex < scene.polygons.size(); ++polygonIndex)
             {
+                const rendering::PolygonView polygon = scene.polygons[polygonIndex];
                 std::vector<POINT> points;
                 std::vector<int> ringCounts;
-                for (const rendering::Ring& ring : polygon)
+                for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
                 {
+                    const std::span<const rendering::Point> ring = polygon[ringIndex];
                     if (ring.size() < 3)
                     {
                         continue;

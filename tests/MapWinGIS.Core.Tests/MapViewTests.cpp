@@ -14,6 +14,7 @@
 
 #include <limits>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -305,10 +306,10 @@ TEST_F(MapViewTest, SceneIsReusedUntilTheMapChanges)
 {
     _view.AddLayer(OpenRectangles({{0.0, 0.0, 1.0, 1.0}}));
     const rendering::MapRenderScene& scene = _view.Scene();
-    const rendering::Polygon* polygons = scene.layers.front().scene.polygons.data();
+    const auto* polygons = scene.layers.front().scene.polygons.Coordinates().data();
 
     ASSERT_TRUE(_view.Resize(300, 200));
-    EXPECT_EQ(_view.Scene().layers.front().scene.polygons.data(), polygons);
+    EXPECT_EQ(_view.Scene().layers.front().scene.polygons.Coordinates().data(), polygons);
 
     EXPECT_TRUE(_view.InvalidateScene());
     EXPECT_EQ(&_view.Scene(), &scene);
@@ -322,8 +323,8 @@ TEST_F(MapViewTest, PreparedLayersRetainTheirGeometryUntilInvalidated)
     MapView view;
     auto first = rendering::CreateVectorRenderScene(*dataset);
     auto second = rendering::CreateVectorRenderScene(*dataset);
-    const auto* firstPolygons = first.polygons.data();
-    const auto* secondPolygons = second.polygons.data();
+    const auto* firstPolygons = first.polygons.Coordinates().data();
+    const auto* secondPolygons = second.polygons.Coordinates().data();
     ASSERT_EQ(driver.readCalls, 8);
 
     const LayerId firstId = view.AddLayer(dataset, std::move(first));
@@ -333,13 +334,183 @@ TEST_F(MapViewTest, PreparedLayersRetainTheirGeometryUntilInvalidated)
     ASSERT_EQ(view.Scene().layers.size(), 2U);
     EXPECT_EQ(view.Scene().layers[0].layerId, firstId);
     EXPECT_EQ(view.Scene().layers[1].layerId, secondId);
-    EXPECT_EQ(view.Scene().layers[0].scene.polygons.data(), firstPolygons);
-    EXPECT_EQ(view.Scene().layers[1].scene.polygons.data(), secondPolygons);
+    EXPECT_EQ(view.Scene().layers[0].scene.polygons.Coordinates().data(), firstPolygons);
+    EXPECT_EQ(view.Scene().layers[1].scene.polygons.Coordinates().data(), secondPolygons);
     EXPECT_EQ(driver.readCalls, 8);
 
     EXPECT_TRUE(view.InvalidateScene());
     EXPECT_EQ(view.Scene().layers.size(), 2U);
     EXPECT_EQ(driver.readCalls, 16);
+}
+
+TEST_F(MapViewTest, VisibilityChangesReuseCachedLayerScenes)
+{
+    VectorReadTestDriver driver;
+    std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    const LayerId id = view.AddLayer(dataset);
+
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    const int readsAfterBuild = driver.readCalls;
+    ASSERT_GT(readsAfterBuild, 0);
+
+    EXPECT_TRUE(view.SetLayerVisible(id, false));
+    EXPECT_TRUE(view.Scene().layers.empty());
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+
+    EXPECT_TRUE(view.SetLayerVisible(id, true));
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+}
+
+TEST_F(MapViewTest, HiddenLayerIsBuiltOnlyWhenFirstShown)
+{
+    VectorReadTestDriver driver;
+    std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    const LayerId id = view.AddLayer(dataset);
+    const int readsAfterAdd = driver.readCalls;
+    ASSERT_TRUE(view.SetLayerVisible(id, false));
+
+    EXPECT_TRUE(view.Scene().layers.empty());
+    EXPECT_EQ(driver.readCalls, readsAfterAdd);
+
+    ASSERT_TRUE(view.SetLayerVisible(id, true));
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_GT(driver.readCalls, readsAfterAdd);
+    const int readsAfterBuild = driver.readCalls;
+
+    EXPECT_TRUE(view.SetLayerVisible(id, false));
+    EXPECT_TRUE(view.SetLayerVisible(id, true));
+    EXPECT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+}
+
+TEST_F(MapViewTest, InvalidatingOneLayerRebuildsOnlyThatLayer)
+{
+    VectorReadTestDriver driver;
+    std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    const LayerId first = view.AddLayer(dataset);
+    const LayerId second = view.AddLayer(dataset);
+
+    ASSERT_EQ(view.Scene().layers.size(), 2U);
+    const int readsAfterBuild = driver.readCalls;
+    ASSERT_GT(readsAfterBuild, 0);
+
+    EXPECT_FALSE(view.InvalidateLayerScene(LayerId{}));
+    EXPECT_TRUE(view.InvalidateLayerScene(first));
+    ASSERT_EQ(view.Scene().layers.size(), 2U);
+    const int readsForOneLayer = driver.readCalls - readsAfterBuild;
+    EXPECT_GT(readsForOneLayer, 0);
+    EXPECT_LT(readsForOneLayer, readsAfterBuild);
+    EXPECT_EQ(view.Scene().layers[0].layerId, first);
+    EXPECT_EQ(view.Scene().layers[1].layerId, second);
+}
+
+TEST_F(MapViewTest, RemovingOrClearingLayersDoesNotRebuildSurvivingScenes)
+{
+    VectorReadTestDriver driver;
+    std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    const LayerId first = view.AddLayer(dataset);
+    const LayerId second = view.AddLayer(dataset);
+    const LayerId third = view.AddLayer(dataset);
+    ASSERT_EQ(view.Scene().layers.size(), 3U);
+    const int readsAfterBuild = driver.readCalls;
+
+    ASSERT_TRUE(view.SetLayerVisible(second, false));
+    ASSERT_TRUE(view.RemoveLayer(first));
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_EQ(view.Scene().layers.front().layerId, third);
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+    EXPECT_FALSE(view.InvalidateLayerScene(first));
+    ASSERT_TRUE(view.SetLayerVisible(second, true));
+    ASSERT_EQ(view.Scene().layers.size(), 2U);
+    EXPECT_EQ(view.Scene().layers[0].layerId, second);
+    EXPECT_EQ(view.Scene().layers[1].layerId, third);
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+
+    ASSERT_TRUE(view.ClearLayers());
+    EXPECT_TRUE(view.Scene().layers.empty());
+    EXPECT_TRUE(view.Scene().skippedLayers.empty());
+    const LayerId replacement = view.AddLayer(dataset);
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_EQ(view.Scene().layers.front().layerId, replacement);
+    EXPECT_EQ(driver.readCalls - readsAfterBuild, readsAfterBuild / 3);
+}
+
+TEST_F(MapViewTest, InvalidatingAHiddenLayerDefersItsRebuildUntilShown)
+{
+    VectorReadTestDriver driver;
+    std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    const LayerId id = view.AddLayer(dataset);
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    const int readsAfterBuild = driver.readCalls;
+
+    ASSERT_TRUE(view.SetLayerVisible(id, false));
+    ASSERT_TRUE(view.InvalidateLayerScene(id));
+    EXPECT_TRUE(view.Scene().layers.empty());
+    EXPECT_EQ(driver.readCalls, readsAfterBuild);
+    ASSERT_TRUE(view.SetLayerVisible(id, true));
+    EXPECT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_EQ(driver.readCalls, 2 * readsAfterBuild);
+}
+
+TEST_F(MapViewTest, FailedLayerIsRetriedWithoutRebuildingTheOtherLayers)
+{
+    VectorReadTestDriver driver;
+    std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    ASSERT_TRUE(view.Resize(300, 200));
+    const LayerId first = view.AddLayer(dataset);
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    const LayerId second = view.AddLayer(dataset);
+    driver.failOnSecondRead = true;
+    const GdalEnvironment::QuietScope quiet;
+
+    ASSERT_EQ(view.Scene().layers.size(), 1U);
+    EXPECT_EQ(view.Scene().layers.front().layerId, first);
+    ASSERT_EQ(view.Scene().skippedLayers.size(), 1U);
+    EXPECT_EQ(view.Scene().skippedLayers.front().layerId, second);
+    EXPECT_EQ(view.Scene().skippedLayers.front().reason, rendering::LayerSkipReason::Failed);
+    EXPECT_NE(view.Scene().skippedLayers.front().message.find("Simulated feature read failure"),
+              std::string::npos);
+    const int readsAfterFailure = driver.readCalls;
+
+    driver.failOnSecondRead = false;
+    ASSERT_TRUE(view.InvalidateLayerScene(second));
+    ASSERT_EQ(view.Scene().layers.size(), 2U);
+    EXPECT_EQ(view.Scene().layers[0].layerId, first);
+    EXPECT_EQ(view.Scene().layers[1].layerId, second);
+    EXPECT_TRUE(view.Scene().skippedLayers.empty());
+    EXPECT_EQ(driver.readCalls - readsAfterFailure, 4);
+}
+
+TEST_F(MapViewTest, AllocationFailurePreservesThePublishedSceneAndAllowsRetry)
+{
+    VectorReadTestDriver driver;
+    std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    ASSERT_TRUE(view.Resize(300, 200));
+    const LayerId first = view.AddLayer(dataset);
+    const auto& scene = view.Scene();
+    ASSERT_EQ(scene.layers.size(), 1U);
+    const auto* coordinates = scene.layers.front().scene.polygons.Coordinates().data();
+    const LayerId second = view.AddLayer(dataset);
+    driver.failExtentCapabilityAllocation = true;
+
+    EXPECT_THROW((void)view.Scene(), std::bad_alloc);
+    ASSERT_EQ(scene.layers.size(), 1U);
+    EXPECT_EQ(scene.layers.front().layerId, first);
+    EXPECT_EQ(scene.layers.front().scene.polygons.Coordinates().data(), coordinates);
+    EXPECT_TRUE(scene.skippedLayers.empty());
+
+    driver.failExtentCapabilityAllocation = false;
+    ASSERT_EQ(view.Scene().layers.size(), 2U);
+    EXPECT_EQ(scene.layers[0].layerId, first);
+    EXPECT_EQ(scene.layers[1].layerId, second);
 }
 
 TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
@@ -379,8 +550,7 @@ TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
     EXPECT_EQ(navigated.fillMeshes[1]->indices.size(), holedMeshIndices);
     EXPECT_EQ(navigated.polygons[1].size(), holedPolygonRings);
 
-    // Map changes rebuild the scene; the rebuilt scene triangulates the
-    // complex polygon again and keeps its original rings for outlines and GDI.
+    // Reassembly keeps the cached meshes and original rings for outlines and GDI.
     const LayerId second = _view.AddLayer(OpenRectangles({{100.0, 0.0, 110.0, 10.0}}));
     ASSERT_EQ(_view.Scene().layers.size(), 2U);
     const rendering::VectorRenderScene& rebuilt = _view.Scene().layers.front().scene;

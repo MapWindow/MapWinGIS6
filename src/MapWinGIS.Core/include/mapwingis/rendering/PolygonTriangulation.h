@@ -37,4 +37,8 @@ namespace mwg::rendering
     /// \throws CoreError when the polygon is invalid or the triangulation
     ///         fails or produces no triangles.
     [[nodiscard]] MWG_CORE_API TriangleMesh TriangulatePolygon(const Polygon& polygon);
+
+    /// Triangulates borrowed flat-buffer rings with the same contract as the
+    /// owning-polygon overload, without rebuilding nested coordinate vectors.
+    [[nodiscard]] MWG_CORE_API TriangleMesh TriangulatePolygon(PolygonView polygon);
 }

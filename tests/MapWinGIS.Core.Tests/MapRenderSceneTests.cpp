@@ -287,8 +287,8 @@ TEST_F(MapRenderSceneTest, IsolatesStandardExceptionsButPropagatesAllocationFail
     EXPECT_EQ(scene.skippedLayers[0].layerId, failed);
     EXPECT_EQ(scene.skippedLayers[0].reason, rendering::LayerSkipReason::Failed);
     EXPECT_EQ(scene.skippedLayers[0].message, "Simulated geometry read exception");
-    const auto* polygons = scene.layers[0].scene.polygons.data();
-    EXPECT_EQ(view.Scene().layers[0].scene.polygons.data(), polygons);
+    const auto* polygons = scene.layers[0].scene.polygons.Coordinates().data();
+    EXPECT_EQ(view.Scene().layers[0].scene.polygons.Coordinates().data(), polygons);
 
     view.AddLayer(VectorDataset::Open("MWG_THROWING:allocation"));
     EXPECT_THROW((void)view.Scene(), std::bad_alloc);

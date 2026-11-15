@@ -9,6 +9,7 @@
  */
 #include "TestData.h"
 
+#include <new>
 #include <random>
 #include <stdexcept>
 #include <string_view>
@@ -82,8 +83,12 @@ namespace mwg::test
             {
                 OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(_definition));
                 feature->SetFID(id);
-                feature->SetField(0, _state.storedName.c_str());
-                feature->SetField(1, _state.storedValue);
+                if (!_state.ignoredFields)
+                {
+                    ++_state.attributeReadCalls;
+                    feature->SetField(0, _state.storedName.c_str());
+                    feature->SetField(1, _state.storedValue);
+                }
                 if (!_state.ignoredGeometry && id != 1)
                 {
                     OGRPolygon polygon;
@@ -130,6 +135,12 @@ namespace mwg::test
 
             int TestCapability(const char* capability) const override
             {
+                if (capability != nullptr && std::string_view(capability) == OLCFastGetExtent)
+                {
+                    if (_state.failExtentCapabilityAllocation)
+                        throw std::bad_alloc();
+                    return _state.fastExtent ? TRUE : FALSE;
+                }
                 return capability != nullptr &&
                                std::string_view(capability) == OLCRandomWrite
                            ? TRUE

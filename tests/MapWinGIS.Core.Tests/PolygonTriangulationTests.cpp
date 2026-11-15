@@ -72,7 +72,7 @@ namespace
         return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
     }
 
-    double RingArea(const rendering::Ring& ring)
+    double RingArea(const std::span<const rendering::Point> ring)
     {
         double twiceArea = 0.0;
         for (std::size_t index = 0; index < ring.size(); ++index)
@@ -84,7 +84,8 @@ namespace
         return std::abs(twiceArea) * 0.5;
     }
 
-    double PolygonArea(const rendering::Polygon& polygon)
+    template <typename PolygonType>
+    double PolygonArea(const PolygonType& polygon)
     {
         double area = RingArea(polygon.front());
         for (std::size_t index = 1; index < polygon.size(); ++index)
@@ -121,11 +122,13 @@ namespace
         return triangle;
     }
 
-    std::unique_ptr<OGRPolygon> MakeOgrPolygon(const rendering::Polygon& polygon)
+    template <typename PolygonType>
+    std::unique_ptr<OGRPolygon> MakeOgrPolygon(const PolygonType& polygon)
     {
         auto result = std::make_unique<OGRPolygon>();
-        for (const rendering::Ring& ring : polygon)
+        for (std::size_t index = 0; index < polygon.size(); ++index)
         {
+            const auto& ring = polygon[index];
             auto ogrRing = std::make_unique<OGRLinearRing>();
             for (const rendering::Point& point : ring)
             {
@@ -172,8 +175,9 @@ namespace
     /// Asserts that the mesh covers exactly the polygon: areas match, every
     /// triangle stays inside, triangles do not overlap, and no triangle
     /// covers an interior hole.
+    template <typename PolygonType>
     void ExpectMeshCoversPolygon(const rendering::TriangleMesh& mesh,
-                                 const rendering::Polygon& polygon)
+                                const PolygonType& polygon)
     {
         ExpectValidMesh(mesh);
         const std::unique_ptr<OGRPolygon> source = MakeOgrPolygon(polygon);
@@ -212,7 +216,8 @@ namespace
 
         for (std::size_t hole = 1; hole < polygon.size(); ++hole)
         {
-            rendering::Polygon holeOnly{polygon[hole]};
+            const auto& ring = polygon[hole];
+            rendering::Polygon holeOnly{rendering::Ring(ring.begin(), ring.end())};
             const std::unique_ptr<OGRPolygon> holePolygon = MakeOgrPolygon(holeOnly);
             for (const auto& triangle : triangles)
             {

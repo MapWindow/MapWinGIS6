@@ -10,7 +10,7 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 - [x] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 - [x] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 - [x] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
-- [ ] Phase 7 – Rebuild render scenes per layer (#7, #34)
+- [x] Phase 7 – Rebuild render scenes per layer (#7, #34)
 - [ ] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
 - [ ] Phase 9 – Load vector datasets asynchronously (#36)
 
@@ -346,6 +346,14 @@ Suggested fix:
 - Compute the scene extent while iterating geometries, instead of calling `GetExtent()` first, when the driver has no fast extent (check `OLCFastGetExtent`).
 - **Decision**: replacing the nested `vector<vector<vector<Point>>>` with flat coordinate and offset buffers changes a public header and both renderers. Ask the user whether to do it in this phase or as a separate follow-up. If the user agrees, add a test that renders the same scene before and after (the rendering baseline tests) to show the output is unchanged.
 - Measure before and after on a generated layer (for example 100,000 polygons) and put the numbers in the PR description.
+
+**Phase 7 result:** Implemented in [PR #79](https://github.com/MapWindow/MapWinGIS6/pull/79). MapView caches scenes by layer ID and supports selective invalidation. Geometry traversal ignores attributes and computes slow extents in the same pass, also caching them for later map fits. The user approved flat polygon buffers during local review. Core now stores coordinates and ring/polygon ranges contiguously, and triangulation and both renderers consume borrowed views. Prepared-layer insertion retains existing snapshot storage. Driver capability probes propagate allocation failures instead of terminating.
+
+**Validation:** CMake Debug and Release x64 each built and ran 413 non-interactive cases with no failures (three opt-in cases skipped). MSBuild Debug x64 built without warnings, and Core, GDAL initialization, and non-interactive ActiveX tests passed. Both opt-in rendering baselines and all 35 renderer pixel/regression cases passed. The original 34 cases passed before the storage change. A new case compares every pixel before and after copying a flat scene and releasing its original buffers. No build files changed, so compile-command parity was not rerun.
+
+**Measurements:** Sequential Release runs against development `77f7404` and this implementation used a generated GeoPackage with 100,000 32-vertex polygons and a 256-byte attribute. The map contained two copies of that layer. Median hide-and-assemble time fell from 5,083 ms to 68.7 ms; show-and-assemble fell from 10,005 ms to 95.1 ms. Preparing one layer took 4,858 ms before and 4,987 ms after, so preparation did not improve in this run. Adding a second prepared layer took 0.003 ms before and 42.2 ms after because the cache now needs its own copy.
+
+**Limitations:** MapRenderScene remains an owning snapshot. Caching prevents repeated GDAL reads and triangulation but keeps a second copy of coordinates and meshes. Additional process-private memory after an already-prepared first scene grew from 169.4 MiB to 466.1 MiB when adding both map layers. Interactive registration/hosting and network tests were not run. Local Release used the existing default-driver dependencies, not the CI full-driver feature set. Existing CMake ActiveX-test builds report command-line warning D9025 about `/external:W0` and `/external:W4`; no new source warnings were reported.
 
 ### Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
 

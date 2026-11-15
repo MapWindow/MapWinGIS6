@@ -24,78 +24,176 @@
 
 namespace mwg::rendering
 {
+    std::span<const Point> PolygonView::operator[](const std::size_t index) const
+    {
+        if (index >= _rings.size())
+        {
+            throw InvalidArgument("Polygon ring index out of range");
+        }
+        const GeometryRange range = _rings[index];
+        return _coordinates.subspan(range.offset, range.count);
+    }
+
+    PolygonView PolygonBuffer::operator[](const std::size_t index) const
+    {
+        if (index >= _polygons.size())
+        {
+            throw InvalidArgument("Polygon index out of range");
+        }
+        const GeometryRange range = _polygons[index];
+        return PolygonView(_coordinates,
+            std::span<const GeometryRange>(_rings).subspan(range.offset, range.count));
+    }
+
+    PolygonBuffer::PolygonBuffer(const std::initializer_list<Polygon> polygons)
+    {
+        for (const Polygon& polygon : polygons)
+        {
+            AppendPolygon(polygon);
+        }
+    }
+
+    PolygonBuffer& PolygonBuffer::operator=(PolygonBuffer other) noexcept
+    {
+        _coordinates.swap(other._coordinates);
+        _rings.swap(other._rings);
+        _polygons.swap(other._polygons);
+        return *this;
+    }
+
+    void PolygonBuffer::AppendPolygon(const Polygon& polygon)
+    {
+        std::vector<Point> coordinates;
+        std::vector<std::size_t> ringEnds;
+        for (const Ring& ring : polygon)
+        {
+            coordinates.insert(coordinates.end(), ring.begin(), ring.end());
+            ringEnds.push_back(coordinates.size());
+        }
+        AppendPolygon(coordinates, ringEnds);
+    }
+
+    void PolygonBuffer::AppendPolygon(const std::span<const Point> coordinates,
+                                     const std::span<const std::size_t> ringEnds)
+    {
+        std::size_t previous = 0;
+        for (const std::size_t end : ringEnds)
+        {
+            if (end < previous || end > coordinates.size())
+            {
+                throw InvalidArgument("Polygon ring offsets must partition the coordinates");
+            }
+            previous = end;
+        }
+        if (previous != coordinates.size())
+        {
+            throw InvalidArgument("Polygon ring offsets must cover all coordinates");
+        }
+
+        const std::size_t pointCount = _coordinates.size();
+        const std::size_t ringCount = _rings.size();
+        const std::size_t polygonCount = _polygons.size();
+        try
+        {
+            // Insert coordinates first: its size check also prevents overflow
+            // when the existing coordinate count is added to a ring offset.
+            _coordinates.insert(_coordinates.end(), coordinates.begin(), coordinates.end());
+            previous = 0;
+            for (const std::size_t end : ringEnds)
+            {
+                _rings.push_back({pointCount + previous, end - previous});
+                previous = end;
+            }
+            _polygons.push_back({ringCount, ringEnds.size()});
+        }
+        catch (...)
+        {
+            _coordinates.resize(pointCount);
+            _rings.resize(ringCount);
+            _polygons.resize(polygonCount);
+            throw;
+        }
+    }
+
     namespace
     {
-        void AppendRing(const OGRLinearRing* source, Polygon& polygon)
+        class GeometryBuilder
         {
-            if (source == nullptr || source->getNumPoints() < 3)
-            {
-                return;
-            }
+        public:
+            explicit GeometryBuilder(VectorRenderScene& scene) : _scene(scene) {}
 
-            Ring ring;
-            const int count = source->getNumPoints();
-            ring.reserve(static_cast<std::size_t>(count));
-            for (int index = 0; index < count; ++index)
+            void AppendGeometry(const OGRGeometry& geometry)
             {
-                ring.push_back({source->getX(index), source->getY(index)});
-            }
-            polygon.push_back(std::move(ring));
-        }
-
-        void AppendPolygon(const OGRPolygon& source, VectorRenderScene& scene)
-        {
-            Polygon polygon;
-            AppendRing(source.getExteriorRing(), polygon);
-            for (int index = 0; index < source.getNumInteriorRings(); ++index)
-            {
-                AppendRing(source.getInteriorRing(index), polygon);
-            }
-
-            if (!polygon.empty())
-            {
-                scene.polygons.push_back(std::move(polygon));
-            }
-        }
-
-        void AppendGeometry(const OGRGeometry& geometry, VectorRenderScene& scene)
-        {
-            switch (wkbFlatten(geometry.getGeometryType()))
-            {
-            case wkbPolygon:
-                AppendPolygon(static_cast<const OGRPolygon&>(geometry), scene);
-                return;
-
-            case wkbMultiPolygon:
-            {
-                const auto& multiPolygon = static_cast<const OGRMultiPolygon&>(geometry);
-                for (int index = 0; index < multiPolygon.getNumGeometries(); ++index)
+                switch (wkbFlatten(geometry.getGeometryType()))
                 {
-                    const OGRGeometry* polygon = multiPolygon.getGeometryRef(index);
-                    if (polygon != nullptr)
+                case wkbPolygon:
+                    AppendPolygon(static_cast<const OGRPolygon&>(geometry));
+                    return;
+
+                case wkbMultiPolygon:
+                {
+                    const auto& multiPolygon = static_cast<const OGRMultiPolygon&>(geometry);
+                    for (int index = 0; index < multiPolygon.getNumGeometries(); ++index)
                     {
-                        AppendPolygon(static_cast<const OGRPolygon&>(*polygon), scene);
+                        const OGRPolygon* polygon = multiPolygon.getGeometryRef(index);
+                        if (polygon != nullptr)
+                        {
+                            AppendPolygon(*polygon);
+                        }
                     }
+                    return;
                 }
-                return;
-            }
 
-            case wkbCurvePolygon:
-            case wkbMultiSurface:
-            {
-                const std::unique_ptr<OGRGeometry> linear(geometry.getLinearGeometry());
-                if (linear == nullptr)
+                case wkbCurvePolygon:
+                case wkbMultiSurface:
                 {
-                    throw CoreError("Cannot linearize curved vector geometry");
+                    const std::unique_ptr<OGRGeometry> linear(geometry.getLinearGeometry());
+                    if (linear == nullptr)
+                    {
+                        throw CoreError("Cannot linearize curved vector geometry");
+                    }
+                    AppendGeometry(*linear);
+                    return;
                 }
-                AppendGeometry(*linear, scene);
-                return;
+
+                default:
+                    throw CoreError("Vector rendering supports Polygon and MultiPolygon geometries only");
+                }
             }
 
-            default:
-                throw CoreError("Vector rendering supports Polygon and MultiPolygon geometries only");
+        private:
+            void AppendRing(const OGRLinearRing* source)
+            {
+                if (source == nullptr || source->getNumPoints() < 3)
+                {
+                    return;
+                }
+                for (int index = 0; index < source->getNumPoints(); ++index)
+                {
+                    _coordinates.push_back({source->getX(index), source->getY(index)});
+                }
+                _ringEnds.push_back(_coordinates.size());
             }
-        }
+
+            void AppendPolygon(const OGRPolygon& source)
+            {
+                _coordinates.clear();
+                _ringEnds.clear();
+                AppendRing(source.getExteriorRing());
+                for (int index = 0; index < source.getNumInteriorRings(); ++index)
+                {
+                    AppendRing(source.getInteriorRing(index));
+                }
+                if (!_ringEnds.empty())
+                {
+                    _scene.polygons.AppendPolygon(_coordinates, _ringEnds);
+                }
+            }
+
+            VectorRenderScene& _scene;
+            std::vector<Point> _coordinates;
+            std::vector<std::size_t> _ringEnds;
+        };
     }
 
     VectorRenderScene detail::BuildVectorRenderScene(const VectorLayer& layer)
@@ -106,25 +204,31 @@ namespace mwg::rendering
         }
 
         VectorRenderScene scene;
-        scene.extent = layer.GetExtent();
+        const bool hasFastExtent = mwg::detail::VectorLayerAccess::HasFastExtent(layer);
+        if (hasFastExtent)
+        {
+            scene.extent = layer.GetExtent();
+        }
+        GeometryBuilder builder(scene);
         scene.sourceFeatureCount = mwg::detail::VectorLayerAccess::ForEachGeometry(
             layer,
-            [&scene](const OGRGeometry& geometry)
+            [&builder](const OGRGeometry& geometry)
             {
-                AppendGeometry(geometry, scene);
-            });
+                builder.AppendGeometry(geometry);
+            },
+            hasFastExtent ? nullptr : &scene.extent);
 
         // Prepare one fill mesh per polygon while the scene is created, so
         // renderers never triangulate per frame. A polygon that cannot be
         // triangulated keeps a null mesh; its rings above remain available
         // for outlines and ring-based backends such as GDI.
         scene.fillMeshes.reserve(scene.polygons.size());
-        for (const Polygon& polygon : scene.polygons)
+        for (std::size_t index = 0; index < scene.polygons.size(); ++index)
         {
             std::optional<TriangleMesh> mesh;
             try
             {
-                mesh = TriangulatePolygon(polygon);
+                mesh = TriangulatePolygon(scene.polygons[index]);
             }
             catch (const CoreError&)
             {

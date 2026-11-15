@@ -31,7 +31,8 @@ namespace mwg
     /// through GetViewport(). Changes to the layer collection or visibility
     /// mark the scene stale; Scene() rebuilds it on the next call. Adding a
     /// prepared scene retains the existing geometry instead. Edits to source
-    /// geometry are not observed; call InvalidateScene after them.
+    /// geometry are not observed. Call InvalidateLayerScene for each affected
+    /// map layer, or InvalidateScene for all layers.
     ///
     /// Initial view: while the viewport has no view, adding a layer fits the
     /// viewport to the map. A fit that cannot happen because the viewport has
@@ -72,7 +73,8 @@ namespace mwg
         /// The scene must match the specified source layer without intervening
         /// edits. An empty scene adds a layer with no drawable geometry.
         /// Transfers scene ownership and retains the current layers' scenes,
-        /// rebuilding stale scenes first. The next Scene() does not reread data.
+        /// rebuilding stale scenes first. The cache owns a separate copy of
+        /// the new scene. The next Scene() does not reread data.
         /// Fitting and argument errors are the same as the other AddLayer overload.
         /// \throws std::bad_alloc when memory runs out.
         LayerId AddLayer(std::shared_ptr<VectorDataset> dataset,
@@ -145,16 +147,29 @@ namespace mwg
         /// \throws InvalidArgument as Viewport::Pan does.
         bool Pan(double deltaX, double deltaY);
 
-        /// The render scene of the current map, rebuilt first when the map
-        /// changed since the last call; see rendering::CreateMapRenderScene.
-        /// The reference stays valid for the lifetime of the MapView; a later
-        /// call that rebuilds the scene replaces its contents.
+        /// The render scene of the current map, reassembled from cached
+        /// per-layer scenes when the map or a layer scene changed. The
+        /// reference stays valid for the lifetime of the MapView; a later
+        /// call that reassembles the scene replaces its contents. Geometry
+        /// for a visible uncached layer is read once; visibility changes reuse
+        /// its cache. Reassembly copies cached geometry into the map snapshot.
+        /// Failed layers retain their diagnostics until explicitly invalidated.
         /// \throws std::bad_alloc when memory runs out.
         [[nodiscard]] const rendering::MapRenderScene& Scene();
 
-        /// Marks the render scene stale, for example after source geometry
-        /// was edited. Returns true: the frame must be redrawn.
+        /// Marks every cached layer scene stale, for example after edits that
+        /// may affect multiple source layers. Visible scenes are rebuilt by the
+        /// next Scene() call; hidden scenes wait until shown.
+        /// Returns true: the frame must be redrawn.
         bool InvalidateScene() noexcept;
+
+        /// Marks one layer's cached scene stale after its source geometry was
+        /// edited. Other layer scenes remain cached. Returns false when id
+        /// does not identify a current layer; otherwise returns true and the
+        /// layer is rebuilt when next visible in Scene(). Also retries a
+        /// previously failed layer. Duplicate map layers of the same source
+        /// have independent caches; invalidate each affected map layer.
+        bool InvalidateLayerScene(LayerId id) noexcept;
 
     private:
         /// Clears a pending fit when changed is true and returns changed.
