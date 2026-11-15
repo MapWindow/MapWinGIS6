@@ -12,6 +12,7 @@
     <comClass
       clsid="{2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F}"
       threadingModel="Apartment"
+      miscStatus="recomposeonresize,cantlinkinside,insideout,activatewhenvisible,setclientsitefirst"
       progid="MapWinGIS6.Control.6"
       tlbid="{E3E35346-7259-41AB-B419-D87D0BEE867E}" />
   </file>
