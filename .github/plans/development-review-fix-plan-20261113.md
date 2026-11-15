@@ -7,8 +7,8 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 - [x] Phase 1 – Make the CMake test build complete and trustworthy (#8, #9, #10, #29, #40)
 - [x] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
 - [x] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
-- [ ] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
-- [ ] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
+- [x] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
+- [x] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 - [x] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
 - [ ] Phase 7 – Rebuild render scenes per layer (#7, #34)
 - [ ] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
@@ -236,6 +236,13 @@ Suggested fix:
 - Find the public APIs that call `ToUtf8` on caller-supplied paths. Convert the `std::system_error` into the API's normal failure (a `false` result with a recorded diagnostic, or a `CoreError` subclass for throwing APIs).
 - Test with a path containing an unpaired surrogate (`L"\xD800"`).
 
+**Phase 4 result:** Implemented in [PR #76](https://github.com/MapWindow/MapWinGIS6/pull/76). Module-lifetime policy: Core pins itself with `GET_MODULE_HANDLE_EX_FLAG_PIN` before registering the GDAL error handler, and the handler state is a deliberately leaked process-lifetime object; there is no shutdown or unload path and nothing runs from `DllMain`. A host-installed error handler is preserved and receives diagnostics after the MapWinGIS logger (GDAL's default and quiet handlers are excluded). Missing GDAL/PROJ data directories are checked without throwing and reported as warnings, and non-empty paths are configured explicitly. `Initialize(gdalDataDir, projDataDir)` returns `[[nodiscard]] bool`, and `Initialize()` returns early once initialized. `GDALCheckVersion` validates the runtime, a `static_assert` enforces GDAL 3.12.4 for the algorithm API, and path conversion failures become `InvalidArgument`. First-call behaviour is tested in a separate `MapWinGIS.Core.GdalInitialization.Tests` executable, built by CMake and MSBuild and run by CTest and the MSBuild CI job.
+
+**Limitations and validation notes:**
+
+- A real Core unload test is not practical: Core is pinned by design and cannot be unloaded from the test process.
+- Local Windows validation after merging `development`: CMake `x64-debug` build passed and CTest ran 393 tests with zero failures (three skipped: the public COG network test and two rendering benchmarks). MSBuild Debug x64 passed; `MapWinGIS.Core.Tests.exe` (322 passed, 1 skipped), `MapWinGIS.Core.GdalInitialization.Tests.exe` (1 passed) and `MapWinGIS.ActiveX.Tests.exe` (67 passed, 3 skipped) all passed. Compile-command parity passed with no lost flags; its rebuild logged two `MSB3061` access-denied warnings while test projects replaced shared runtime DLLs.
+
 ### Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 
 **#3 – Conversion failures leak operation slots** (`src/MapWinGIS.ActiveX/MapWinGISControl.cpp:309-346` `EndGdalOperation`, `ComConversion.cpp:85-126`, `GdalOperationDispatcher.cpp:267-268`)
@@ -268,6 +275,13 @@ Suggested fix:
 - Resume event delivery when the window is created again (`WM_CREATE`/`OnCreate`) and on in-place activation, not only on `WM_SIZE` or `Begin`.
 - **Decision**: ask the user whether `IOleObject::Close` followed by re-activation should allow GDAL operations again (recommended: yes, reset the closing state on `SetClientSite` with a non-null site or on activation) or permanently disable them (then document it in `ARCHITECTURE.md` and the IDL).
 - Tests: destroy and re-create the control window while an operation runs, and check that the completion event arrives without a `WM_SIZE`. Add a Close-then-reactivate test for the chosen behaviour.
+
+**Phase 5 result:** Implemented in [PR #78](https://github.com/MapWindow/MapWinGIS6/pull/78). Diagnostic text uses the lossy `DiagnosticToBstr` (invalid UTF-8 and embedded NUL become U+FFFD), native exception messages are converted from the active code page in one helper, and `EndGdalOperation` releases the slot before any COM allocation and maps exceptions to distinct HRESULTs with error info. Failing automation calls set error info. The retry timer is armed only while operations are outstanding, is owner-thread-only, and is stopped when the last slot is ended. Decision #23: `IOleObject::Close` followed by reactivation (`SetClientSite` with a site, or window creation) allows GDAL operations again; the dispatch window is recreated on the next `BeginGdalOperation`.
+
+**Limitations and validation notes:**
+
+- The initial GitHub Actions run failed because `StartRetryTimer()` results were discarded (`C4834` as error). Retry-timer updates now go through one helper that reports a failure to arm it. `GdalDispatchWindow.h` now includes `<atlbase.h>` itself, because the ActiveX tests include it directly.
+- Local Windows validation after merging `development`: CMake `x64-debug` build passed and CTest ran 399 tests with zero failures (three skipped: the public COG network test and two rendering benchmarks). MSBuild Debug x64 passed; `MapWinGIS.Core.Tests.exe` (322 passed, 1 skipped), `MapWinGIS.Core.GdalInitialization.Tests.exe` (3 passed) and `MapWinGIS.ActiveX.Tests.exe` (70 passed, 2 skipped, interactive hosting test excluded) all passed. Compile-command parity passed with no lost flags and no new CMake warnings.
 
 ### Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
 

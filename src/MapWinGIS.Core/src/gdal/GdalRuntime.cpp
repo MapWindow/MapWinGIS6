@@ -11,6 +11,7 @@
 #include "mapwingis/gdal/GdalDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/gdal/GdalProgress.h"
+#include "internal/GdalDiagnosticDispatch.h"
 #include "internal/GdalExecution.h"
 #include "internal/GdalProgressAdapterAccess.h"
 
@@ -89,17 +90,7 @@ namespace mwg
                 return;
             }
 
-            try
-            {
-                const LogLevel level = errorClass >= CE_Failure ? LogLevel::Error
-                    : errorClass == CE_Warning ? LogLevel::Warning : LogLevel::Debug;
-                GdalEnvironment::ReportDiagnostic(level, message);
-            }
-            catch (...)
-            {
-                if (!scope.captureException)
-                    scope.captureException = std::current_exception();
-            }
+            detail::DispatchGdalDiagnostic(errorClass, errorCode, message, scope.captureException);
         }
     };
 

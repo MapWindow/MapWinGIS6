@@ -50,18 +50,25 @@ namespace mwg::activex
         [[nodiscard]] LRESULT OnDispatch(BOOL& handled);
         void Close() noexcept;
         void Shutdown() noexcept;
+        [[nodiscard]] HRESULT Reactivate() noexcept;
 
     private:
         static bool PostDispatchMessage(void* window) noexcept;
         static void UnlockActiveXModule(void*) noexcept;
         void DestroyDispatchWindow() noexcept;
+        void ArmRetryTimer() noexcept;
+        void UpdateRetryTimer() noexcept;
         [[nodiscard]] HRESULT FireProgress(
-            const GdalOperationNotification& notification);
-        [[nodiscard]] HRESULT FireCompleted(std::uint64_t operationId);
+            const GdalOperationNotification& notification,
+            std::uint64_t generation);
+        [[nodiscard]] HRESULT FireCompleted(
+            std::uint64_t operationId,
+            std::uint64_t generation);
         [[nodiscard]] HRESULT FireEvent(
             DISPID eventId,
             DISPPARAMS& parameters,
-            std::uint64_t operationId);
+            std::uint64_t operationId,
+            std::uint64_t generation);
 
         GdalOperationDispatcher _dispatcher;
         ATL::CComDynamicUnkArray& _sinks;

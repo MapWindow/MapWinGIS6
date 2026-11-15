@@ -199,8 +199,9 @@ msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release "-p:Mw
 CI uses this feature set for Release artifacts. Core tests built with
 `full-drivers` require HDF5, NetCDF, LIBKML, PostgreSQL, and SpatiaLite support.
 The SpatiaLite test creates a spatial database without an external server.
-Pull requests and pushes to `development` build and test Debug and full-driver
-Release for x64 with both CMake and MSBuild. Pushes to `main` also cover Win32.
+Pull requests and pushes to `development` build and test x64 Debug and
+full-driver Release with both CMake and MSBuild; CMake also covers Win32 Debug.
+Pushes to `main` cover both Win32 configurations.
 Each job has a 180-minute timeout.
 
 ### Runtime data
@@ -224,6 +225,14 @@ rebuild or a second platform is fast. To share a cache across machines, set
 ```powershell
 $env:VCPKG_BINARY_SOURCES = 'clear;files,\\server\share\vcpkg-cache,readwrite'
 ```
+
+GitHub Actions keys its vcpkg cache by platform, requested feature set, runner
+image, and the dependency manifests and triplets. Pushes to `development` and
+`main` save the cache after dependency installation; `main` needs its own
+entries because GitHub does not let the default branch restore caches from
+`development`. Pull requests restore these caches without creating separate
+pull-request caches. Debug and CMake parity use the `tests` feature set, while
+Release uses `full` drivers.
 
 ## Running the legacy MSBuild tests
 
