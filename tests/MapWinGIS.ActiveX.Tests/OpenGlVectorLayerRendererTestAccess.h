@@ -2,7 +2,7 @@
 
 /**
  * @file OpenGlVectorLayerRendererTestAccess.h
- * @brief Provides test-only access to the OpenGL renderer's context-loss path.
+ * @brief Provides test-only access to OpenGL recovery and retained buffers.
  */
 #pragma once
 
@@ -13,6 +13,36 @@ namespace mwg::activex::testing
     class OpenGlVectorLayerRendererTestAccess final
     {
     public:
+        [[nodiscard]] static std::size_t StagingCapacity(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer._pixelBuffer.capacity();
+        }
+
+        [[nodiscard]] static const unsigned char* StagingData(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer._pixelBuffer.data();
+        }
+
+        static void SimulateFailedRecovery(
+            OpenGlVectorLayerRenderer& renderer, const int width, const int height) noexcept
+        {
+            renderer.Release();
+            renderer._contextInvalid = true;
+            renderer._initializationFailed = true;
+            renderer._initializationFailureReason = L"Simulated context initialization failure.";
+            renderer._retryTargetWidth = width;
+            renderer._retryTargetHeight = height;
+            renderer._initializationRetryDrawsRemaining = 60;
+        }
+
+        [[nodiscard]] static unsigned int RetryDrawsRemaining(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer._initializationRetryDrawsRemaining;
+        }
+
         static void SimulateContextLoss(OpenGlVectorLayerRenderer& renderer) noexcept
         {
             renderer.SimulateContextLoss();

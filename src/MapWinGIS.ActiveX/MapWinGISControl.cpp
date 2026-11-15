@@ -38,9 +38,12 @@
 #include <windowsx.h>
 
 #include "ComConversion.h"
+#include "PanBlit.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/vector/VectorDataset.h"
+
+OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)
 
 namespace
 {
@@ -719,6 +722,15 @@ bool CMapWinGISControl::ResizeView(const LONG width, const LONG height) noexcept
     catch (const std::exception& exception)
     {
         ::OutputDebugStringA(exception.what());
+        InvalidateLayerCache();
+        FireViewChange();
+        return false;
+    }
+    catch (...)
+    {
+        ::OutputDebugStringW(L"MapWinGIS: resizing the map view failed.\n");
+        InvalidateLayerCache();
+        FireViewChange();
         return false;
     }
 }
@@ -1137,27 +1149,20 @@ bool CMapWinGISControl::TryBlitCachedLayers(
         return false;
     }
 
-    // Screen position of a fixed map point shifts by the center difference
-    // divided by the resolution, with the Y axis pointing down. The center
-    // accumulates rounding through repeated pan operations, so the offset can
-    // sit a tiny amount off an integer; anything within half a pixel rounds to
-    // the nearest pixel, which is imperceptible during the drag and corrected
-    // by the final render when the drag ends.
+    // GDI BitBlt addresses whole pixels only. The accumulated map-center
+    // arithmetic can introduce tiny floating-point noise, but a genuine
+    // fractional-pixel shift must use a fresh render rather than rounding.
     const double offsetX = (cacheCenter->x - center->x) / *resolution;
     const double offsetY = (center->y - cacheCenter->y) / *resolution;
-    const LONG shiftX = static_cast<LONG>(std::lround(offsetX));
-    const LONG shiftY = static_cast<LONG>(std::lround(offsetY));
-    if (std::abs(offsetX - static_cast<double>(shiftX)) >= 0.5 ||
-        std::abs(offsetY - static_cast<double>(shiftY)) >= 0.5)
-    {
-        // A clamped pan (or extreme accumulated drift) leaves a sub-pixel-or-
-        // worse offset; re-render so the frame does not jitter between a
-        // shifted blit and a true render.
-        return false;
-    }
-
     const LONG width = static_cast<LONG>(viewport.Width());
     const LONG height = static_cast<LONG>(viewport.Height());
+    LONG shiftX = 0;
+    LONG shiftY = 0;
+    if (!mwg::activex::TryGetWholePixelPanShift(offsetX, width, shiftX) ||
+        !mwg::activex::TryGetWholePixelPanShift(offsetY, height, shiftY))
+    {
+        return false;
+    }
 
     // Destination (x, y) shows cache pixel (x - shiftX, y - shiftY); blit the
     // rectangle where that source position is inside the cached frame. The
@@ -1189,11 +1194,12 @@ HRESULT CMapWinGISControl::DrawLayersAndUpdateCache(
     const RECT& frameBounds,
     const mwg::rendering::MapRenderScene& scene,
     const mwg::Viewport& viewport,
-    const bool useCache)
+    const bool useCache,
+    const bool retainRendererBuffers)
 {
     if (!useCache)
     {
-        return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+        return _renderer.Draw(frameDc, frameBounds, scene, viewport, retainRendererBuffers);
     }
 
     const int width = viewport.Width();
@@ -1202,7 +1208,7 @@ HRESULT CMapWinGISControl::DrawLayersAndUpdateCache(
     {
         // Without a cache the layers are drawn straight into the frame; the
         // next draw retries the allocation.
-        return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+        return _renderer.Draw(frameDc, frameBounds, scene, viewport, retainRendererBuffers);
     }
 
     HDC cacheDc = _layerCache.Get();
@@ -1212,10 +1218,10 @@ HRESULT CMapWinGISControl::DrawLayersAndUpdateCache(
             &cacheBounds,
             ::GetSysColorBrush(COLOR_WINDOW)) == 0)
     {
-        return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+        return _renderer.Draw(frameDc, frameBounds, scene, viewport, retainRendererBuffers);
     }
 
-    const HRESULT result = _renderer.Draw(cacheDc, cacheBounds, scene, viewport);
+    const HRESULT result = _renderer.Draw(cacheDc, cacheBounds, scene, viewport, retainRendererBuffers);
     if (FAILED(result))
     {
         _layerCacheValid = false;
@@ -1243,7 +1249,7 @@ HRESULT CMapWinGISControl::DrawLayersAndUpdateCache(
     // A blit between different devices (printer or metafile targets) can
     // fail; present the layers by drawing straight to the target.
     _layerCacheValid = false;
-    return _renderer.Draw(frameDc, frameBounds, scene, viewport);
+    return _renderer.Draw(frameDc, frameBounds, scene, viewport, retainRendererBuffers);
 }
 
 HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
@@ -1263,16 +1269,26 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
     const LONGLONG height = static_cast<LONGLONG>(bounds.bottom) - bounds.top;
     const bool drawable = width > 0 && height > 0 &&
         width <= mwg::Viewport::kMaxDimension && height <= mwg::Viewport::kMaxDimension;
+    const mwg::Viewport& clientViewport = _view.GetViewport();
+    const bool alternateSize =
+        width != clientViewport.Width() || height != clientViewport.Height();
+
+    // Printing, metafiles, and scaled draws must not resize or retain memory
+    // in the interactive screen buffers. Their frame and OpenGL staging
+    // storage are temporary and released when this draw returns.
+    mwg::activex::FrameBuffer temporaryFrameBuffer;
+    mwg::activex::FrameBuffer& frameBuffer =
+        alternateSize ? temporaryFrameBuffer : _frameBuffer;
 
     // Compose the frame in an offscreen buffer and present it with a single
     // blit, so the visible surface never shows the background erase or a
     // partially drawn frame. Drawing straight to the target device context
     // is the fallback for sizes the buffer cannot hold.
     const bool buffered = drawable &&
-        _frameBuffer.Resize(
+        frameBuffer.Resize(
             static_cast<int>(width),
             static_cast<int>(height));
-    HDC frameDc = buffered ? _frameBuffer.Get() : drawInfo.hdcDraw;
+    HDC frameDc = buffered ? frameBuffer.Get() : drawInfo.hdcDraw;
     RECT frameBounds = buffered
         ? RECT{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)}
         : bounds;
@@ -1281,7 +1297,7 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
     // origin; it is only valid while the frame is the offscreen buffer. A
     // failed presentation blit switches to the target DC and bounds, and
     // must not use the cache.
-    bool useLayerCache = buffered;
+    bool useLayerCache = buffered && !alternateSize;
 
     const auto renderFrame = [&]() -> HRESULT
     {
@@ -1319,7 +1335,8 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
                     frameBounds,
                     scene,
                     viewport,
-                    useLayerCache);
+                    useLayerCache,
+                    !alternateSize);
             }
             return S_OK;
         }

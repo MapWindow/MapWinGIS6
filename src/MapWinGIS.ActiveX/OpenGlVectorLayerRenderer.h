@@ -25,6 +25,7 @@ namespace mwg::activex
     namespace testing
     {
         class OpenGlVectorLayerRendererTestAccess;
+        class MapWinGISControlTestAccess;
     }
 
     class OpenGlVectorLayerRenderer final : public IVectorRenderBackend
@@ -60,12 +61,15 @@ namespace mwg::activex
          * without drawing when any polygon lacks a usable fill mesh or when
          * no OpenGL context with framebuffer-object support is available, so
          * callers can fall back to another backend for the whole frame.
+         * When retainStagingBuffer is false, a temporary renderer owns the
+         * draw's CPU and GPU buffers, leaving the screen resources unchanged.
          */
         [[nodiscard]] HRESULT Draw(
             HDC deviceContext,
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
-            const Viewport& viewport) noexcept override;
+            const Viewport& viewport,
+            bool retainStagingBuffer = true) noexcept override;
 
         [[nodiscard]] std::wstring_view GetLastFailureReason() const noexcept
         {
@@ -74,6 +78,7 @@ namespace mwg::activex
 
     private:
         friend class testing::OpenGlVectorLayerRendererTestAccess;
+        friend class testing::MapWinGISControlTestAccess;
 
         /// True when every polygon of the scene has a usable triangulated
         /// fill mesh and finite coordinates. Exposed for tests so geometry
@@ -131,6 +136,9 @@ namespace mwg::activex
         std::wstring_view _lastFailureReason =
             L"OpenGL was not selected for this frame.";
         std::wstring_view _initializationFailureReason;
-        std::vector<unsigned char> _rgbaPixels;
+        std::vector<unsigned char> _pixelBuffer;
+        int _retryTargetWidth = 0;
+        int _retryTargetHeight = 0;
+        unsigned int _initializationRetryDrawsRemaining = 0;
     };
 }

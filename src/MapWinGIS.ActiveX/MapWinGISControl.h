@@ -11,17 +11,24 @@
  */
 #pragma once
 
-#include "ActiveXModule.h"
 #include "resource.h"
 
 #include <cstdint>
 
+#include <atlbase.h>
+#include <atlcom.h>
 #include <atlctl.h>
 
+#include "MapWinGIS.ActiveX_i.h"
 #include "mapwingis/map/MapView.h"
 #include "FrameBuffer.h"
 #include "GdalEventSource.h"
 #include "VectorLayerRenderer.h"
+
+namespace mwg::activex::testing
+{
+    class MapWinGISControlTestAccess;
+}
 
 class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
@@ -172,6 +179,8 @@ public:
     ~CMapWinGISControl();
 
 private:
+    friend class mwg::activex::testing::MapWinGISControlTestAccess;
+
     HRESULT LoadVectorDatasetImpl(BSTR path, LONGLONG* layerId, REFIID sourceIid);
 
     /// Resizes the view to a host size, clamped to the supported range, and
@@ -209,7 +218,8 @@ private:
         const RECT& frameBounds,
         const mwg::rendering::MapRenderScene& scene,
         const mwg::Viewport& viewport,
-        bool useCache);
+        bool useCache,
+        bool retainRendererBuffers);
 
     mwg::MapView _view;
     LONGLONG _featureCount = 0;
@@ -227,5 +237,3 @@ private:
     POINT _lastPanPoint{};
     bool _isPanning = false;
 };
-
-OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)

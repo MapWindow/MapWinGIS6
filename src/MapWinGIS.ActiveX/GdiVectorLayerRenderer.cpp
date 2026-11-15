@@ -209,7 +209,8 @@ namespace mwg::activex
         const HDC deviceContext,
         const RECT& bounds,
         const rendering::MapRenderScene& scene,
-        const Viewport& viewport) noexcept
+        const Viewport& viewport,
+        const bool) noexcept
     {
         _failedLayers.clear();
         if (deviceContext == nullptr || !MatchesViewport(bounds, viewport))

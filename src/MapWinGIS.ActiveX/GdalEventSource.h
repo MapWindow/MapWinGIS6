@@ -14,7 +14,9 @@
 #include <string>
 #include <vector>
 
-#include "ActiveXModule.h"
+#include <atlbase.h>
+#include <atlcom.h>
+
 #include "GdalDispatchWindow.h"
 #include "GdalOperationDispatcher.h"
 

@@ -15,14 +15,15 @@ namespace mwg::activex
         const HDC deviceContext,
         const RECT& bounds,
         const rendering::MapRenderScene& scene,
-        const Viewport& viewport) noexcept
+        const Viewport& viewport,
+        const bool retainStagingBuffer) noexcept
     {
         _activeBackend.reset();
 
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
             const HRESULT openGlResult =
-                _openGlRenderer.Draw(deviceContext, bounds, scene, viewport);
+                _openGlRenderer.Draw(deviceContext, bounds, scene, viewport, retainStagingBuffer);
             if (openGlResult == S_OK)
             {
                 _activeBackend = VectorRenderBackendKind::OpenGL;

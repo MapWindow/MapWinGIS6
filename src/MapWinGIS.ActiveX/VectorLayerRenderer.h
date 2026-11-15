@@ -44,7 +44,8 @@ namespace mwg::activex
             HDC deviceContext,
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
-            const Viewport& viewport) noexcept;
+            const Viewport& viewport,
+            bool retainStagingBuffer = true) noexcept;
 
         /// Layers skipped by the last Draw call; empty when every layer was
         /// drawn.
@@ -68,6 +69,8 @@ namespace mwg::activex
         }
 
     private:
+        friend class testing::MapWinGISControlTestAccess;
+
         OpenGlVectorLayerRenderer _openGlRenderer;
         GdiVectorLayerRenderer _gdiRenderer;
         VectorRenderBackendPreference _preference =

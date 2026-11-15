@@ -51,6 +51,8 @@
   <ItemGroup>
     <ClInclude Include="..\MapWinGIS.Core.Tests\TestData.h" />
     <ClInclude Include="OpenGlVectorLayerRendererTestAccess.h" />
+    <ClInclude Include="MapWinGISControlTestAccess.h" />
+    <ClInclude Include="..\..\src\MapWinGIS.ActiveX\PanBlit.h" />
   </ItemGroup>
 
   <ItemGroup>

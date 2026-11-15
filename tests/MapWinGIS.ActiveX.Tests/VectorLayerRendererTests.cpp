@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "OpenGlVectorLayerRenderer.h"
+#include "PanBlit.h"
 #include "OpenGlVectorLayerRendererTestAccess.h"
 #include "VectorLayerRenderer.h"
 #include "ViewTransform.h"
@@ -1182,5 +1183,104 @@ TEST(VectorLayerRenderer, DrawsVerySmallAndVeryElongatedTargets)
         mwg::activex::VectorLayerRenderer renderer;
         EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK)
             << bounds.right << " x " << bounds.bottom;
+    }
+}
+
+TEST(PanBlitTest, AcceptsOnlyWholePixelShiftsInsideTheFrame)
+{
+    LONG shift = 99;
+    EXPECT_TRUE(mwg::activex::TryGetWholePixelPanShift(12.0, 100, shift));
+    EXPECT_EQ(shift, 12);
+
+    EXPECT_TRUE(mwg::activex::TryGetWholePixelPanShift(-7.0 + 5e-7, 100, shift));
+    EXPECT_EQ(shift, -7);
+
+    shift = 99;
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(2.25, 100, shift));
+    EXPECT_EQ(shift, 99);
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(99.9999999, 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(100.0, 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(-100.0, 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(
+        std::numeric_limits<double>::infinity(), 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(
+        std::numeric_limits<double>::quiet_NaN(), 100, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(0.0, 0, shift));
+    EXPECT_FALSE(mwg::activex::TryGetWholePixelPanShift(
+        std::numeric_limits<double>::max(), 100, shift));
+}
+
+TEST(VectorLayerRenderer, AlternateSizeDrawPreservesScreenStaging)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(240, 201);
+    ASSERT_TRUE(surface.IsValid());
+    const auto scene = MakeTwoLayerScene();
+    const RECT screenBounds{0, 0, 120, 100};
+    const auto screenViewport = FitViewport(screenBounds, kTwoLayerExtent);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT first = renderer.Draw(surface.Get(), screenBounds, scene, screenViewport);
+    if (first == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(first, S_OK);
+    const auto capacity = Access::StagingCapacity(renderer);
+    const auto* data = Access::StagingData(renderer);
+    ASSERT_GT(capacity, 0U);
+
+    const RECT scaledBounds{0, 0, 240, 201};
+    const auto scaledViewport = FitViewport(scaledBounds, kTwoLayerExtent);
+    ASSERT_EQ(renderer.Draw(surface.Get(), scaledBounds, scene, scaledViewport, false), S_OK);
+    ExpectTwoLayerPixels(surface.Get(), scaledViewport);
+    EXPECT_EQ(Access::StagingCapacity(renderer), capacity);
+    EXPECT_EQ(Access::StagingData(renderer), data);
+    EXPECT_EQ(renderer.Draw(nullptr, scaledBounds, scene, scaledViewport, false), E_INVALIDARG);
+    EXPECT_EQ(Access::StagingCapacity(renderer), capacity);
+    EXPECT_EQ(Access::StagingData(renderer), data);
+    ASSERT_EQ(renderer.Draw(surface.Get(), screenBounds, scene, screenViewport), S_OK);
+    ExpectTwoLayerPixels(surface.Get(), screenViewport);
+}
+
+TEST(VectorLayerRenderer, FailedContextRecoveryBacksOffAndRetriesAfterTheDelayOrResize)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const auto scene = MakeConvexPolygonScene();
+    const RECT bounds{0, 0, 120, 100};
+    const auto viewport = FitViewport(bounds);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    Access::SimulateFailedRecovery(renderer, 120, 100);
+    for (unsigned int remaining = 60; remaining > 0; --remaining)
+    {
+        ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_FALSE);
+        EXPECT_EQ(renderer.GetLastFailureReason(), L"Simulated context initialization failure.");
+        EXPECT_EQ(Access::RetryDrawsRemaining(renderer), remaining - 1);
+    }
+    EXPECT_TRUE(SUCCEEDED(renderer.Draw(surface.Get(), bounds, scene, viewport)));
+    EXPECT_NE(renderer.GetLastFailureReason(), L"Simulated context initialization failure.");
+
+    Access::SimulateFailedRecovery(renderer, 119, 100);
+    EXPECT_TRUE(SUCCEEDED(renderer.Draw(surface.Get(), bounds, scene, viewport)));
+    EXPECT_NE(renderer.GetLastFailureReason(), L"Simulated context initialization failure.");
+}
+
+TEST(VectorLayerRenderer, NonRetainingDrawsPreserveInitializationRetryBackoff)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const auto scene = MakeConvexPolygonScene();
+    const RECT bounds{0, 0, 120, 100};
+    const auto viewport = FitViewport(bounds);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    Access::SimulateFailedRecovery(renderer, 120, 100);
+
+    for (unsigned int remaining = 59; remaining > 56; --remaining)
+    {
+        ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport, false), S_FALSE);
+        EXPECT_EQ(renderer.GetLastFailureReason(), L"Simulated context initialization failure.");
+        EXPECT_EQ(Access::RetryDrawsRemaining(renderer), remaining);
     }
 }
