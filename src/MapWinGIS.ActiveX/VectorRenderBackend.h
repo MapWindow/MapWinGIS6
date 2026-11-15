@@ -39,6 +39,8 @@ namespace mwg::activex
         /// bounds is the device rectangle of the viewport; its size must
         /// equal the viewport size, and the viewport must be valid.
         /// Returns S_FALSE when the backend cannot render this scene or target.
+        /// When retainStagingBuffer is false, temporary rendering resources
+        /// must not replace retained screen buffers.
         [[nodiscard]] virtual HRESULT Draw(
             HDC deviceContext,
             const RECT& bounds,

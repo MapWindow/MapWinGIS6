@@ -33,6 +33,14 @@ frame is reused only for whole-pixel offsets; fractional or out-of-frame shifts
 fall back to rendering. `WM_ERASEBKGND` is suppressed because `OnDraw` paints
 an opaque frame.
 
+Alternate-size draws use a temporary OpenGL renderer, preserving both the
+screen CPU staging allocation and its GPU framebuffer. Clearing the screen
+staging vector for a temporary draw loses that allocation even when the next
+screen frame uses a cached blit. After a lost context is released, failed
+replacement initialization must retain its failure state for the 60-draw
+retry delay. A size change bypasses the delay.
+See `OpenGlVectorLayerRenderer::Draw` and the renderer/control regression tests.
+
 Core objects are not thread-safe by default. The control serializes their use.
 ActiveX-specific implementation units are also compiled into
 `MapWinGIS.ActiveX.Impl.lib`, allowing native tests to exercise them without

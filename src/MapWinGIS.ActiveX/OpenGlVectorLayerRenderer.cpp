@@ -820,13 +820,16 @@ namespace mwg::activex
         const Viewport& viewport,
         const bool retainStagingBuffer) noexcept
     {
-        _lastFailureReason = L"OpenGL did not render this frame.";
         if (!retainStagingBuffer)
         {
-            // A non-interactive draw must not retain a previous screen
-            // buffer, including when target validation rejects this frame.
-            std::vector<unsigned char>().swap(_pixelBuffer);
+            // Keep both CPU staging and GPU targets of the screen renderer
+            // unchanged. The temporary renderer releases all scaled resources.
+            OpenGlVectorLayerRenderer temporaryRenderer;
+            const HRESULT result = temporaryRenderer.Draw(deviceContext, bounds, scene, viewport);
+            _lastFailureReason = temporaryRenderer.GetLastFailureReason();
+            return result;
         }
+        _lastFailureReason = L"OpenGL did not render this frame.";
         const TargetValidation validation =
             ValidateTarget(deviceContext, bounds, scene, viewport);
         if (!validation.target.has_value())
@@ -835,13 +838,12 @@ namespace mwg::activex
         }
         const Target& target = *validation.target;
 
-        // Keep the flag set until a replacement context initializes, so a
-        // transient recreation failure is retried on later draws.
+        // Release a lost context once. If replacement initialization fails,
+        // preserve its failure state so later draws respect the retry delay.
         if (_contextInvalid)
         {
             Release();
-            _initializationFailed = false;
-            _initializationFailureReason = {};
+            _contextInvalid = false;
         }
 
         if (_initializationFailed &&
@@ -889,28 +891,15 @@ namespace mwg::activex
             target.pixelWidth * target.pixelHeight * kBytesPerPixel;
         if (!EnsureStaging(stagingBytes))
         {
-            if (!retainStagingBuffer)
-            {
-                std::vector<unsigned char>().swap(_pixelBuffer);
-            }
             return S_FALSE;
         }
 
         const HRESULT renderResult = RenderScene(scene, viewport, target);
         if (FAILED(renderResult) || renderResult == S_FALSE)
         {
-            if (!retainStagingBuffer)
-            {
-                std::vector<unsigned char>().swap(_pixelBuffer);
-            }
             return renderResult;
         }
 
-        const HRESULT copyResult = CopyToDeviceContext(deviceContext, bounds, target);
-        if (!retainStagingBuffer)
-        {
-            std::vector<unsigned char>().swap(_pixelBuffer);
-        }
-        return copyResult;
+        return CopyToDeviceContext(deviceContext, bounds, target);
     }
 }

@@ -7,6 +7,7 @@ find_package(GTest CONFIG REQUIRED)
 include(GoogleTest)
 
 set(MWG_ACTIVEX_TEST_HEADERS
+    MapWinGISControlTestAccess.h
     OpenGlVectorLayerRendererTestAccess.h
     "${PROJECT_SOURCE_DIR}/src/MapWinGIS.ActiveX/PanBlit.h"
     "${PROJECT_SOURCE_DIR}/tests/MapWinGIS.Core.Tests/TestData.h"
@@ -36,6 +37,7 @@ target_sources(MapWinGIS.ActiveX.Tests PRIVATE
     ${MWG_ACTIVEX_TEST_SOURCES}
 )
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES
+    MapWinGISControlTestAccess.h
     OpenGlVectorLayerRendererTestAccess.h
     ActiveXActivationTests.cpp
     ComConversionTests.cpp

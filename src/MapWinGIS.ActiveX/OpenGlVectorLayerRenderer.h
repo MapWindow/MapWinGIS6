@@ -25,6 +25,7 @@ namespace mwg::activex
     namespace testing
     {
         class OpenGlVectorLayerRendererTestAccess;
+        class MapWinGISControlTestAccess;
     }
 
     class OpenGlVectorLayerRenderer final : public IVectorRenderBackend
@@ -60,6 +61,8 @@ namespace mwg::activex
          * without drawing when any polygon lacks a usable fill mesh or when
          * no OpenGL context with framebuffer-object support is available, so
          * callers can fall back to another backend for the whole frame.
+         * When retainStagingBuffer is false, a temporary renderer owns the
+         * draw's CPU and GPU buffers, leaving the screen resources unchanged.
          */
         [[nodiscard]] HRESULT Draw(
             HDC deviceContext,
@@ -75,6 +78,7 @@ namespace mwg::activex
 
     private:
         friend class testing::OpenGlVectorLayerRendererTestAccess;
+        friend class testing::MapWinGISControlTestAccess;
 
         /// True when every polygon of the scene has a usable triangulated
         /// fill mesh and finite coordinates. Exposed for tests so geometry

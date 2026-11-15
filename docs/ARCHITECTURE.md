@@ -336,12 +336,15 @@ still drawn.
 OpenGL uses a context created on a hidden, never-presented window, draws with
 fixed-function calls into a framebuffer object (OpenGL 3.0 or
 `GL_EXT_framebuffer_object`), and reads pixels back in BGRA order into a CPU
-buffer before copying them to the host device context. The interactive path
-retains this staging allocation; printing and alternate-size draws release it
-after each frame. The buffer is reused across polygons while transforming
-triangle vertices, avoiding a fresh allocation for every polygon. This is a
-working backend boundary, not an end-to-end accelerated presentation path. Rendering into a
-framebuffer object avoids undefined pixels from window pixel-ownership rules.
+buffer before copying them to the host device context.
+BGRA stores blue, green, red, and alpha bytes in that order.
+The screen renderer retains its staging allocation and GPU framebuffer.
+Alternate-size draws use a temporary OpenGL renderer that releases both after
+the draw and leaves the screen resources unchanged.
+A separate vertex buffer is reused across polygons within each layer.
+This avoids a fresh allocation for every polygon's transformed triangle vertices.
+Rendering into a framebuffer object avoids undefined pixels from window
+pixel-ownership rules. Presentation still copies pixels through GDI.
 Interior rings and concave boundaries draw identically in both backends
 because both consume the same scene; a polygon without a fill mesh (for
 example a self-intersecting ring that GEOS cannot triangulate), missing
@@ -368,8 +371,10 @@ maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
 limited to one 64 MiB buffer per frame, including retained capacity and
 reallocation peaks; larger targets use GDI instead. A failed rendering
-context is retried after a short back-off, or immediately when the target size
-changes, until a replacement initializes successfully. Switching backends does not discard map state. The GDI backend
+context is released once and its replacement is attempted on the next draw.
+If initialization fails, OpenGL skips 60 draws before retrying.
+A target-size change triggers an immediate retry.
+GDI renders frames during this delay. Switching backends does not discard map state. The GDI backend
 remains usable without a GPU or OpenGL runtime; Core itself has no
 graphics-runtime dependency.
 

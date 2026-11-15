@@ -69,6 +69,8 @@ namespace mwg::activex
         }
 
     private:
+        friend class testing::MapWinGISControlTestAccess;
+
         OpenGlVectorLayerRenderer _openGlRenderer;
         GdiVectorLayerRenderer _gdiRenderer;
         VectorRenderBackendPreference _preference =

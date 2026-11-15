@@ -121,9 +121,15 @@ output folder. CI runs them before the solution build. Builds with
 `full-drivers` also test the release driver set in `GdalEnvironment` tests.
 Pull requests run both Debug and full-driver Release tests for x64.
 
-The native `MapWinGIS.ActiveX.Tests` project covers COM activation, registered
-control rendering through GDI and OpenGL, whole-pixel pan-offset validation,
-and GDAL progress/completion events.
+The native `MapWinGIS.ActiveX.Tests` project covers COM activation, rendering
+through GDI and OpenGL, and GDAL progress/completion events.
+Class-factory tests require no COM registration. They inspect the native
+control through test-only friend helpers, without changing its COM interfaces.
+They cover whole-pixel cached pan draws, fractional and oversized offsets,
+failed-resize cache invalidation and redraw notifications, and screen-buffer
+preservation across scaled draws.
+Renderer tests cover BGRA color and row order, temporary staging buffers,
+and context-initialization retry delays and resize-triggered retries.
 Diagnostic conversion tests verify that malformed UTF-8 and embedded NULs
 are replaced instead of rejecting a completed operation's result.
 Its registered-control host test also sends a wheel zoom and captured drag to

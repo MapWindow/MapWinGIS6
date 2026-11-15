@@ -11,7 +11,7 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 - [x] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 - [x] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
 - [x] Phase 7 – Rebuild render scenes per layer (#7, #34)
-- [ ] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
+- [x] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
 - [ ] Phase 9 – Load vector datasets asynchronously (#36)
 
 Finding coverage: every finding is assigned to exactly one phase:
@@ -356,13 +356,13 @@ Suggested fix:
 **Limitations:** MapRenderScene remains an owning snapshot. Caching prevents repeated GDAL reads and triangulation but keeps a second copy of coordinates and meshes. Additional process-private memory after an already-prepared first scene grew from 169.4 MiB to 466.1 MiB when adding both map layers. Interactive registration/hosting and network tests were not run. Local Release used the existing default-driver dependencies, not the CI full-driver feature set. Existing CMake ActiveX-test builds report command-line warning D9025 about `/external:W0` and `/external:W4`; no new source warnings were reported.
 
 ### Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
-**Implementation submitted in [PR #81](https://github.com/MapWindow/MapWinGIS6/pull/81) (validation pending):**
+**Phase 8 result:** Implemented and locally reviewed in [PR #81](https://github.com/MapWindow/MapWinGIS6/pull/81). The latest phase 7 base was merged and nine conflicts were resolved. Whole-pixel pan shifts reject fractional, non-finite, and frame-sized-or-larger offsets before integer conversion. Failed resizes invalidate the cache and notify the host. Scaled draws use temporary frame and OpenGL resources, preserving screen CPU and GPU buffers. OpenGL reuses transformed vertex storage per layer and reads BGRA pixels directly. Failed context replacement respects the 60-draw retry delay and retries immediately after a size change.
 
-- Whole-pixel pan blits now reject fractional, non-finite, and frame-sized-or-larger offsets before integer conversion; resize failures invalidate the layer cache, request a redraw, and cannot escape the `noexcept` path.
-- Alternate-size draws use a temporary frame buffer and release their OpenGL staging buffer. OpenGL reuses transformed vertex storage per layer, reads BGRA directly into the DIB-compatible buffer, and backs off repeated initialization failures with a retry on target-size changes.
-- Added focused whole-pixel pan-offset regression tests. Local Windows builds and tests were skipped as requested; CI remains required.
-- Remaining limitation: the existing renderer has no separate convexity/angle calculation to cache, and no reliable render-scene generation token for safe per-scene support-result caching. The implementation therefore avoids a pointer-only cache that could return stale support results. GDI retains its preflight coordinate scan so an invalid layer is never partially drawn. The requested scaled-draw buffer-size integration assertion and forced-`ResizeView`-failure redraw test remain unverified.
-- The phase remains unchecked until CI/build and test criteria are met.
+**Validation:** CMake Debug and Release x64 each passed all 425 non-interactive cases, with three opt-in cases skipped. MSBuild Debug x64 built without warnings. Its Core, GDAL initialization, and non-interactive ActiveX suites passed. Compiler-flag and warning parity passed with zero lost options. The two staging-preservation regressions and the failed-recovery delay regression failed before their fixes. Control tests also exercise cached whole-pixel drags, fractional and oversized pans, scaled-buffer sizes, and a real pending-fit resize failure with a host redraw notification.
+
+**Measurements:** Sequential Release runs compared phase 7 `a3ea595` with phase 8 on a generated 100,000-polygon grid and a complex scene with 325,000 meshes. Median OpenGL frames changed from 50.5 to 51.8 ms for the grid and from 75.4 to 69.5 ms for the complex scene. GDI changed from 295.0 to 297.2 ms and from 316.4 to 317.9 ms. This run does not show a consistent speedup. Timings are observations, not thresholds.
+
+**Limitations:** The current renderer has no separate convexity/angle calculation. Mutable public scenes have no reliable generation token for caching support results. A pointer-only cache can return stale results, so support checks remain uncached. GDI retains its coordinate preflight to avoid partially drawing invalid layers. The review HTML was unavailable at the referenced D: and equivalent F: locations. Local Release used existing default-driver packages, not CI's full-driver set. Win32, network, and interactive registration/hosting checks were not run. Existing CMake command-line warning D9025 remains unchanged. Remote CI must validate the updated head.
 
 
 **#21 – Sub-pixel check in the pan blit is dead code** (`src/MapWinGIS.ActiveX/MapWinGISControl.cpp:1124-1127`, `TryBlitCachedLayers`)

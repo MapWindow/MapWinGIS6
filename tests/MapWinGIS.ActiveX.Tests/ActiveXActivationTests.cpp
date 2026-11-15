@@ -9,6 +9,7 @@
 #include <atlhost.h>
 #include <objbase.h>
 #include <wrl/client.h>
+#include <wrl/implements.h>
 
 #include <gtest/gtest.h>
 
@@ -33,11 +34,13 @@
 #include <gdalalgorithm.h>
 
 #include "MapWinGIS.ActiveX_i.h"
+#include "MapWinGISControlTestAccess.h"
 #include "DllInstallScope.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/map/Viewport.h"
+#include "mapwingis/vector/VectorDataset.h"
 
 namespace
 {
@@ -1464,6 +1467,97 @@ TEST_F(ActiveXMapTest, AlternateDrawBoundsDoNotChangeTheLiveSizeUsedForFitting)
     const auto moved = mwg::ToPixel(*expected.MapToScreen({1, 2.5}));
     ASSERT_TRUE(moved.has_value());
     EXPECT_EQ(GetPixel(resized.Get(), moved->x, moved->y), RGB(61, 122, 169));
+}
+
+TEST_F(ActiveXMapTest, ScaledDrawsKeepScreenBuffersAtTheClientSize)
+{
+    using Access = mwg::activex::testing::MapWinGISControlTestAccess;
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    ASSERT_EQ(_control->put_RenderingBackendPreference(ATL::CComBSTR(L"OpenGL")), S_OK);
+    BitmapSurface surface(480, 401);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    const auto& control = Access::Control(_control.Get());
+    const auto frameDc = Access::Frame(control).Get();
+    const auto cacheDc = Access::LayerCache(control).Get();
+    const auto capacity = Access::StagingCapacity(control);
+    ASSERT_TRUE(Access::CacheValid(control));
+    ASSERT_EQ(Draw(surface.Get(), 480, 401), S_OK);
+    EXPECT_EQ(Access::Frame(control).Width(), 120);
+    EXPECT_EQ(Access::Frame(control).Height(), 100);
+    EXPECT_EQ(Access::Frame(control).Get(), frameDc);
+    EXPECT_EQ(Access::LayerCache(control).Width(), 120);
+    EXPECT_EQ(Access::LayerCache(control).Height(), 100);
+    EXPECT_EQ(Access::LayerCache(control).Get(), cacheDc);
+    EXPECT_EQ(Access::StagingCapacity(control), capacity);
+    EXPECT_TRUE(Access::CacheValid(control));
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_EQ(Access::Frame(control).Get(), frameDc);
+    EXPECT_EQ(Access::StagingCapacity(control), capacity);
+}
+
+TEST_F(ActiveXMapTest, DragDrawBlitsWholePixelShiftsAndRendersFractionalOrHugeShifts)
+{
+    using Access = mwg::activex::testing::MapWinGISControlTestAccess;
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    auto& control = Access::Control(_control.Get());
+    const auto initial = Access::CachedCenter(control);
+    ASSERT_TRUE(Access::PanDuringDrag(control, 4.0));
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_DOUBLE_EQ(Access::CachedCenter(control).x, initial.x);
+    ASSERT_TRUE(Access::PanDuringDrag(control, 0.25));
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_NE(Access::CachedCenter(control).x, initial.x);
+    const auto fractional = Access::CachedCenter(control);
+    ASSERT_TRUE(Access::PanDuringDrag(control, 120.0));
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_NE(Access::CachedCenter(control).x, fractional.x);
+    ASSERT_TRUE(Access::PanDuringDrag(control, 1e12));
+    // The blit rejects this shift before integer conversion. GDI then
+    // reports its existing coordinate-range failure instead of caching it.
+    EXPECT_EQ(Draw(surface.Get(), 120, 100), E_INVALIDARG);
+    EXPECT_FALSE(Access::CacheValid(control));
+}
+
+TEST_F(ActiveXMapTest, FailedResizeInvalidatesTheCacheAndNotifiesTheHost)
+{
+    using Access = mwg::activex::testing::MapWinGISControlTestAccess;
+    class ViewChangeSink final :
+        public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IAdviseSink>
+    {
+    public:
+        void STDMETHODCALLTYPE OnDataChange(FORMATETC*, STGMEDIUM*) override {}
+        void STDMETHODCALLTYPE OnViewChange(DWORD, LONG) override { ++changes; }
+        void STDMETHODCALLTYPE OnRename(IMoniker*) override {}
+        void STDMETHODCALLTYPE OnSave() override {}
+        void STDMETHODCALLTYPE OnClose() override {}
+        int changes = 0;
+    };
+
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    auto& control = Access::Control(_control.Get());
+    ASSERT_TRUE(Access::CacheValid(control));
+    _readDriver = std::make_unique<mwg::test::VectorReadTestDriver>();
+    Access::StagePendingFit(control, mwg::VectorDataset::Open(mwg::test::VectorReadTestDriver::kPath));
+    _readDriver->failExtent = true;
+    const auto sink = Microsoft::WRL::Make<ViewChangeSink>();
+    ASSERT_NE(sink, nullptr);
+    ASSERT_EQ(_viewObject->SetAdvise(DVASPECT_CONTENT, 0, sink.Get()), S_OK);
+    const mwg::GdalEnvironment::QuietScope quiet;
+    ASSERT_EQ(Resize(200, 120), S_OK);
+    EXPECT_GT(_readDriver->extentCalls, 0);
+    EXPECT_FALSE(Access::CacheValid(control));
+    EXPECT_EQ(sink->changes, 1);
+    ASSERT_EQ(_viewObject->SetAdvise(DVASPECT_CONTENT, 0, nullptr), S_OK);
 }
 
 TEST(ActiveXActivation, CreatesControlThroughClassFactory)

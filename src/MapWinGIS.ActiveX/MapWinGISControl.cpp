@@ -43,6 +43,8 @@
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/vector/VectorDataset.h"
 
+OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)
+
 namespace
 {
     constexpr double kMouseWheelZoomFactor = 1.2;
@@ -726,7 +728,7 @@ bool CMapWinGISControl::ResizeView(const LONG width, const LONG height) noexcept
     }
     catch (...)
     {
-        ::OutputDebugStringW(L"MapWinGIS: resizing the map view failed.\\n");
+        ::OutputDebugStringW(L"MapWinGIS: resizing the map view failed.\n");
         InvalidateLayerCache();
         FireViewChange();
         return false;
@@ -1154,15 +1156,6 @@ bool CMapWinGISControl::TryBlitCachedLayers(
     const double offsetY = (center->y - cacheCenter->y) / *resolution;
     const LONG width = static_cast<LONG>(viewport.Width());
     const LONG height = static_cast<LONG>(viewport.Height());
-    if (!std::isfinite(offsetX) || !std::isfinite(offsetY) ||
-        std::abs(offsetX) >= static_cast<double>(width) ||
-        std::abs(offsetY) >= static_cast<double>(height))
-    {
-        // A full-frame-or-larger shift is not useful for a blit. Reject it
-        // before rounding or converting to LONG, which could overflow.
-        return false;
-    }
-
     LONG shiftX = 0;
     LONG shiftY = 0;
     if (!mwg::activex::TryGetWholePixelPanShift(offsetX, width, shiftX) ||

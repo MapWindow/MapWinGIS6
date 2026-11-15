@@ -31,6 +31,10 @@ navigation and stable layer IDs through ActiveX. The control also supports
 left-button drag panning and cursor-anchored mouse-wheel zoom. Resizing keeps
 the current map center and resolution.
 
+Cached drag frames are reused only for whole-pixel shifts.
+Scaled and print draws use temporary rendering buffers and keep the screen
+buffers unchanged.
+
 Vector loads add layers rather than replace them. Call `ClearLayers` to
 release the loaded datasets before switching or refreshing them.
 
