@@ -25,6 +25,7 @@
 #include <atlconv.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <exception>
 #include <filesystem>
@@ -48,6 +49,9 @@ OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)
 namespace
 {
     constexpr double kMouseWheelZoomFactor = 1.2;
+    using VectorPreparationHook = void(*)(void*, bool) noexcept;
+    std::atomic<VectorPreparationHook> g_vectorPreparationHook{nullptr};
+    std::atomic<void*> g_vectorPreparationContext{nullptr};
 
     using mwg::activex::ComConversion::BstrToUtf8;
     using mwg::activex::ComConversion::CopyStringArray;
@@ -203,6 +207,15 @@ namespace
     }
 }
 
+extern "C" __declspec(dllexport) void __cdecl
+MapWinGISControlSetVectorPreparationHookForTesting(
+    void(*const hook)(void*, bool) noexcept,
+    void* const context) noexcept
+{
+    g_vectorPreparationContext.store(context, std::memory_order_relaxed);
+    g_vectorPreparationHook.store(hook, std::memory_order_release);
+}
+
 struct CMapWinGISControl::VectorLoadState final
 {
     std::shared_ptr<mwg::VectorDataset> dataset;
@@ -211,6 +224,7 @@ struct CMapWinGISControl::VectorLoadState final
     LONGLONG layerId = 0;
     bool cancelRequestedOnOwner = false;
     bool committed = false;
+    bool ownerFinalized = false;
 };
 
 CMapWinGISControl::CMapWinGISControl()
@@ -537,6 +551,28 @@ STDMETHODIMP CMapWinGISControl::BeginLoadVectorDataset(
 
                     try
                     {
+                        const auto preparationHook =
+                            g_vectorPreparationHook.load(std::memory_order_acquire);
+                        void* const preparationContext =
+                            g_vectorPreparationContext.load(std::memory_order_relaxed);
+                        struct PreparationFinishedNotification final
+                        {
+                            VectorPreparationHook hook;
+                            void* context;
+
+                            ~PreparationFinishedNotification()
+                            {
+                                if (hook != nullptr)
+                                {
+                                    hook(context, true);
+                                }
+                            }
+                        } preparationFinished{preparationHook, preparationContext};
+                        if (preparationHook != nullptr)
+                        {
+                            preparationHook(preparationContext, false);
+                        }
+
                         PreparedVectorDataset prepared =
                             PrepareVectorDataset(datasetPath);
                         if (cancellation.IsCancellationRequested())
@@ -714,6 +750,13 @@ STDMETHODIMP CMapWinGISControl::EndLoadVectorDataset(
             IID_IMapWinGISControl5,
             E_INVALIDARG);
     }
+    if (!found->second->ownerFinalized)
+    {
+        return SetControlComErrorInfo(
+            "The vector load has not finished or is still delivering events.",
+            IID_IMapWinGISControl5,
+            E_PENDING);
+    }
 
     mwg::activex::GdalOperationLookup ended;
     try
@@ -801,6 +844,21 @@ void CMapWinGISControl::CompleteVectorLoad(
     {
         return;
     }
+    const auto& state = found->second;
+    if (state->committed)
+    {
+        return;
+    }
+
+    struct OwnerFinalizationGuard final
+    {
+        bool& finalized;
+
+        ~OwnerFinalizationGuard()
+        {
+            finalized = true;
+        }
+    } ownerFinalization{state->ownerFinalized};
 
     mwg::activex::GdalOperationSnapshot result;
     try
@@ -813,7 +871,6 @@ void CMapWinGISControl::CompleteVectorLoad(
             return;
         }
         result = *completed.result;
-        const auto& state = found->second;
         if (state->cancelRequestedOnOwner)
         {
             result.succeeded = false;

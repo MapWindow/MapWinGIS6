@@ -45,6 +45,9 @@
 namespace
 {
     using Microsoft::WRL::ComPtr;
+    using VectorPreparationHook = void(*)(void*, bool) noexcept;
+    using VectorPreparationHookSetter =
+        void(__cdecl*)(VectorPreparationHook, void*) noexcept;
 
     [[nodiscard]] std::string ToUtf8(const std::filesystem::path& path)
     {
@@ -259,6 +262,15 @@ namespace
                 operationId) != _completedOperations.end();
         }
 
+        [[nodiscard]] std::size_t CompletionCount(const LONGLONG operationId) const
+        {
+            std::lock_guard lock(_mutex);
+            return static_cast<std::size_t>(std::count(
+                _completedOperations.begin(),
+                _completedOperations.end(),
+                operationId));
+        }
+
         [[nodiscard]] bool HasProgress(const LONGLONG operationId) const
         {
             std::lock_guard lock(_mutex);
@@ -285,6 +297,137 @@ namespace
         void* _progressContext = nullptr;
         CompletionCallback _completionCallback = nullptr;
         void* _completionContext = nullptr;
+    };
+
+    struct VectorLoadCompletionObservation final
+    {
+        IMapWinGISControl5* control = nullptr;
+        HRESULT layerCountResult = E_FAIL;
+        HRESULT featureCountResult = E_FAIL;
+        LONG layerCount = -1;
+        LONGLONG featureCount = -1;
+
+        static HRESULT Observe(void* const context, LONGLONG)
+        {
+            auto& observation =
+                *static_cast<VectorLoadCompletionObservation*>(context);
+            observation.layerCountResult =
+                observation.control->get_LayerCount(&observation.layerCount);
+            observation.featureCountResult =
+                observation.control->get_FeatureCount(&observation.featureCount);
+            return S_OK;
+        }
+    };
+
+    class ScopedEvent final
+    {
+    public:
+        ScopedEvent() noexcept
+            : _handle(CreateEventW(nullptr, TRUE, FALSE, nullptr))
+        {
+        }
+
+        ~ScopedEvent()
+        {
+            if (_handle != nullptr)
+            {
+                CloseHandle(_handle);
+            }
+        }
+
+        ScopedEvent(const ScopedEvent&) = delete;
+        ScopedEvent& operator=(const ScopedEvent&) = delete;
+
+        [[nodiscard]] bool IsValid() const noexcept { return _handle != nullptr; }
+        [[nodiscard]] HANDLE Get() const noexcept { return _handle; }
+
+        [[nodiscard]] bool Signal() const noexcept
+        {
+            return _handle != nullptr && SetEvent(_handle) != FALSE;
+        }
+
+        [[nodiscard]] bool Wait(const DWORD timeout) const noexcept
+        {
+            return _handle != nullptr &&
+                WaitForSingleObject(_handle, timeout) == WAIT_OBJECT_0;
+        }
+
+    private:
+        HANDLE _handle = nullptr;
+    };
+
+    class VectorPreparationBarrier final
+    {
+    public:
+        ~VectorPreparationBarrier()
+        {
+            if (_started.Wait(0))
+            {
+                static_cast<void>(_release.Signal());
+                static_cast<void>(_finished.Wait(10000));
+            }
+        }
+
+        [[nodiscard]] bool IsValid() const noexcept
+        {
+            return _started.IsValid() && _release.IsValid() && _finished.IsValid();
+        }
+
+        [[nodiscard]] bool WaitForStart(const DWORD timeout) const noexcept
+        {
+            return _started.Wait(timeout);
+        }
+
+        [[nodiscard]] bool Release() const noexcept { return _release.Signal(); }
+
+        [[nodiscard]] bool WaitForFinish(const DWORD timeout) const noexcept
+        {
+            return _finished.Wait(timeout);
+        }
+
+        [[nodiscard]] DWORD ReleaseWaitResult() const noexcept
+        {
+            return _releaseWaitResult.load(std::memory_order_acquire);
+        }
+
+        static void Notify(void* const context, const bool finished) noexcept
+        {
+            auto& barrier = *static_cast<VectorPreparationBarrier*>(context);
+            if (finished)
+            {
+                static_cast<void>(barrier._finished.Signal());
+                return;
+            }
+
+            static_cast<void>(barrier._started.Signal());
+            barrier._releaseWaitResult.store(
+                WaitForSingleObject(barrier._release.Get(), 10000),
+                std::memory_order_release);
+        }
+
+    private:
+        ScopedEvent _started;
+        ScopedEvent _release;
+        ScopedEvent _finished;
+        std::atomic<DWORD> _releaseWaitResult{WAIT_FAILED};
+    };
+
+    class ScopedVectorPreparationHook final
+    {
+    public:
+        explicit ScopedVectorPreparationHook(
+            const VectorPreparationHookSetter setter) noexcept
+            : _setter(setter)
+        {
+        }
+
+        ~ScopedVectorPreparationHook()
+        {
+            _setter(nullptr, nullptr);
+        }
+
+    private:
+        VectorPreparationHookSetter _setter;
     };
 
     class GdalEventSubscription final
@@ -625,12 +768,13 @@ namespace
         return S_OK;
     }
 
-    [[nodiscard]] bool PumpUntilGdalCompletion(
+    [[nodiscard]] bool PumpUntilGdalCompletionCount(
         GdalEventSink& sink,
         const LONGLONG operationId,
+        const std::size_t expectedCount,
         const std::chrono::steady_clock::time_point deadline)
     {
-        while (!sink.HasCompleted(operationId) &&
+        while (sink.CompletionCount(operationId) < expectedCount &&
                std::chrono::steady_clock::now() < deadline)
         {
             MSG message{};
@@ -646,7 +790,40 @@ namespace
             }
             Sleep(1);
         }
-        return sink.HasCompleted(operationId);
+        return sink.CompletionCount(operationId) >= expectedCount;
+    }
+
+    [[nodiscard]] bool PumpUntilGdalCompletion(
+        GdalEventSink& sink,
+        const LONGLONG operationId,
+        const std::chrono::steady_clock::time_point deadline)
+    {
+        return PumpUntilGdalCompletionCount(sink, operationId, 1, deadline);
+    }
+
+    [[nodiscard]] bool WaitForGdalDispatchMessage(
+        const std::chrono::steady_clock::time_point deadline)
+    {
+        MSG message{};
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            if (PeekMessageW(
+                    &message,
+                    nullptr,
+                    mwg::activex::kGdalDispatchMessage,
+                    mwg::activex::kGdalDispatchMessage,
+                    PM_NOREMOVE) != FALSE)
+            {
+                return true;
+            }
+            Sleep(1);
+        }
+        return PeekMessageW(
+            &message,
+            nullptr,
+            mwg::activex::kGdalDispatchMessage,
+            mwg::activex::kGdalDispatchMessage,
+            PM_NOREMOVE) != FALSE;
     }
 
     class CMapWinGISTestModule final :
@@ -1000,12 +1177,77 @@ TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
     EXPECT_EQ(count, 1);
 }
 
+TEST_F(ActiveXMapTest, EndWaitsForOwnerThreadVectorLoadFinalization)
+{
+    ComPtr<IMapWinGISControl5> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    GdalEventSubscription subscription(control.Get());
+    ASSERT_EQ(subscription.Result(), S_OK);
+
+    const std::vector<mwg::Extent> rectangles{{0, 0, 2, 2}};
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "async-end-before-dispatch.gpkg",
+        rectangles);
+    LONGLONG operationId = 0;
+    ASSERT_EQ(control->BeginLoadVectorDataset(
+        ATL::CComBSTR(path.c_str()),
+        &operationId), S_OK);
+    ASSERT_GT(operationId, 0);
+
+    ASSERT_TRUE(WaitForGdalDispatchMessage(
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+
+    VARIANT_BOOL succeeded = VARIANT_TRUE;
+    VARIANT_BOOL cancelled = VARIANT_TRUE;
+    LONGLONG layerId = -1;
+    BSTR summary = nullptr;
+    BSTR diagnostics = nullptr;
+    EXPECT_EQ(control->EndLoadVectorDataset(
+        operationId,
+        &succeeded,
+        &cancelled,
+        &layerId,
+        &summary,
+        &diagnostics), E_PENDING);
+    EXPECT_EQ(succeeded, VARIANT_FALSE);
+    EXPECT_EQ(cancelled, VARIANT_FALSE);
+    EXPECT_EQ(layerId, 0);
+    EXPECT_EQ(summary, nullptr);
+    EXPECT_EQ(diagnostics, nullptr);
+
+    ASSERT_TRUE(PumpUntilGdalCompletion(
+        *subscription.Sink(),
+        operationId,
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    EXPECT_EQ(control->EndLoadVectorDataset(
+        operationId,
+        &succeeded,
+        &cancelled,
+        &layerId,
+        &summary,
+        &diagnostics), S_OK);
+    std::unique_ptr<wchar_t, decltype(&SysFreeString)> summaryText(
+        summary,
+        &SysFreeString);
+    std::unique_ptr<wchar_t, decltype(&SysFreeString)> diagnosticText(
+        diagnostics,
+        &SysFreeString);
+    EXPECT_EQ(succeeded, VARIANT_TRUE);
+    EXPECT_EQ(cancelled, VARIANT_FALSE);
+    EXPECT_GT(layerId, 0);
+}
+
 TEST_F(ActiveXMapTest, LoadsVectorDatasetAsynchronouslyAndCommitsBeforeCompletionEvent)
 {
     ComPtr<IMapWinGISControl5> control;
     ASSERT_EQ(_control.As(&control), S_OK);
     GdalEventSubscription subscription(control.Get());
     ASSERT_EQ(subscription.Result(), S_OK);
+    VectorLoadCompletionObservation observation{control.Get()};
+    subscription.Sink()->SetCompletionCallback(
+        &VectorLoadCompletionObservation::Observe,
+        &observation);
 
     const std::vector<mwg::Extent> rectangles{{0, 0, 2, 2}, {3, 0, 5, 2}};
     const auto path = mwg::test::MakeRectanglesDataset(
@@ -1026,6 +1268,33 @@ TEST_F(ActiveXMapTest, LoadsVectorDatasetAsynchronouslyAndCommitsBeforeCompletio
         operationId,
         std::chrono::steady_clock::now() + std::chrono::seconds(10)));
     EXPECT_TRUE(subscription.Sink()->WasDeliveredOn(std::this_thread::get_id()));
+    EXPECT_EQ(observation.layerCountResult, S_OK);
+    EXPECT_EQ(observation.featureCountResult, S_OK);
+    EXPECT_EQ(observation.layerCount, 1);
+    EXPECT_EQ(observation.featureCount, 2);
+
+    ComPtr<IOleInPlaceObjectWindowless> window;
+    ASSERT_EQ(control.As(&window), S_OK);
+    LRESULT windowMessageResult = 0;
+    ASSERT_TRUE(SUCCEEDED(window->OnWindowMessage(
+        WM_DESTROY,
+        0,
+        0,
+        &windowMessageResult)));
+    ASSERT_TRUE(SUCCEEDED(window->OnWindowMessage(
+        WM_CREATE,
+        0,
+        0,
+        &windowMessageResult)));
+    ASSERT_TRUE(PumpUntilGdalCompletionCount(
+        *subscription.Sink(),
+        operationId,
+        2,
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    EXPECT_EQ(observation.layerCountResult, S_OK);
+    EXPECT_EQ(observation.featureCountResult, S_OK);
+    EXPECT_EQ(observation.layerCount, 1);
+    EXPECT_EQ(observation.featureCount, 2);
 
     VARIANT_BOOL succeeded = VARIANT_FALSE;
     VARIANT_BOOL cancelled = VARIANT_TRUE;
@@ -1155,7 +1424,17 @@ TEST_F(ActiveXMapTest, FailedVectorDatasetLoadReportsThePath)
 
 TEST_F(ActiveXMapTest, DestroyingControlDuringVectorLoadDoesNotAccessTheControlFromWorker)
 {
+    VectorPreparationBarrier barrier;
+    ASSERT_TRUE(barrier.IsValid());
     using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+    const auto setPreparationHook =
+        reinterpret_cast<VectorPreparationHookSetter>(GetProcAddress(
+            _module->Get(),
+            "MapWinGISControlSetVectorPreparationHookForTesting"));
+    ASSERT_NE(setPreparationHook, nullptr);
+    ScopedVectorPreparationHook hookReset(setPreparationHook);
+    setPreparationHook(&VectorPreparationBarrier::Notify, &barrier);
+
     const auto getClassObject = reinterpret_cast<GetClassObject>(
         GetProcAddress(_module->Get(), "DllGetClassObject"));
     ASSERT_NE(getClassObject, nullptr);
@@ -1178,8 +1457,12 @@ TEST_F(ActiveXMapTest, DestroyingControlDuringVectorLoadDoesNotAccessTheControlF
         ATL::CComBSTR(path.c_str()),
         &operationId), S_OK);
     ASSERT_GT(operationId, 0);
+    ASSERT_TRUE(barrier.WaitForStart(10000));
     control.Reset();
-    Sleep(50);
+    ASSERT_TRUE(barrier.Release());
+    ASSERT_TRUE(barrier.WaitForFinish(10000));
+    EXPECT_EQ(barrier.ReleaseWaitResult(), WAIT_OBJECT_0);
+    setPreparationHook(nullptr, nullptr);
 }
 
 TEST_F(ActiveXMapTest, ExposesStableLayerIdsAndMapNavigation)
