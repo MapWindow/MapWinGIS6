@@ -8,7 +8,7 @@
 
 #include <Windows.h>
 
-enum class DllInstallRegistrationScope
+enum class DllInstallRegistrationScope : int
 {
     Machine,
     User,
