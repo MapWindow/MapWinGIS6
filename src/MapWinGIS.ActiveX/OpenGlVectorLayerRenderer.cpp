@@ -823,10 +823,23 @@ namespace mwg::activex
         if (!retainStagingBuffer)
         {
             // Keep both CPU staging and GPU targets of the screen renderer
-            // unchanged. The temporary renderer releases all scaled resources.
+            // unchanged. The temporary renderer releases all scaled resources,
+            // while retry bookkeeping survives between temporary draws.
             OpenGlVectorLayerRenderer temporaryRenderer;
+            temporaryRenderer._initializationFailed = _initializationFailed;
+            temporaryRenderer._initializationFailureReason = _initializationFailureReason;
+            temporaryRenderer._retryTargetWidth = _retryTargetWidth;
+            temporaryRenderer._retryTargetHeight = _retryTargetHeight;
+            temporaryRenderer._initializationRetryDrawsRemaining =
+                _initializationRetryDrawsRemaining;
             const HRESULT result = temporaryRenderer.Draw(deviceContext, bounds, scene, viewport);
             _lastFailureReason = temporaryRenderer.GetLastFailureReason();
+            _initializationFailed = temporaryRenderer._initializationFailed;
+            _initializationFailureReason = temporaryRenderer._initializationFailureReason;
+            _retryTargetWidth = temporaryRenderer._retryTargetWidth;
+            _retryTargetHeight = temporaryRenderer._retryTargetHeight;
+            _initializationRetryDrawsRemaining =
+                temporaryRenderer._initializationRetryDrawsRemaining;
             return result;
         }
         _lastFailureReason = L"OpenGL did not render this frame.";

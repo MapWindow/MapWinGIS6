@@ -1265,3 +1265,22 @@ TEST(VectorLayerRenderer, FailedContextRecoveryBacksOffAndRetriesAfterTheDelayOr
     EXPECT_TRUE(SUCCEEDED(renderer.Draw(surface.Get(), bounds, scene, viewport)));
     EXPECT_NE(renderer.GetLastFailureReason(), L"Simulated context initialization failure.");
 }
+
+TEST(VectorLayerRenderer, NonRetainingDrawsPreserveInitializationRetryBackoff)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const auto scene = MakeConvexPolygonScene();
+    const RECT bounds{0, 0, 120, 100};
+    const auto viewport = FitViewport(bounds);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    Access::SimulateFailedRecovery(renderer, 120, 100);
+
+    for (unsigned int remaining = 59; remaining > 56; --remaining)
+    {
+        ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport, false), S_FALSE);
+        EXPECT_EQ(renderer.GetLastFailureReason(), L"Simulated context initialization failure.");
+        EXPECT_EQ(Access::RetryDrawsRemaining(renderer), remaining);
+    }
+}
