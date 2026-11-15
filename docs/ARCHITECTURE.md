@@ -23,6 +23,9 @@ The GDAL automation interface is an independent, early-bound COM capability.
 Its `SAFEARRAY(BSTR)` arguments and 64-bit (`hyper`) operation IDs are intended
 for clients that consume its type information; it is not a late-bound scripting
 contract. The primary control interface remains the default `IDispatch` surface.
+The control persists its rendering backend preference through streams and
+property bags. A seekable legacy stream containing only the ATL version is
+accepted as an empty property stream.
 
 The ActiveX GDAL event source is suspended while its control window is absent
 and resumes dispatch when that window is recreated. `IOleObject::Close` stops

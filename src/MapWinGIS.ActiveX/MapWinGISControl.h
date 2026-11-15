@@ -117,6 +117,7 @@ public:
 
     DECLARE_VIEW_STATUS(VIEWSTATUS_SOLIDBKGND | VIEWSTATUS_OPAQUE)
 
+    STDMETHOD(Load)(IStream* stream) override;
     STDMETHOD(InterfaceSupportsErrorInfo)(REFIID interfaceId) override;
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
     STDMETHOD(LoadVectorDataset)(BSTR path) override;

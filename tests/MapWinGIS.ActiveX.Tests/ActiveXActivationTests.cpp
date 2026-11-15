@@ -33,7 +33,7 @@
 #include <gdalalgorithm.h>
 
 #include "MapWinGIS.ActiveX_i.h"
-#include "ActiveXModule.h"
+#include "DllInstallScope.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -1206,18 +1206,20 @@ TEST_F(ActiveXMapTest, ExposesClassInfoAndGdalTypeInformation)
     ASSERT_EQ(classInfo->GetClassInfo(&coclassInfo), S_OK);
     TYPEATTR* coclassAttributes = nullptr;
     ASSERT_EQ(coclassInfo->GetTypeAttr(&coclassAttributes), S_OK);
-    EXPECT_TRUE(IsEqualGUID(coclassAttributes->guid, CLSID_MapWinGISControl));
+    EXPECT_TRUE(IsEqualGUID(coclassAttributes->guid, __uuidof(MapWinGISControl)));
     coclassInfo->ReleaseTypeAttr(coclassAttributes);
 
     ComPtr<IMapWinGISControlGdal> gdal;
     ASSERT_EQ(_control.As(&gdal), S_OK);
-    ComPtr<IDispatch> dispatch;
-    ASSERT_EQ(gdal.As(&dispatch), S_OK);
     UINT typeInfoCount = 0;
-    ASSERT_EQ(dispatch->GetTypeInfoCount(&typeInfoCount), S_OK);
+    ASSERT_EQ(gdal->GetTypeInfoCount(&typeInfoCount), S_OK);
     EXPECT_EQ(typeInfoCount, 1U);
     ComPtr<ITypeInfo> gdalTypeInfo;
-    ASSERT_EQ(dispatch->GetTypeInfo(0, LOCALE_USER_DEFAULT, &gdalTypeInfo), S_OK);
+    ASSERT_EQ(gdal->GetTypeInfo(0, LOCALE_USER_DEFAULT, &gdalTypeInfo), S_OK);
+    TYPEATTR* gdalAttributes = nullptr;
+    ASSERT_EQ(gdalTypeInfo->GetTypeAttr(&gdalAttributes), S_OK);
+    EXPECT_TRUE(IsEqualIID(gdalAttributes->guid, __uuidof(IMapWinGISControlGdal)));
+    gdalTypeInfo->ReleaseTypeAttr(gdalAttributes);
 }
 
 TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughStream)
@@ -1229,10 +1231,14 @@ TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughStream)
 
     ATL::CComBSTR openGl(L"OpenGL");
     ASSERT_EQ(control->put_RenderingBackendPreference(openGl), S_OK);
+    EXPECT_EQ(persistence->IsDirty(), S_OK);
 
     ComPtr<IStream> stream;
     ASSERT_EQ(CreateStreamOnHGlobal(nullptr, TRUE, &stream), S_OK);
     ASSERT_EQ(persistence->Save(stream.Get(), TRUE), S_OK);
+    EXPECT_EQ(persistence->IsDirty(), S_FALSE);
+    ASSERT_EQ(control->put_RenderingBackendPreference(openGl), S_OK);
+    EXPECT_EQ(persistence->IsDirty(), S_FALSE);
 
     using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
     const auto getClassObject = reinterpret_cast<GetClassObject>(
@@ -1250,10 +1256,38 @@ TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughStream)
     LARGE_INTEGER beginning{};
     ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
     ASSERT_EQ(restoredPersistence->Load(stream.Get()), S_OK);
+    EXPECT_EQ(restoredPersistence->IsDirty(), S_FALSE);
 
     ATL::CComBSTR actual;
     ASSERT_EQ(restoredControl->get_RenderingBackendPreference(&actual), S_OK);
     EXPECT_STREQ(actual, L"OpenGL");
+}
+
+TEST_F(ActiveXMapTest, LoadsLegacyEmptyPropertyStream)
+{
+    ComPtr<IPersistStreamInit> persistence;
+    ASSERT_EQ(_control.As(&persistence), S_OK);
+    ComPtr<IStream> stream;
+    ASSERT_EQ(CreateStreamOnHGlobal(nullptr, TRUE, &stream), S_OK);
+    const DWORD version = _ATL_VER;
+    ASSERT_EQ(stream->Write(&version, sizeof(version), nullptr), S_OK);
+    LARGE_INTEGER beginning{};
+    ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
+    ASSERT_EQ(persistence->Load(stream.Get()), S_OK);
+    EXPECT_EQ(persistence->IsDirty(), S_FALSE);
+}
+
+TEST_F(ActiveXMapTest, RejectsNewerLegacyStreamVersion)
+{
+    ComPtr<IPersistStreamInit> persistence;
+    ASSERT_EQ(_control.As(&persistence), S_OK);
+    ComPtr<IStream> stream;
+    ASSERT_EQ(CreateStreamOnHGlobal(nullptr, TRUE, &stream), S_OK);
+    const DWORD version = _ATL_VER + 1;
+    ASSERT_EQ(stream->Write(&version, sizeof(version), nullptr), S_OK);
+    LARGE_INTEGER beginning{};
+    ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
+    EXPECT_TRUE(FAILED(persistence->Load(stream.Get())));
 }
 
 
@@ -1273,14 +1307,22 @@ TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughPropertyBag)
     rawBag->AddRef();
     ComPtr<IPropertyBag> bag;
     bag.Attach(rawBag);
-    ASSERT_EQ(persistence->Save(bag.Get(), TRUE, TRUE), S_OK);
+    ASSERT_EQ(persistence->Save(bag.Get(), TRUE, FALSE), S_OK);
 
-    ATL::CComBSTR gdi(L"GDI");
-    ASSERT_EQ(control->put_RenderingBackendPreference(gdi), S_OK);
-    ASSERT_EQ(persistence->Load(bag.Get(), nullptr), S_OK);
+    using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+    const auto getClassObject = reinterpret_cast<GetClassObject>(
+        GetProcAddress(_module->Get(), "DllGetClassObject"));
+    ASSERT_NE(getClassObject, nullptr);
+    ComPtr<IClassFactory> factory;
+    ASSERT_EQ(getClassObject(__uuidof(MapWinGISControl), IID_PPV_ARGS(&factory)), S_OK);
+    ComPtr<IMapWinGISControl2> restoredControl;
+    ASSERT_EQ(factory->CreateInstance(nullptr, IID_PPV_ARGS(&restoredControl)), S_OK);
+    ComPtr<IPersistPropertyBag> restoredPersistence;
+    ASSERT_EQ(restoredControl.As(&restoredPersistence), S_OK);
+    ASSERT_EQ(restoredPersistence->Load(bag.Get(), nullptr), S_OK);
 
     ATL::CComBSTR actual;
-    ASSERT_EQ(control->get_RenderingBackendPreference(&actual), S_OK);
+    ASSERT_EQ(restoredControl->get_RenderingBackendPreference(&actual), S_OK);
     EXPECT_STREQ(actual, L"OpenGL");
 }
 

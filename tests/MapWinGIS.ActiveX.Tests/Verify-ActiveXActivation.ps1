@@ -92,8 +92,8 @@ namespace MapWinGIS.ActiveX.Tests {
     [uint32]$miscStatus = 0
     $miscStatusResult = [MapWinGIS.ActiveX.Tests.OleRegistration]::OleRegGetMiscStatus(
         [ref]$controlClsid, 1, [ref]$miscStatus)
-    if ($miscStatusResult -ne 0 -or $miscStatus -ne 913) {
-        throw "OleRegGetMiscStatus returned HRESULT 0x$('{0:X8}' -f $miscStatusResult) and flags $miscStatus; expected 913."
+    if ($miscStatusResult -ne 0 -or $miscStatus -ne 131473) {
+        throw "OleRegGetMiscStatus returned HRESULT 0x$('{0:X8}' -f $miscStatusResult) and flags $miscStatus; expected 131473."
     }
 
     $control = New-Object -ComObject 'MapWinGIS6.Control'

@@ -316,6 +316,18 @@ Do not change existing interface IIDs or DISPIDs. Where a new method or interfac
 - Bump nothing in existing interfaces. If persistence needs a stream version marker, add one and handle older (empty) streams.
 - Tests: save to a stream and load into a new control instance; save to and load from a property bag (a small in-test `IPropertyBag` implementation).
 
+**Phase 6 result:** The GDAL interface remains early-bound, as selected by the
+user. The control exposes class information and property-bag persistence,
+persists the rendering preference, and accepts legacy empty property streams.
+Registration uses the matching OLE status flags in the registry and manifest.
+
+**Validation:** CMake Debug x64 built and CTest ran 405 tests with no
+failures (three skipped). MSBuild Debug x64 built and its three native test
+executables passed. Compile-command parity reported no lost options. Per-user
+registration and unregistration, including the OLE status value, passed with
+process-local registry overrides. The interactive registered-host test was not
+run.
+
 ### Phase 7 – Rebuild render scenes per layer (#7, #34)
 
 **#7 – Any visibility change re-reads every layer during paint** (`src/MapWinGIS.Core/src/map/MapView.cpp:150-161, 244-252`, `src/MapWinGIS.Core/src/rendering/MapRenderScene.cpp:16-50`)

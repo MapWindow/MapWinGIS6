@@ -75,6 +75,9 @@ architecture. The `/n` switch suppresses the separate machine-wide
 machine-wide registration and then the per-user `DllInstall` registration.
 An empty or omitted `DllInstall` argument selects machine-wide registration;
 `user` is case-insensitive.
+The registered content-aspect OLE status value is `131473` (`0x20191`):
+`RECOMPOSEONRESIZE`, `CANTLINKINSIDE`, `INSIDEOUT`,
+`ACTIVATEWHENVISIBLE`, and `SETCLIENTSITEFIRST`.
 
 ### C# ActiveX test host
 
