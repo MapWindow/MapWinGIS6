@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -90,6 +91,10 @@ namespace mwg::activex
 
         using WakeCallback = bool(*)(void*) noexcept;
         using WorkerFinishedCallback = void(*)(void*) noexcept;
+        using ProgressCallback = std::function<bool(double, std::string_view)>;
+        using WorkCallback = std::function<GdalOperationSnapshot(
+            GdalCancellationToken&,
+            const ProgressCallback&)>;
         static constexpr std::size_t kMaxOutstandingOperations = 16;
 
         /// \throws std::bad_alloc when its shared worker state cannot be created.
@@ -112,6 +117,11 @@ namespace mwg::activex
         [[nodiscard]] std::uint64_t Begin(
             std::string algorithmPath,
             std::vector<std::string> arguments);
+        /// Starts caller-supplied GDAL work on a worker and reports its result.
+        /// The callback must not access the control or COM objects.
+        [[nodiscard]] std::uint64_t BeginWork(
+            WorkCallback work,
+            bool honorCancellationAtCompletion = false);
         /// Thread-safe cancellation request; it does not wait for the worker.
         [[nodiscard]] GdalCancelResult Cancel(std::uint64_t operationId) noexcept;
         /// Must be called on the owner thread.
@@ -119,6 +129,13 @@ namespace mwg::activex
         /// \throws std::system_error when state locking fails.
         [[nodiscard]] GdalOperationLookup GetResult(
             std::uint64_t operationId) const;
+        /// Reads a result while its owner-thread completion callback is active.
+        [[nodiscard]] GdalOperationLookup GetResultForDelivery(
+            std::uint64_t operationId) const;
+        /// Replaces a completed result before owner-thread notification delivery.
+        void UpdateCompletedResult(
+            std::uint64_t operationId,
+            GdalOperationSnapshot result);
         /// Must be called on the owner thread.
         /// \throws std::system_error when state locking fails.
         [[nodiscard]] GdalOperationLookup End(std::uint64_t operationId);

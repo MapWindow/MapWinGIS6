@@ -144,6 +144,8 @@ cancellation, GDAL error code, summary, full diagnostics, callback error code
 and message, and warnings, and to release the operation slot. An incomplete
 operation returns `E_PENDING`; an unknown or ended identifier returns
 `E_INVALIDARG`.
+`GdalOperationCompleted` is also reused for asynchronous vector loads exposed
+by `IMapWinGISControl5`; retrieve those results with `EndLoadVectorDataset`.
 `EndGdalOperation` also returns `E_PENDING` while a progress or completion
 event is being delivered. Call it after the event handler returns.
 

@@ -7,14 +7,14 @@ remain in Core.
 
 ## Automation contracts
 
-- `IMapWinGISControl`, `IMapWinGISControl2`, `IMapWinGISControl3`, and
-  `IMapWinGISControl4` are versioned derived interfaces with distinct IIDs.
+- `IMapWinGISControl` through `IMapWinGISControl5` are versioned derived
+  interfaces with distinct IIDs.
   Do not add vtable members to a published interface or change its IID.
   Extend the contract with a new derived interface when needed.
-- The default control interface is `IMapWinGISControl4`. It adds navigation,
-  layer count, and stable layer-ID access to `IMapWinGISControl3`. The
-  independent generic GDAL capability uses `IMapWinGISControlGdal`, and
-  notifications use the separate `IMapWinGISControlEvents` dispinterface.
+- The default control interface is `IMapWinGISControl5`. It adds asynchronous
+  vector loading to `IMapWinGISControl4`; the independent generic GDAL
+  capability uses `IMapWinGISControlGdal`, and both operations use the
+  separate `IMapWinGISControlEvents` dispinterface.
 - These are new v6 interfaces, not the MapWinGIS 5 type-library contracts.
   The current control does not claim v5 binary compatibility.
 - Keep COM conversions and COM error translation at this boundary. Core

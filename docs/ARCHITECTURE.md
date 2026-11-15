@@ -362,10 +362,11 @@ drawing operation is unsupported. The control reports the active backend and
 the reason for a fallback through `RenderingBackend` and `RenderingStatus`.
 These rendering properties are on `IMapWinGISControl2`, which derives from
 `IMapWinGISControl`. `IMapWinGISControl3` adds `ClearLayers` at DISPID 8.
-The coclass default is `IMapWinGISControl4`, which derives from
-`IMapWinGISControl3`. It adds map navigation, layer count, and stable layer IDs
-at DISPIDs 9-17. The earlier interfaces, their DISPIDs, and their IIDs remain
-unchanged.
+`IMapWinGISControl4` derives from `IMapWinGISControl3` and adds map navigation,
+layer count, and stable layer IDs at DISPIDs 9-17. The coclass default is
+`IMapWinGISControl5`, which derives from `IMapWinGISControl4` and adds
+asynchronous vector loading at DISPIDs 18-20. The earlier interfaces, their
+DISPIDs, and their IIDs remain unchanged.
 OpenGL capability detection checks framebuffer-object entry points, the
 maximum renderbuffer size, and the maximum viewport dimensions at runtime;
 targets exceeding either limit use GDI. CPU staging for OpenGL readback is
@@ -399,19 +400,23 @@ intentional compatibility gaps and the rationale when interfaces are introduced.
 
 The control exposes a small v6 COM surface: Core initialization, vector
 dataset loading, layer-loaded state, feature count, renderer preference,
-active backend and status, plus asynchronous generic GDAL operations with
-progress, cancellation, and result reporting. The GDAL API has a new interface
-and does not claim MapWinGIS 5 `IGdalUtils` binary compatibility.
-At most sixteen operations may be active or awaiting result cleanup. Call
-`EndGdalOperation` after completion to release an operation slot. The control
-delivers events on its owning apartment thread. Destroying the in-place window
-suspends notification delivery without cancelling operations; a subsequent
-`WM_SIZE` resumes delivery. Calling `Close` or destroying the control after
-the client's final COM reference is released cancels outstanding work and
-discards queued notifications. An in-progress event dispatch holds a temporary
-COM reference, so releasing the client's reference inside an event does not
-destroy the control until dispatch returns. Workers never retain COM references
-or wait for event handlers.
+active backend and status, plus asynchronous vector loading and generic GDAL
+operations. The GDAL API has a new interface and does not claim MapWinGIS 5
+`IGdalUtils` binary compatibility. Both asynchronous capabilities share one
+dispatcher and operation limit: at most sixteen operations may be active or
+awaiting result cleanup. `GdalOperationCompleted` signals either kind; call
+`EndGdalOperation` or `EndLoadVectorDataset`, respectively, to retrieve the
+result and release its slot. Completion is delivered on the owning apartment
+thread. For vector loads, the control commits the prepared dataset and scene
+before raising the completion event. Cancellation discards the candidate and
+leaves the live map unchanged. Destroying the in-place window suspends
+notification delivery without cancelling operations; a subsequent `WM_SIZE`
+resumes delivery. Calling `Close` or destroying the control after the client's
+final COM reference is released cancels outstanding work and discards queued
+notifications. An in-progress event dispatch holds a temporary COM reference,
+so releasing the client's reference inside an event does not destroy the
+control until dispatch returns. Workers never retain COM references or wait for
+event handlers.
 
 `LoadVectorDataset` adds the first vector layer of a dataset on top of the
 map. Earlier layers stay loaded, so calling it again shows several layers.
@@ -420,6 +425,13 @@ returns the stable ID of the new layer, and `GetLayerId` returns a layer ID by
 its current 0-based position. Call `ClearLayers` before switching or refreshing
 datasets to avoid duplicate layers. It releases all loaded datasets and clears
 the feature total, but keeps the view.
+`IMapWinGISControl5::BeginLoadVectorDataset` performs the same preparation on
+the GDAL worker and returns an operation ID. It uses the existing
+`GdalOperationCompleted` event; clients retrieve the result and new layer ID
+with `EndLoadVectorDataset`. `CancelLoadVectorDataset` does not block. If
+cancellation is accepted before the completion event is delivered, the
+candidate is discarded and the map is unchanged. The original synchronous
+`LoadVectorDataset` and `LoadVectorDatasetEx` methods keep their behavior.
 The layer must be polygon-compatible: a dataset whose first layer has another
 geometry type fails to load and is not added, even if a later layer is
 polygonal. An empty polygon layer loads but draws nothing. The control reads

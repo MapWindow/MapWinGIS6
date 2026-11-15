@@ -122,7 +122,8 @@ output folder. CI runs them before the solution build. Builds with
 Pull requests run both Debug and full-driver Release tests for x64.
 
 The native `MapWinGIS.ActiveX.Tests` project covers COM activation, rendering
-through GDI and OpenGL, and GDAL progress/completion events.
+through GDI and OpenGL, GDAL progress/completion events, and asynchronous
+vector loads, including cancellation, failure details, and control destruction.
 Class-factory tests require no COM registration. They inspect the native
 control through test-only friend helpers, without changing its COM interfaces.
 They cover whole-pixel cached pan draws, fractional and oversized offsets,
