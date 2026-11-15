@@ -158,6 +158,27 @@ CMapWinGISControl::CMapWinGISControl()
 {
 }
 
+STDMETHODIMP CMapWinGISControl::Load(IStream* stream)
+{
+    if (stream != nullptr)
+    {
+        LARGE_INTEGER offset{};
+        ULARGE_INTEGER position{};
+        STATSTG stat{};
+        if (SUCCEEDED(stream->Seek(offset, STREAM_SEEK_CUR, &position)) &&
+            SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME)) &&
+            stat.cbSize.QuadPart >= position.QuadPart &&
+            stat.cbSize.QuadPart - position.QuadPart == sizeof(DWORD))
+        {
+            // Before the property map had entries, ATL saved only its version.
+            static const ATL::ATL_PROPMAP_ENTRY emptyMap[] = {{}};
+            return IPersistStreamInit_Load(stream, emptyMap);
+        }
+    }
+
+    return ATL::IPersistStreamInitImpl<CMapWinGISControl>::Load(stream);
+}
+
 STDMETHODIMP CMapWinGISControl::InterfaceSupportsErrorInfo(REFIID interfaceId)
 {
     return IsEqualIID(interfaceId, IID_IMapWinGISControl) ||
@@ -527,6 +548,7 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
                 TRUE) == CSTR_EQUAL;
     };
 
+    const auto previousPreference = _renderer.GetPreference();
     if (equals(L"Automatic", 9))
     {
         _renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Automatic);
@@ -544,6 +566,10 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
         return SetControlComErrorInfo("The rendering backend preference must be Automatic, OpenGL, or GDI.", IID_IMapWinGISControl4, E_INVALIDARG);
     }
 
+    if (_renderer.GetPreference() != previousPreference)
+    {
+        SetDirty(TRUE);
+    }
     InvalidateLayerCache();
     FireViewChange();
     return S_OK;

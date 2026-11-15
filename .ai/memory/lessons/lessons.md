@@ -1,5 +1,12 @@
 # Verified development lessons
 
+## ATL registry scripts are not C++ source
+
+The ATL registrar rejected `//` comments in `MapWinGISControl.rgs` with
+`DISP_E_EXCEPTION` during per-user registration. Keep explanatory comments
+outside the `.rgs` file and verify registration, not just resource compilation.
+This was reproduced using process-local registry overrides in PR #77.
+
 ## Dataset and runner release must stay lock-free
 
 **Problem:** Taking the shared GDAL execution mutex in `GdalDatasetDeleter` or

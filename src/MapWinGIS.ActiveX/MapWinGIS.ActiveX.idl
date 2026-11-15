@@ -117,7 +117,9 @@ library MapWinGISActiveXLib
     };
 
     // GDAL operations are an independent capability, not a version of the
-    // control's core automation contract.
+    // control's core automation contract. This interface is early-bound only:
+    // SAFEARRAY(BSTR) arguments and hyper operation IDs are not suitable for
+    // late-bound VBScript/VB6 automation clients.
     [
         object,
         dual,

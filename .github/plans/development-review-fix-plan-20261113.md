@@ -9,7 +9,7 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 - [x] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
 - [x] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
 - [x] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
-- [ ] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
+- [x] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
 - [ ] Phase 7 – Rebuild render scenes per layer (#7, #34)
 - [ ] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
 - [ ] Phase 9 – Load vector datasets asynchronously (#36)
@@ -315,6 +315,18 @@ Do not change existing interface IIDs or DISPIDs. Where a new method or interfac
 - Add `RenderingBackendPreference` to the property map, and add `IPersistPropertyBagImpl` with its COM map entry. Check that `IPersistStreamInit` save and load round-trip the property.
 - Bump nothing in existing interfaces. If persistence needs a stream version marker, add one and handle older (empty) streams.
 - Tests: save to a stream and load into a new control instance; save to and load from a property bag (a small in-test `IPropertyBag` implementation).
+
+**Phase 6 result:** The GDAL interface remains early-bound, as selected by the
+user. The control exposes class information and property-bag persistence,
+persists the rendering preference, and accepts legacy empty property streams.
+Registration uses the matching OLE status flags in the registry and manifest.
+
+**Validation:** CMake Debug x64 built and CTest ran 405 tests with no
+failures (three skipped). MSBuild Debug x64 built and its three native test
+executables passed. Compile-command parity reported no lost options. Per-user
+registration and unregistration, including the OLE status value, passed with
+process-local registry overrides. The interactive registered-host test was not
+run.
 
 ### Phase 7 – Rebuild render scenes per layer (#7, #34)
 

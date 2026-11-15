@@ -26,6 +26,7 @@ set(MWG_ACTIVEX_SHARED_SOURCES "${MWG_ACTIVEX_SHARED_SOURCES}" PARENT_SCOPE)
 set(MWG_ACTIVEX_HEADERS
     ActiveXModule.h
     ComConversion.h
+    DllInstallScope.h
     FrameBuffer.h
     GdalDispatchWindow.h
     GdalEventSource.h
