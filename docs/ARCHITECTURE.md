@@ -19,6 +19,23 @@ Generic GDAL algorithms are exposed through the native `MapWinGIS.Core.dll`
 API and the ActiveX wrapper's separate `IMapWinGISControlGdal` interface.
 The wrapper handles COM translation, worker dispatch, progress, cancellation,
 and operation results; GDAL execution and dataset ownership remain in Core.
+The GDAL automation interface is an independent, early-bound COM capability.
+Its `SAFEARRAY(BSTR)` arguments and 64-bit (`hyper`) operation IDs are intended
+for clients that consume its type information; it is not a late-bound scripting
+contract. The primary control interface remains the default `IDispatch` surface.
+The control persists its rendering backend preference through streams and
+property bags. A seekable legacy stream containing only the ATL version is
+accepted as an empty property stream.
+
+The ActiveX GDAL event source is suspended while its control window is absent
+and resumes dispatch when that window is recreated. `IOleObject::Close` stops
+and cancels the current operation lifetime; a new non-null client site or a
+recreated control window starts a fresh operation lifetime. A closed control
+can therefore be reactivated and used again. Diagnostic strings are marshalled
+lossily: malformed UTF-8 and embedded NUL bytes become U+FFFD so invalid
+messages cannot prevent release of a completed operation. Its retry timer is
+created on the owner thread only while operation slots are outstanding and is
+stopped as soon as the last slot is ended.
 
 ## Module design
 
@@ -221,12 +238,18 @@ has no extent or transform of its own.
   a resize, does not rebuild the scene.
 - **Redraws.** Map changes go through `MapView` (`AddLayer`, `RemoveLayer`,
   `ClearLayers`, `SetLayerVisible`), which marks the scene stale; `Scene()`
-  rebuilds it on the next call. The `AddLayer` overload that accepts a prepared
+  assembles it from cached layer scenes on the next call.
+  The `AddLayer` overload that accepts a prepared
   vector scene transfers that geometry into the current scene without another
-  traversal. It rebuilds any stale existing scenes before adding the new layer.
+  traversal. It copies the new geometry into its layer cache before adding
+  the layer. Existing scene storage stays unchanged when it is current.
+  It assembles a stale scene before adding the new layer.
   Every mutator returns whether the frame may
   have changed, and the host requests a redraw when it does. Edits to source
-  geometry are not observed; call `InvalidateScene` after them.
+  geometry are not observed. Call `InvalidateLayerScene` for each affected
+  map layer, or `InvalidateScene` for all layers. Failed layers keep their
+  diagnostics until invalidated. Duplicate map layers have separate caches,
+  even when they share a source.
 - **Initial view and resizing.** While the viewport has no view, adding a
   layer fits the view to the visible map extent. `Resize` keeps the center
   and resolution, so resizing neither moves nor rescales the map. A fit
@@ -423,9 +446,21 @@ when first shown, and removing or clearing layers drops only the corresponding
 cache entries. InvalidateLayerScene rebuilds one layer after source edits;
 InvalidateScene clears all layer caches. Adding a prepared layer seeds its
 cache directly. The public map scene remains an owning snapshot, so assembly
-copies cached geometry. When a driver cannot provide a fast extent, scene
-preparation computes bounds during the geometry traversal instead of scanning
-the layer separately.
+copies cached geometry. The cache and snapshot each own coordinates and meshes.
+When a driver cannot provide a fast extent, scene preparation computes bounds
+during the geometry traversal. It caches those bounds on the vector layer,
+so a later map fit does not scan the layer again.
+
+`VectorRenderScene::polygons` uses `PolygonBuffer`: one coordinate buffer,
+one array of ring ranges, and one array of polygon ranges. Each range stores
+an offset and count. `PolygonView` borrows rings as read-only spans without
+allocating coordinate vectors. A buffer copy owns separate storage.
+Appending, assigning, or destroying a buffer invalidates its views.
+Scene preparation reuses temporary coordinate and ring-offset arrays for
+each polygon. Both backends read the flat buffers directly. Triangulation
+accepts a view without reconstructing nested vectors. Standalone `Polygon`
+and `Ring` types remain available for caller-created triangulation input.
+
 There is no tiling, paging, or clipping to the visible extent. GDI skips a
 layer whose device coordinates exceed its range. It clips drawing to the
 requested target rectangle and the host's existing clip region, then restores

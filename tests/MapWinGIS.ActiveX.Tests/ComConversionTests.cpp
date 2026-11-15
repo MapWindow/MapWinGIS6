@@ -97,6 +97,18 @@ TEST(ComConversion, RejectsEmbeddedNullsAndInvalidUtf8)
     EXPECT_EQ(invalid, nullptr);
 }
 
+TEST(ComConversion, LossilyConvertsDiagnosticTextAndReplacesEmbeddedNulls)
+{
+    constexpr std::string_view invalid{"bad\xC3\x28\0tail", 10};
+    BSTR raw = nullptr;
+    ASSERT_EQ(mwg::activex::ComConversion::DiagnosticToBstr(invalid, &raw), S_OK);
+    std::unique_ptr<wchar_t, decltype(&::SysFreeString)> value{raw, &::SysFreeString};
+    ASSERT_NE(value, nullptr);
+    const std::wstring converted(value.get(), ::SysStringLen(value.get()));
+    EXPECT_EQ(converted.find(L'\0'), std::wstring::npos);
+    EXPECT_NE(converted.find(L'\uFFFD'), std::wstring::npos);
+}
+
 TEST(ComConversion, CopiesOneDimensionalStringArrayWithNonzeroLowerBound)
 {
     SAFEARRAYBOUND bound{2, 5};

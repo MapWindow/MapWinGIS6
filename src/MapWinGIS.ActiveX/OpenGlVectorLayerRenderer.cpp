@@ -187,23 +187,18 @@ namespace mwg::activex
 
                 for (std::size_t index = 0; index < vectorScene.polygons.size(); ++index)
                 {
-                    const rendering::Polygon& polygon = vectorScene.polygons[index];
                     const std::optional<rendering::TriangleMesh>& mesh =
                         vectorScene.fillMeshes[index];
                     if (!mesh.has_value() || !IsMeshUsable(*mesh))
                     {
                         return false;
                     }
-
-                    for (const rendering::Ring& ring : polygon)
+                }
+                for (const rendering::Point& point : vectorScene.polygons.Coordinates())
+                {
+                    if (!std::isfinite(point.x) || !std::isfinite(point.y))
                     {
-                        for (const rendering::Point& point : ring)
-                        {
-                            if (!std::isfinite(point.x) || !std::isfinite(point.y))
-                            {
-                                return false;
-                            }
-                        }
+                        return false;
                     }
                 }
             }
@@ -256,11 +251,12 @@ namespace mwg::activex
         /// Draws one polygon's original ring boundaries as outlines.
         /// Triangle edges are not polygon boundaries and are never drawn.
         void DrawPolygonOutlines(
-            const rendering::Polygon& polygon,
+            const rendering::PolygonView polygon,
             const ViewTransform& transform) noexcept
         {
-            for (const rendering::Ring& ring : polygon)
+            for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
             {
+                const std::span<const rendering::Point> ring = polygon[ringIndex];
                 std::size_t count = ring.size();
                 if (count > 1 &&
                     ring.front().x == ring.back().x &&

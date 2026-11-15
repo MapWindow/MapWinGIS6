@@ -495,12 +495,14 @@ namespace mwg
         if (extent != nullptr)
         {
             *extent = computedExtent.value_or(Extent{});
+            layer._impl->_extent = *extent;
+            layer._impl->_extentNeedsExactRecalculation = false;
         }
         layer._impl->_featureCount = count;
         return count;
     }
 
-    bool detail::VectorLayerAccess::HasFastExtent(const VectorLayer& layer) noexcept
+    bool detail::VectorLayerAccess::HasFastExtent(const VectorLayer& layer)
     {
         return layer._impl->_layer->TestCapability(OLCFastGetExtent) != FALSE;
     }

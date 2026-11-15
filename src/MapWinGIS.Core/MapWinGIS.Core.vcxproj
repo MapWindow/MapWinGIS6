@@ -69,6 +69,7 @@
     <ClInclude Include="include\mapwingis\rendering\MapRenderScene.h" />
     <ClInclude Include="include\mapwingis\rendering\PolygonTriangulation.h" />
     <ClInclude Include="include\mapwingis\rendering\VectorRenderScene.h" />
+    <ClInclude Include="src\internal\GdalDiagnosticDispatch.h" />
     <ClInclude Include="src\internal\GdalExecution.h" />
     <ClInclude Include="src\internal\GdalProgressAdapterAccess.h" />
     <ClInclude Include="src\internal\Utf8.h" />

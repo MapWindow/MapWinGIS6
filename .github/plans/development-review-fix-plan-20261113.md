@@ -7,10 +7,10 @@ Implement one phase per run and open one PR per phase, in this order. Check a ph
 - [x] Phase 1 – Make the CMake test build complete and trustworthy (#8, #9, #10, #29, #40)
 - [x] Phase 2 – Fix the vector feature count and WKT error message (#1, #39)
 - [x] Phase 3 – Fix the GDAL execution lock and the algorithm runner state (#2, #5, #12, #17, #18, #19, #32, #33)
-- [ ] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
-- [ ] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
-- [ ] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
-- [ ] Phase 7 – Rebuild render scenes per layer (#7, #34)
+- [x] Phase 4 – Harden GDAL environment initialization and the error handler (#4, #13, #14, #15, #16, #28, #30, #31)
+- [x] Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
+- [x] Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
+- [x] Phase 7 – Rebuild render scenes per layer (#7, #34)
 - [ ] Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
 - [ ] Phase 9 – Load vector datasets asynchronously (#36)
 
@@ -236,6 +236,13 @@ Suggested fix:
 - Find the public APIs that call `ToUtf8` on caller-supplied paths. Convert the `std::system_error` into the API's normal failure (a `false` result with a recorded diagnostic, or a `CoreError` subclass for throwing APIs).
 - Test with a path containing an unpaired surrogate (`L"\xD800"`).
 
+**Phase 4 result:** Implemented in [PR #76](https://github.com/MapWindow/MapWinGIS6/pull/76). Module-lifetime policy: Core pins itself with `GET_MODULE_HANDLE_EX_FLAG_PIN` before registering the GDAL error handler, and the handler state is a deliberately leaked process-lifetime object; there is no shutdown or unload path and nothing runs from `DllMain`. A host-installed error handler is preserved and receives diagnostics after the MapWinGIS logger (GDAL's default and quiet handlers are excluded). Missing GDAL/PROJ data directories are checked without throwing and reported as warnings, and non-empty paths are configured explicitly. `Initialize(gdalDataDir, projDataDir)` returns `[[nodiscard]] bool`, and `Initialize()` returns early once initialized. `GDALCheckVersion` validates the runtime, a `static_assert` enforces GDAL 3.12.4 for the algorithm API, and path conversion failures become `InvalidArgument`. First-call behaviour is tested in a separate `MapWinGIS.Core.GdalInitialization.Tests` executable, built by CMake and MSBuild and run by CTest and the MSBuild CI job.
+
+**Limitations and validation notes:**
+
+- A real Core unload test is not practical: Core is pinned by design and cannot be unloaded from the test process.
+- Local Windows validation after merging `development`: CMake `x64-debug` build passed and CTest ran 393 tests with zero failures (three skipped: the public COG network test and two rendering benchmarks). MSBuild Debug x64 passed; `MapWinGIS.Core.Tests.exe` (322 passed, 1 skipped), `MapWinGIS.Core.GdalInitialization.Tests.exe` (1 passed) and `MapWinGIS.ActiveX.Tests.exe` (67 passed, 3 skipped) all passed. Compile-command parity passed with no lost flags; its rebuild logged two `MSB3061` access-denied warnings while test projects replaced shared runtime DLLs.
+
 ### Phase 5 – Make ActiveX GDAL operations robust (#3, #11, #22, #23, #25)
 
 **#3 – Conversion failures leak operation slots** (`src/MapWinGIS.ActiveX/MapWinGISControl.cpp:309-346` `EndGdalOperation`, `ComConversion.cpp:85-126`, `GdalOperationDispatcher.cpp:267-268`)
@@ -268,6 +275,13 @@ Suggested fix:
 - Resume event delivery when the window is created again (`WM_CREATE`/`OnCreate`) and on in-place activation, not only on `WM_SIZE` or `Begin`.
 - **Decision**: ask the user whether `IOleObject::Close` followed by re-activation should allow GDAL operations again (recommended: yes, reset the closing state on `SetClientSite` with a non-null site or on activation) or permanently disable them (then document it in `ARCHITECTURE.md` and the IDL).
 - Tests: destroy and re-create the control window while an operation runs, and check that the completion event arrives without a `WM_SIZE`. Add a Close-then-reactivate test for the chosen behaviour.
+
+**Phase 5 result:** Implemented in [PR #78](https://github.com/MapWindow/MapWinGIS6/pull/78). Diagnostic text uses the lossy `DiagnosticToBstr` (invalid UTF-8 and embedded NUL become U+FFFD), native exception messages are converted from the active code page in one helper, and `EndGdalOperation` releases the slot before any COM allocation and maps exceptions to distinct HRESULTs with error info. Failing automation calls set error info. The retry timer is armed only while operations are outstanding, is owner-thread-only, and is stopped when the last slot is ended. Decision #23: `IOleObject::Close` followed by reactivation (`SetClientSite` with a site, or window creation) allows GDAL operations again; the dispatch window is recreated on the next `BeginGdalOperation`.
+
+**Limitations and validation notes:**
+
+- The initial GitHub Actions run failed because `StartRetryTimer()` results were discarded (`C4834` as error). Retry-timer updates now go through one helper that reports a failure to arm it. `GdalDispatchWindow.h` now includes `<atlbase.h>` itself, because the ActiveX tests include it directly.
+- Local Windows validation after merging `development`: CMake `x64-debug` build passed and CTest ran 399 tests with zero failures (three skipped: the public COG network test and two rendering benchmarks). MSBuild Debug x64 passed; `MapWinGIS.Core.Tests.exe` (322 passed, 1 skipped), `MapWinGIS.Core.GdalInitialization.Tests.exe` (3 passed) and `MapWinGIS.ActiveX.Tests.exe` (70 passed, 2 skipped, interactive hosting test excluded) all passed. Compile-command parity passed with no lost flags and no new CMake warnings.
 
 ### Phase 6 – Improve COM container compatibility (#6, #20, #24, #27, #37)
 
@@ -302,6 +316,18 @@ Do not change existing interface IIDs or DISPIDs. Where a new method or interfac
 - Bump nothing in existing interfaces. If persistence needs a stream version marker, add one and handle older (empty) streams.
 - Tests: save to a stream and load into a new control instance; save to and load from a property bag (a small in-test `IPropertyBag` implementation).
 
+**Phase 6 result:** The GDAL interface remains early-bound, as selected by the
+user. The control exposes class information and property-bag persistence,
+persists the rendering preference, and accepts legacy empty property streams.
+Registration uses the matching OLE status flags in the registry and manifest.
+
+**Validation:** CMake Debug x64 built and CTest ran 405 tests with no
+failures (three skipped). MSBuild Debug x64 built and its three native test
+executables passed. Compile-command parity reported no lost options. Per-user
+registration and unregistration, including the OLE status value, passed with
+process-local registry overrides. The interactive registered-host test was not
+run.
+
 ### Phase 7 – Rebuild render scenes per layer (#7, #34)
 
 **#7 – Any visibility change re-reads every layer during paint** (`src/MapWinGIS.Core/src/map/MapView.cpp:150-161, 244-252`, `src/MapWinGIS.Core/src/rendering/MapRenderScene.cpp:16-50`)
@@ -321,10 +347,13 @@ Suggested fix:
 - **Decision**: replacing the nested `vector<vector<vector<Point>>>` with flat coordinate and offset buffers changes a public header and both renderers. Ask the user whether to do it in this phase or as a separate follow-up. If the user agrees, add a test that renders the same scene before and after (the rendering baseline tests) to show the output is unchanged.
 - Measure before and after on a generated layer (for example 100,000 polygons) and put the numbers in the PR description.
 
+**Phase 7 result:** Implemented in [PR #79](https://github.com/MapWindow/MapWinGIS6/pull/79). MapView caches scenes by layer ID and supports selective invalidation. Geometry traversal ignores attributes and computes slow extents in the same pass, also caching them for later map fits. The user approved flat polygon buffers during local review. Core now stores coordinates and ring/polygon ranges contiguously, and triangulation and both renderers consume borrowed views. Prepared-layer insertion retains existing snapshot storage. Driver capability probes propagate allocation failures instead of terminating.
 
-**Phase 7 implementation:** Per-layer scene caching and extent traversal optimization are implemented in PR [#77](https://github.com/MapWindow/MapWinGIS6/pull/77). Local builds and tests were intentionally skipped; CI validation is pending.
+**Validation:** CMake Debug and Release x64 each built and ran 413 non-interactive cases with no failures (three opt-in cases skipped). MSBuild Debug x64 built without warnings, and Core, GDAL initialization, and non-interactive ActiveX tests passed. Both opt-in rendering baselines and all 35 renderer pixel/regression cases passed. The original 34 cases passed before the storage change. A new case compares every pixel before and after copying a flat scene and releasing its original buffers. No build files changed, so compile-command parity was not rerun.
 
-**Limitations:** The public MapRenderScene remains an owning snapshot, so assembling it copies cached geometry. The cache prevents repeated GDAL reads and triangulation on visibility changes, but does not eliminate snapshot-copy cost. The nested polygon representation was retained; flat coordinate buffers remain a separate design decision.
+**Measurements:** Sequential Release runs against development `77f7404` and this implementation used a generated GeoPackage with 100,000 32-vertex polygons and a 256-byte attribute. The map contained two copies of that layer. Median hide-and-assemble time fell from 5,083 ms to 68.7 ms; show-and-assemble fell from 10,005 ms to 95.1 ms. Preparing one layer took 4,858 ms before and 4,987 ms after, so preparation did not improve in this run. Adding a second prepared layer took 0.003 ms before and 42.2 ms after because the cache now needs its own copy.
+
+**Limitations:** MapRenderScene remains an owning snapshot. Caching prevents repeated GDAL reads and triangulation but keeps a second copy of coordinates and meshes. Additional process-private memory after an already-prepared first scene grew from 169.4 MiB to 466.1 MiB when adding both map layers. Interactive registration/hosting and network tests were not run. Local Release used the existing default-driver dependencies, not the CI full-driver feature set. Existing CMake ActiveX-test builds report command-line warning D9025 about `/external:W0` and `/external:W4`; no new source warnings were reported.
 
 ### Phase 8 – Fix ActiveX rendering edge cases (#21, #26, #35, #38)
 **Implementation submitted in [PR #81](https://github.com/MapWindow/MapWinGIS6/pull/81) (validation pending):**

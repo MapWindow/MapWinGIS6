@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -32,6 +33,7 @@
 #include <gdalalgorithm.h>
 
 #include "MapWinGIS.ActiveX_i.h"
+#include "DllInstallScope.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -46,6 +48,51 @@ namespace
         const std::u8string utf8 = path.u8string();
         return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
     }
+
+    class TestPropertyBag :
+        public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
+        public IPropertyBag
+    {
+    public:
+        BEGIN_COM_MAP(TestPropertyBag)
+            COM_INTERFACE_ENTRY(IPropertyBag)
+        END_COM_MAP()
+
+        STDMETHOD(Read)(LPCOLESTR name, VARIANT* value, IErrorLog*) override
+        {
+            if (name == nullptr || value == nullptr)
+            {
+                return E_POINTER;
+            }
+            const auto found = _values.find(name);
+            if (found == _values.end())
+            {
+                return E_INVALIDARG;
+            }
+            return ::VariantCopy(value, const_cast<VARIANT*>(
+                static_cast<const VARIANT*>(&found->second)));
+        }
+
+        STDMETHOD(Write)(LPCOLESTR name, VARIANT* value) override
+        {
+            if (name == nullptr || value == nullptr)
+            {
+                return E_POINTER;
+            }
+            try
+            {
+                _values.insert_or_assign(name, ATL::CComVariant(*value));
+                return S_OK;
+            }
+            catch (const std::bad_alloc&)
+            {
+                return E_OUTOFMEMORY;
+            }
+        }
+
+    private:
+        std::map<std::wstring, ATL::CComVariant, std::less<>> _values;
+    };
 
     class GdalEventSink final : public IDispatch
     {
@@ -843,6 +890,40 @@ namespace
 
 }
 
+TEST_F(ActiveXMapTest, InvalidArgumentsSetComErrorInfoForEachAutomationInterface)
+{
+    const auto expectDescription = [](const wchar_t* expected)
+    {
+        ComPtr<IErrorInfo> errorInfo;
+        EXPECT_EQ(::GetErrorInfo(0, &errorInfo), S_OK);
+        if (errorInfo == nullptr) return;
+        BSTR description = nullptr;
+        EXPECT_EQ(errorInfo->GetDescription(&description), S_OK);
+        std::unique_ptr<wchar_t, decltype(&::SysFreeString)> text{description, &::SysFreeString};
+        ASSERT_NE(text, nullptr);
+        EXPECT_NE(std::wstring(text.get()).find(expected), std::wstring::npos);
+    };
+
+    ComPtr<IMapWinGISControlGdal> gdal;
+    ASSERT_EQ(_control.As(&gdal), S_OK);
+    BSTR emptyAlgorithm = ::SysAllocStringLen(nullptr, 0);
+    ASSERT_NE(emptyAlgorithm, nullptr);
+    LONGLONG operationId = 0;
+    EXPECT_EQ(gdal->BeginGdalOperation(emptyAlgorithm, nullptr, &operationId), E_INVALIDARG);
+    ::SysFreeString(emptyAlgorithm);
+    expectDescription(L"algorithm path");
+
+    ComPtr<IMapWinGISControl> legacy;
+    ASSERT_EQ(_control.As(&legacy), S_OK);
+    EXPECT_EQ(legacy->LoadVectorDataset(nullptr), E_INVALIDARG);
+    expectDescription(L"dataset path");
+
+    ComPtr<IMapWinGISControl4> current;
+    ASSERT_EQ(_control.As(&current), S_OK);
+    EXPECT_EQ(current->ZoomToLayer(0), E_INVALIDARG);
+    expectDescription(L"Layer ID");
+}
+
 TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
 {
     ASSERT_EQ(LoadRectangles({{0, 0, 2, 2}, {3, 0, 5, 2}}), S_OK);
@@ -1107,6 +1188,164 @@ TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
         &noArguments, &result, nullptr, nullptr), S_OK);
     EXPECT_EQ(result.vt, VT_I4);
     EXPECT_EQ(result.lVal, 1);
+}
+
+
+TEST_F(ActiveXMapTest, ExposesClassInfoAndGdalTypeInformation)
+{
+    ComPtr<IProvideClassInfo2> classInfo;
+    ASSERT_EQ(_control.As(&classInfo), S_OK);
+
+    GUID sourceDispId{};
+    ASSERT_EQ(
+        classInfo->GetGUID(GUIDKIND_DEFAULT_SOURCE_DISP_IID, &sourceDispId),
+        S_OK);
+    EXPECT_TRUE(IsEqualIID(sourceDispId, __uuidof(IMapWinGISControlEvents)));
+
+    ComPtr<ITypeInfo> coclassInfo;
+    ASSERT_EQ(classInfo->GetClassInfo(&coclassInfo), S_OK);
+    TYPEATTR* coclassAttributes = nullptr;
+    ASSERT_EQ(coclassInfo->GetTypeAttr(&coclassAttributes), S_OK);
+    EXPECT_TRUE(IsEqualGUID(coclassAttributes->guid, __uuidof(MapWinGISControl)));
+    coclassInfo->ReleaseTypeAttr(coclassAttributes);
+
+    ComPtr<IMapWinGISControlGdal> gdal;
+    ASSERT_EQ(_control.As(&gdal), S_OK);
+    UINT typeInfoCount = 0;
+    ASSERT_EQ(gdal->GetTypeInfoCount(&typeInfoCount), S_OK);
+    EXPECT_EQ(typeInfoCount, 1U);
+    ComPtr<ITypeInfo> gdalTypeInfo;
+    ASSERT_EQ(gdal->GetTypeInfo(0, LOCALE_USER_DEFAULT, &gdalTypeInfo), S_OK);
+    TYPEATTR* gdalAttributes = nullptr;
+    ASSERT_EQ(gdalTypeInfo->GetTypeAttr(&gdalAttributes), S_OK);
+    EXPECT_TRUE(IsEqualIID(gdalAttributes->guid, __uuidof(IMapWinGISControlGdal)));
+    gdalTypeInfo->ReleaseTypeAttr(gdalAttributes);
+}
+
+TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughStream)
+{
+    ComPtr<IPersistStreamInit> persistence;
+    ASSERT_EQ(_control.As(&persistence), S_OK);
+    ComPtr<IMapWinGISControl2> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+
+    ATL::CComBSTR openGl(L"OpenGL");
+    ASSERT_EQ(control->put_RenderingBackendPreference(openGl), S_OK);
+    EXPECT_EQ(persistence->IsDirty(), S_OK);
+
+    ComPtr<IStream> stream;
+    ASSERT_EQ(CreateStreamOnHGlobal(nullptr, TRUE, &stream), S_OK);
+    ASSERT_EQ(persistence->Save(stream.Get(), TRUE), S_OK);
+    EXPECT_EQ(persistence->IsDirty(), S_FALSE);
+    ASSERT_EQ(control->put_RenderingBackendPreference(openGl), S_OK);
+    EXPECT_EQ(persistence->IsDirty(), S_FALSE);
+
+    using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+    const auto getClassObject = reinterpret_cast<GetClassObject>(
+        GetProcAddress(_module->Get(), "DllGetClassObject"));
+    ASSERT_NE(getClassObject, nullptr);
+    ComPtr<IClassFactory> factory;
+    ASSERT_EQ(getClassObject(
+        __uuidof(MapWinGISControl), IID_PPV_ARGS(&factory)), S_OK);
+    ComPtr<IMapWinGISControl2> restoredControl;
+    ASSERT_EQ(factory->CreateInstance(
+        nullptr, IID_PPV_ARGS(&restoredControl)), S_OK);
+    ComPtr<IPersistStreamInit> restoredPersistence;
+    ASSERT_EQ(restoredControl.As(&restoredPersistence), S_OK);
+
+    LARGE_INTEGER beginning{};
+    ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
+    ASSERT_EQ(restoredPersistence->Load(stream.Get()), S_OK);
+    EXPECT_EQ(restoredPersistence->IsDirty(), S_FALSE);
+
+    ATL::CComBSTR actual;
+    ASSERT_EQ(restoredControl->get_RenderingBackendPreference(&actual), S_OK);
+    EXPECT_STREQ(actual, L"OpenGL");
+}
+
+TEST_F(ActiveXMapTest, LoadsLegacyEmptyPropertyStream)
+{
+    ComPtr<IPersistStreamInit> persistence;
+    ASSERT_EQ(_control.As(&persistence), S_OK);
+    ComPtr<IStream> stream;
+    ASSERT_EQ(CreateStreamOnHGlobal(nullptr, TRUE, &stream), S_OK);
+    const DWORD version = _ATL_VER;
+    ASSERT_EQ(stream->Write(&version, sizeof(version), nullptr), S_OK);
+    LARGE_INTEGER beginning{};
+    ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
+    ASSERT_EQ(persistence->Load(stream.Get()), S_OK);
+    EXPECT_EQ(persistence->IsDirty(), S_FALSE);
+}
+
+TEST_F(ActiveXMapTest, RejectsNewerLegacyStreamVersion)
+{
+    ComPtr<IPersistStreamInit> persistence;
+    ASSERT_EQ(_control.As(&persistence), S_OK);
+    ComPtr<IStream> stream;
+    ASSERT_EQ(CreateStreamOnHGlobal(nullptr, TRUE, &stream), S_OK);
+    const DWORD version = _ATL_VER + 1;
+    ASSERT_EQ(stream->Write(&version, sizeof(version), nullptr), S_OK);
+    LARGE_INTEGER beginning{};
+    ASSERT_EQ(stream->Seek(beginning, STREAM_SEEK_SET, nullptr), S_OK);
+    EXPECT_TRUE(FAILED(persistence->Load(stream.Get())));
+}
+
+
+TEST_F(ActiveXMapTest, PersistsRenderingPreferenceThroughPropertyBag)
+{
+    ComPtr<IPersistPropertyBag> persistence;
+    ASSERT_EQ(_control.As(&persistence), S_OK);
+    ComPtr<IMapWinGISControl2> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+
+    ATL::CComBSTR openGl(L"OpenGL");
+    ASSERT_EQ(control->put_RenderingBackendPreference(openGl), S_OK);
+
+    ATL::CComObject<TestPropertyBag>* rawBag = nullptr;
+    ASSERT_EQ(ATL::CComObject<TestPropertyBag>::CreateInstance(&rawBag), S_OK);
+    ASSERT_NE(rawBag, nullptr);
+    rawBag->AddRef();
+    ComPtr<IPropertyBag> bag;
+    bag.Attach(rawBag);
+    ASSERT_EQ(persistence->Save(bag.Get(), TRUE, FALSE), S_OK);
+
+    using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+    const auto getClassObject = reinterpret_cast<GetClassObject>(
+        GetProcAddress(_module->Get(), "DllGetClassObject"));
+    ASSERT_NE(getClassObject, nullptr);
+    ComPtr<IClassFactory> factory;
+    ASSERT_EQ(getClassObject(__uuidof(MapWinGISControl), IID_PPV_ARGS(&factory)), S_OK);
+    ComPtr<IMapWinGISControl2> restoredControl;
+    ASSERT_EQ(factory->CreateInstance(nullptr, IID_PPV_ARGS(&restoredControl)), S_OK);
+    ComPtr<IPersistPropertyBag> restoredPersistence;
+    ASSERT_EQ(restoredControl.As(&restoredPersistence), S_OK);
+    ASSERT_EQ(restoredPersistence->Load(bag.Get(), nullptr), S_OK);
+
+    ATL::CComBSTR actual;
+    ASSERT_EQ(restoredControl->get_RenderingBackendPreference(&actual), S_OK);
+    EXPECT_STREQ(actual, L"OpenGL");
+}
+
+TEST(ActiveXModule, ParsesDllInstallRegistrationScope)
+{
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(nullptr),
+        DllInstallRegistrationScope::Machine);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L""),
+        DllInstallRegistrationScope::Machine);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L"user"),
+        DllInstallRegistrationScope::User);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L"USER"),
+        DllInstallRegistrationScope::User);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L"machine"),
+        DllInstallRegistrationScope::Invalid);
+    EXPECT_EQ(
+        ParseDllInstallRegistrationScope(L"user "),
+        DllInstallRegistrationScope::Invalid);
 }
 
 TEST_F(ActiveXMapTest, ExtendedLoadRefitsAnExistingNavigationView)

@@ -21,6 +21,8 @@ namespace mwg::detail
     struct VectorLayerAccess final
     {
         /// Returns the exact number of features, including absent geometries.
+        /// When extent is supplied, computes and caches exact bounds in the
+        /// same traversal. Neither cached result changes after a failed scan.
         static std::int64_t ForEachGeometry(
             const VectorLayer& layer,
             const std::function<void(const OGRGeometry&)>& callback,
@@ -28,6 +30,6 @@ namespace mwg::detail
 
         /// Whether the source driver can return an extent without scanning
         /// every feature.
-        [[nodiscard]] static bool HasFastExtent(const VectorLayer& layer) noexcept;
+        [[nodiscard]] static bool HasFastExtent(const VectorLayer& layer);
     };
 }

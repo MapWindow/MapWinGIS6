@@ -44,6 +44,8 @@ namespace mwg::test
         bool emptyLayer = false;
         bool onlyEmptyGeometries = false;
         bool unknownCount = false;
+        bool fastExtent = false;
+        bool failExtentCapabilityAllocation = false;
         bool ignoredFields = false;
         bool ignoredGeometry = false;
         std::string layerName = "features";
@@ -51,6 +53,7 @@ namespace mwg::test
         int storedValue = 0;
         int nextFeature = 0;
         int readCalls = 0;
+        int attributeReadCalls = 0;
         int countCalls = 0;
         int extentCalls = 0;
         int recomputeExtentCalls = 0;

@@ -4,13 +4,16 @@
  * @file VectorRenderScene.h
  * @brief Declares backend-neutral polygon scene data for vector rendering.
  *
- * Converts polygon features from a vector layer into owned coordinate data
- * that renderers can consume without retaining dataset-owned objects.
+ * Stores scene coordinates and polygon/ring ranges in flat buffers. Borrowed
+ * polygon views let renderers read them without per-polygon allocations.
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "mapwingis/core/Api.h"
@@ -36,6 +39,80 @@ namespace mwg
         /// A polygon and its rings. The first ring is the exterior boundary.
         using Polygon = std::vector<Ring>;
 
+        /// A contiguous range of coordinates or rings in a PolygonBuffer.
+        struct GeometryRange
+        {
+            std::size_t offset;
+            std::size_t count;
+        };
+
+        /// Borrowed read-only rings of one polygon. The first is its exterior.
+        /// Invalidated by mutation, assignment, or destruction of its buffer.
+        /// Ring access throws InvalidArgument for an out-of-range index,
+        /// including front() on an empty view.
+        class MWG_CORE_API PolygonView
+        {
+        public:
+            [[nodiscard]] std::size_t size() const noexcept { return _rings.size(); }
+            [[nodiscard]] bool empty() const noexcept { return _rings.empty(); }
+            [[nodiscard]] std::span<const Point> operator[](std::size_t index) const;
+            [[nodiscard]] std::span<const Point> front() const { return (*this)[0]; }
+
+        private:
+            friend class PolygonBuffer;
+            PolygonView(std::span<const Point> coordinates,
+                        std::span<const GeometryRange> rings) noexcept
+                : _coordinates(coordinates), _rings(rings)
+            {
+            }
+
+            std::span<const Point> _coordinates;
+            std::span<const GeometryRange> _rings;
+        };
+
+        /// Owned flat coordinates, ring ranges, and polygon ranges.
+        ///
+        /// Copies own their storage; no spans are retained in the buffer.
+        /// Topology is read-only except through AppendPolygon, which preserves
+        /// it on failure. Not thread-safe. Polygon access throws InvalidArgument
+        /// for an out-of-range index, including front() on an empty buffer.
+        class MWG_CORE_API PolygonBuffer
+        {
+        public:
+            PolygonBuffer() = default;
+            PolygonBuffer(std::initializer_list<Polygon> polygons);
+            PolygonBuffer(const PolygonBuffer&) = default;
+            PolygonBuffer(PolygonBuffer&&) noexcept = default;
+            PolygonBuffer& operator=(PolygonBuffer other) noexcept;
+
+            [[nodiscard]] std::size_t size() const noexcept { return _polygons.size(); }
+            [[nodiscard]] bool empty() const noexcept { return _polygons.empty(); }
+            [[nodiscard]] PolygonView operator[](std::size_t index) const;
+            [[nodiscard]] PolygonView front() const { return (*this)[0]; }
+            [[nodiscard]] std::span<const Point> Coordinates() const noexcept { return _coordinates; }
+            [[nodiscard]] std::span<Point> Coordinates() noexcept { return _coordinates; }
+            [[nodiscard]] std::span<const GeometryRange> Rings() const noexcept { return _rings; }
+            [[nodiscard]] std::span<const GeometryRange> Polygons() const noexcept { return _polygons; }
+
+            /// Appends rings without retaining the input. ringEnds contains
+            /// nondecreasing exclusive coordinate ends, including the final
+            /// coordinates.size(). Empty rings and polygons are allowed.
+            /// Input spans must not refer to this buffer's storage.
+            /// \throws InvalidArgument when ringEnds does not partition coordinates.
+            /// \throws std::bad_alloc when memory runs out.
+            void AppendPolygon(std::span<const Point> coordinates,
+                               std::span<const std::size_t> ringEnds);
+
+            /// Convenience input for standalone polygons; scenes still store
+            /// only flat buffers. Does not retain polygon or its rings.
+            void AppendPolygon(const Polygon& polygon);
+
+        private:
+            std::vector<Point> _coordinates;
+            std::vector<GeometryRange> _rings;
+            std::vector<GeometryRange> _polygons;
+        };
+
         /// A backend-neutral triangulated 2D fill mesh for one polygon.
         ///
         /// Vertices stay in the source layer's coordinate system. Indices
@@ -56,7 +133,7 @@ namespace mwg
             Extent extent;
             /// Feature count of the layer used to create this scene.
             std::int64_t sourceFeatureCount = 0;
-            std::vector<Polygon> polygons;
+            PolygonBuffer polygons;
             /// Triangulated fill meshes prepared once when the scene is
             /// created, aligned with polygons: fillMeshes[i] belongs to
             /// polygons[i]. An entry is std::nullopt when that polygon could

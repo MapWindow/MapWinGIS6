@@ -8,7 +8,6 @@
 
 #include <cmath>
 #include <map>
-#include <new>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -64,7 +63,7 @@ namespace mwg
             return false;
         }
 
-        using LayerScene = std::variant<rendering::LayerRenderScene, rendering::SkippedLayer>;
+        using LayerScene = rendering::detail::LayerScene;
 
         Map _map;
         Viewport _viewport;
@@ -135,7 +134,7 @@ namespace mwg
         }
         else
         {
-            staged.emplace(LayerId{}, rendering::LayerRenderScene{LayerId{}, std::move(scene)});
+            staged.emplace(LayerId{}, rendering::LayerRenderScene{LayerId{}, scene});
         }
         auto cachedScene = staged.extract(staged.begin());
 
@@ -150,7 +149,16 @@ namespace mwg
             std::get<rendering::LayerRenderScene>(cachedScene.mapped()).layerId = id;
         }
         _impl->_layerScenes.insert(std::move(cachedScene));
-        _impl->_sceneStale = true;
+        if (empty)
+        {
+            _impl->_scene.skippedLayers.push_back(
+                {id, rendering::LayerSkipReason::NoGeometry, {}});
+        }
+        else
+        {
+            _impl->_scene.layers.push_back({id, std::move(scene)});
+        }
+        _impl->_sceneStale = false;
         return id;
     }
 
@@ -281,32 +289,8 @@ namespace mwg
                 auto cached = _impl->_layerScenes.find(layer.Id());
                 if (cached == _impl->_layerScenes.end())
                 {
-                    Impl::LayerScene layerScene;
-                    try
-                    {
-                        rendering::VectorRenderScene vectorScene =
-                            rendering::detail::BuildVectorRenderScene(layer.Source());
-                        if (vectorScene.polygons.empty())
-                        {
-                            layerScene = rendering::SkippedLayer{
-                                layer.Id(), rendering::LayerSkipReason::NoGeometry, {}};
-                        }
-                        else
-                        {
-                            layerScene = rendering::LayerRenderScene{
-                                layer.Id(), std::move(vectorScene)};
-                        }
-                    }
-                    catch (const std::bad_alloc&)
-                    {
-                        throw;
-                    }
-                    catch (const std::exception& error)
-                    {
-                        layerScene = rendering::SkippedLayer{
-                            layer.Id(), rendering::LayerSkipReason::Failed, error.what()};
-                    }
-                    cached = _impl->_layerScenes.emplace(layer.Id(), std::move(layerScene)).first;
+                    cached = _impl->_layerScenes.emplace(
+                        layer.Id(), rendering::detail::BuildLayerRenderScene(layer)).first;
                 }
 
                 if (const auto* drawable =

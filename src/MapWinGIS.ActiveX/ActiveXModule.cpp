@@ -5,6 +5,7 @@
  * @brief Implements the ATL in-process COM server entry points.
  */
 #include "ActiveXModule.h"
+#include "DllInstallScope.h"
 
 #include <cwchar>
 
@@ -38,16 +39,18 @@ STDAPI DllUnregisterServer()
 
 STDAPI DllInstall(BOOL bInstall, LPCWSTR pszCmdLine)
 {
-    if (pszCmdLine != nullptr && _wcsicmp(pszCmdLine, L"user") == 0)
+    switch (ParseDllInstallRegistrationScope(pszCmdLine))
     {
+    case DllInstallRegistrationScope::User:
         ATL::AtlSetPerUserRegistration(true);
         return bInstall ? DllRegisterServer() : DllUnregisterServer();
-    }
 
-    if (pszCmdLine != nullptr)
-    {
+    case DllInstallRegistrationScope::Machine:
+        ATL::AtlSetPerUserRegistration(false);
+        return bInstall ? DllRegisterServer() : DllUnregisterServer();
+
+    case DllInstallRegistrationScope::Invalid:
+    default:
         return E_INVALIDARG;
     }
-
-    return bInstall ? DllRegisterServer() : DllUnregisterServer();
 }

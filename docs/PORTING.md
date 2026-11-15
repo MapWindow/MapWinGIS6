@@ -14,6 +14,20 @@ is intentionally not retained, document the difference and rationale.
 
 For GDAL-specific migration guidance, see [GDAL migration](gdal-migration.md).
 
+## Native render-scene storage
+
+`VectorRenderScene::polygons` now owns a `PolygonBuffer` instead of nested
+vectors. This changes the native structure layout and requires clients to
+rebuild against the updated Core headers and DLL. It does not change COM
+interfaces or identifiers.
+
+Use `AppendPolygon` to add geometry and `Coordinates()` to access flat
+coordinates. Indexed polygon access returns a borrowed `PolygonView`.
+Its ring spans expire when the buffer changes or is destroyed.
+The standalone `Polygon` and `Ring` types and their triangulation overload
+remain available. This design reduces per-ring allocations and makes
+geometry copies contiguous.
+
 ## What "port" means here
 
 1. **Understand the legacy behavior.** Inspect v5 sources and tests to learn

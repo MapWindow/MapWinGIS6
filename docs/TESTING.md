@@ -5,6 +5,11 @@
   on for CMake).
 - Core test project: `tests/MapWinGIS.Core.Tests`, built with the solution or
   CMake.
+- First-call GDAL initialization test project:
+  `MapWinGIS.Core.GdalInitialization.Tests` in `tests/MapWinGIS.Core.Tests`,
+  built with the solution or CMake. It runs in its own process because GDAL's error
+  handler and data paths are process-wide and `GdalEnvironment` initializes
+  only once.
 - ActiveX test project: `tests/MapWinGIS.ActiveX.Tests`, built with the solution
   or CMake when `MWG_BUILD_ACTIVEX` is enabled.
 - CMake registers the Core tests independently of ActiveX. It adds the
@@ -24,6 +29,7 @@ Run the MSBuild test executables from the repository root:
 
 ```powershell
 bin\Debug\x64\MapWinGIS.Core.Tests.exe
+bin\Debug\x64\MapWinGIS.Core.GdalInitialization.Tests.exe
 bin\Debug\x64\MapWinGIS.ActiveX.Tests.exe
 bin\Release\x64\MapWinGIS.Core.Tests.exe --gtest_output=xml:testresults.xml   # CI
 bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresults.xml
@@ -118,6 +124,8 @@ Pull requests run both Debug and full-driver Release tests for x64.
 The native `MapWinGIS.ActiveX.Tests` project covers COM activation, registered
 control rendering through GDI and OpenGL, whole-pixel pan-offset validation,
 and GDAL progress/completion events.
+Diagnostic conversion tests verify that malformed UTF-8 and embedded NULs
+are replaced instead of rejecting a completed operation's result.
 Its registered-control host test also sends a wheel zoom and captured drag to
 the hosted control and verifies their viewport effects. Run this opt-in test
 with `tests\MapWinGIS.ActiveX.Tests\Verify-ActiveXActivation.ps1`.
@@ -274,6 +282,18 @@ the OpenGL driver and context.
   resizing, and scene invalidation; and `VectorLayerRendererTests.cpp` draws
   layers with different extents into memory bitmaps and samples the pixels at
   `Viewport::MapToScreen` positions, for GDI and, when available, OpenGL.
+- Map view tests count source reads across visibility changes, lazy preparation,
+  layer removal, clearing, and selective invalidation. They also cover retrying
+  a failed layer without rebuilding other layers and retaining transferred
+  scene storage when another prepared layer is added.
+- Scene tests cover both extent paths, ignored attributes, and restoring
+  attribute reads after a traversal failure. Slow extent calculation also
+  seeds the vector layer cache, so later extent queries need no scan.
+  Flat-buffer tests cover multipart and interior-ring ranges, rejected
+  offsets, and independent coordinate storage after copying and moving.
+  Existing renderer pixel assertions cover the same shapes with flat buffers.
+  A copied-scene case compares every pixel after releasing the original
+  coordinate buffers, for GDI and for OpenGL when available.
 - Native `ActiveXMapTest` cases activate the real OCX through its class factory
   without registration. They cover stacked loads, rejected loads, cached
   feature totals, dataset release through `ClearLayers`, `WM_SIZE`, and draws

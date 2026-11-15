@@ -31,7 +31,8 @@ namespace mwg
     /// through GetViewport(). Changes to the layer collection or visibility
     /// mark the scene stale; Scene() rebuilds it on the next call. Adding a
     /// prepared scene retains the existing geometry instead. Edits to source
-    /// geometry are not observed; call InvalidateScene after them.
+    /// geometry are not observed. Call InvalidateLayerScene for each affected
+    /// map layer, or InvalidateScene for all layers.
     ///
     /// Initial view: while the viewport has no view, adding a layer fits the
     /// viewport to the map. A fit that cannot happen because the viewport has
@@ -72,7 +73,8 @@ namespace mwg
         /// The scene must match the specified source layer without intervening
         /// edits. An empty scene adds a layer with no drawable geometry.
         /// Transfers scene ownership and retains the current layers' scenes,
-        /// rebuilding stale scenes first. The next Scene() does not reread data.
+        /// rebuilding stale scenes first. The cache owns a separate copy of
+        /// the new scene. The next Scene() does not reread data.
         /// Fitting and argument errors are the same as the other AddLayer overload.
         /// \throws std::bad_alloc when memory runs out.
         LayerId AddLayer(std::shared_ptr<VectorDataset> dataset,
@@ -151,18 +153,22 @@ namespace mwg
         /// call that reassembles the scene replaces its contents. Geometry
         /// for a visible uncached layer is read once; visibility changes reuse
         /// its cache. Reassembly copies cached geometry into the map snapshot.
+        /// Failed layers retain their diagnostics until explicitly invalidated.
         /// \throws std::bad_alloc when memory runs out.
         [[nodiscard]] const rendering::MapRenderScene& Scene();
 
         /// Marks every cached layer scene stale, for example after edits that
-        /// may affect multiple source layers. Scenes are rebuilt lazily by the
-        /// next Scene() call. Returns true: the frame must be redrawn.
+        /// may affect multiple source layers. Visible scenes are rebuilt by the
+        /// next Scene() call; hidden scenes wait until shown.
+        /// Returns true: the frame must be redrawn.
         bool InvalidateScene() noexcept;
 
         /// Marks one layer's cached scene stale after its source geometry was
         /// edited. Other layer scenes remain cached. Returns false when id
         /// does not identify a current layer; otherwise returns true and the
-        /// layer is rebuilt lazily by the next Scene() call.
+        /// layer is rebuilt when next visible in Scene(). Also retries a
+        /// previously failed layer. Duplicate map layers of the same source
+        /// have independent caches; invalidate each affected map layer.
         bool InvalidateLayerScene(LayerId id) noexcept;
 
     private:

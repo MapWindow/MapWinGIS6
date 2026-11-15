@@ -1,5 +1,12 @@
 # Verified development lessons
 
+## ATL registry scripts are not C++ source
+
+The ATL registrar rejected `//` comments in `MapWinGISControl.rgs` with
+`DISP_E_EXCEPTION` during per-user registration. Keep explanatory comments
+outside the `.rgs` file and verify registration, not just resource compilation.
+This was reproduced using process-local registry overrides in PR #77.
+
 ## Dataset and runner release must stay lock-free
 
 **Problem:** Taking the shared GDAL execution mutex in `GdalDatasetDeleter` or
@@ -75,6 +82,22 @@ integration test still requires an interactive Windows desktop.
 
 **References:** [Testing guide](../../../docs/TESTING.md#activex-host-integration-checks)
 and [PR #26](https://github.com/MapWindow/MapWinGIS6/pull/26).
+
+## ActiveX headers included by tests must be self-contained
+
+**Problem:** `GdalOperationDispatcherTests.cpp` failed with `C1189: atlwin.h
+requires atlbase.h to be included first` after it included
+`GdalDispatchWindow.h` directly.
+
+**Cause:** The header relied on an earlier `<atlbase.h>` include from its
+ActiveX callers. The ActiveX tests include implementation headers directly,
+so implicit include order does not hold there.
+
+**Resolution:** ActiveX headers include every ATL header they need, with
+`<atlbase.h>` before `<atlwin.h>`. Verified on
+[PR #78](https://github.com/MapWindow/MapWinGIS6/pull/78).
+
+See [GdalDispatchWindow.h](../../../src/MapWinGIS.ActiveX/GdalDispatchWindow.h).
 
 ## Shapefile geometry edits do not shrink stored bounds
 

@@ -34,6 +34,10 @@ the current map center and resolution.
 Vector loads add layers rather than replace them. Call `ClearLayers` to
 release the loaded datasets before switching or refreshing them.
 
+Core stores polygon coordinates in flat buffers and caches prepared geometry
+per map layer. Visibility changes reuse that geometry without rereading
+datasets or triangulating polygons again.
+
 ## Build and test
 
 ### Prerequisites

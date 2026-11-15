@@ -38,6 +38,13 @@ class ATL_NO_VTABLE CMapWinGISControl :
     public ATL::IViewObjectExImpl<CMapWinGISControl>,
     public ATL::IOleInPlaceObjectWindowlessImpl<CMapWinGISControl>,
     public ATL::IPersistStreamInitImpl<CMapWinGISControl>,
+    public ATL::IPersistPropertyBagImpl<CMapWinGISControl>,
+    public ATL::IProvideClassInfo2Impl<
+        &CLSID_MapWinGISControl,
+        &DIID_IMapWinGISControlEvents,
+        &LIBID_MapWinGISActiveXLib,
+        0xFFFF,
+        0xFFFF>,
     public ISupportErrorInfo,
     // Load the default dispatch type information from this OCX, not a
     // potentially older registered copy of the same type library.
@@ -51,8 +58,8 @@ class ATL_NO_VTABLE CMapWinGISControl :
         IMapWinGISControlGdal,
         &IID_IMapWinGISControlGdal,
         &LIBID_MapWinGISActiveXLib,
-        1,
-        0>
+        0xFFFF,
+        0xFFFF>
 {
 public:
     CMapWinGISControl();
@@ -68,6 +75,9 @@ public:
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
         COM_INTERFACE_ENTRY(ISupportErrorInfo)
+        COM_INTERFACE_ENTRY(IProvideClassInfo)
+        COM_INTERFACE_ENTRY(IProvideClassInfo2)
+        COM_INTERFACE_ENTRY(IPersistPropertyBag)
         COM_INTERFACE_ENTRY(IConnectionPointContainer)
         COM_INTERFACE_ENTRY2(IDispatch, IMapWinGISControl4)
         COM_INTERFACE_ENTRY(IViewObjectEx)
@@ -88,9 +98,11 @@ public:
     END_CONNECTION_POINT_MAP()
 
     BEGIN_PROP_MAP(CMapWinGISControl)
+        PROP_ENTRY_TYPE("RenderingBackendPreference", 7, CLSID_NULL, VT_BSTR)
     END_PROP_MAP()
 
     BEGIN_MSG_MAP(CMapWinGISControl)
+        MESSAGE_HANDLER(WM_CREATE, OnCreate)
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
         MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
         MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
@@ -105,6 +117,7 @@ public:
 
     DECLARE_VIEW_STATUS(VIEWSTATUS_SOLIDBKGND | VIEWSTATUS_OPAQUE)
 
+    STDMETHOD(Load)(IStream* stream) override;
     STDMETHOD(InterfaceSupportsErrorInfo)(REFIID interfaceId) override;
     STDMETHOD(get_CoreInitialized)(VARIANT_BOOL* initialized) override;
     STDMETHOD(LoadVectorDataset)(BSTR path) override;
@@ -140,8 +153,10 @@ public:
         BSTR* diagnostics,
         SAFEARRAY** warnings) override;
     STDMETHOD(Close)(DWORD saveOption) override;
+    STDMETHOD(SetClientSite)(IOleClientSite* clientSite) override;
     STDMETHOD(SetObjectRects)(LPCRECT position, LPCRECT clip) override;
 
+    LRESULT OnCreate(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonDown(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnMouseMove(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnLButtonUp(UINT, WPARAM, LPARAM, BOOL& handled);
