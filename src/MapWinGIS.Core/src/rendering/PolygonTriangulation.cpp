@@ -99,7 +99,9 @@ namespace mwg::rendering
             {
                 const std::size_t x = std::hash<double>{}(point.x);
                 const std::size_t y = std::hash<double>{}(point.y);
-                return x ^ (y + 0x9e3779b97f4a7c15ULL + (x << 6) + (x >> 2));
+                constexpr std::size_t mixingConstant =
+                    static_cast<std::size_t>(0x9e3779b97f4a7c15ULL);
+                return x ^ (y + mixingConstant + (x << 6) + (x >> 2));
             }
         };
 

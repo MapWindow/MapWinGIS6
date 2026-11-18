@@ -36,6 +36,7 @@
 #include "MapWinGIS.ActiveX_i.h"
 #include "MapWinGISControlTestAccess.h"
 #include "DllInstallScope.h"
+#include "GdalDispatchWindow.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -271,6 +272,15 @@ namespace
                 operationId));
         }
 
+        [[nodiscard]] std::size_t ProgressCount(const LONGLONG operationId) const
+        {
+            std::lock_guard lock(_mutex);
+            return static_cast<std::size_t>(std::count(
+                _progressOperations.begin(),
+                _progressOperations.end(),
+                operationId));
+        }
+
         [[nodiscard]] bool HasProgress(const LONGLONG operationId) const
         {
             std::lock_guard lock(_mutex);
@@ -354,6 +364,128 @@ namespace
 
     private:
         HANDLE _handle = nullptr;
+    };
+
+    class NestedDispatchBarrier final
+    {
+    public:
+        ~NestedDispatchBarrier()
+        {
+            static_cast<void>(_sinkEntered.Signal());
+            static_cast<void>(_wakePosted.Signal());
+            static_cast<void>(_allowFinish.Signal());
+            if (_started.load(std::memory_order_acquire))
+            {
+                static_cast<void>(_workerFinished.Wait(10000));
+            }
+        }
+
+        void MarkStarted() noexcept
+        {
+            _started.store(true, std::memory_order_release);
+        }
+
+        [[nodiscard]] bool WaitForSinkEntered() const noexcept
+        {
+            return _sinkEntered.Wait(10000);
+        }
+
+        [[nodiscard]] bool WaitForWakePosted() const noexcept
+        {
+            return _wakePosted.Wait(10000);
+        }
+
+        [[nodiscard]] bool WaitForCompletionDelivery() const noexcept
+        {
+            return _allowFinish.Wait(10000);
+        }
+
+        [[nodiscard]] bool SignalSinkEntered() const noexcept
+        {
+            return _sinkEntered.Signal();
+        }
+
+        [[nodiscard]] bool SignalWakePosted() const noexcept
+        {
+            return _wakePosted.Signal();
+        }
+
+        [[nodiscard]] bool SignalAllowFinish() const noexcept
+        {
+            return _allowFinish.Signal();
+        }
+
+        [[nodiscard]] bool SignalWorkerFinished() const noexcept
+        {
+            return _workerFinished.Signal();
+        }
+
+        void RecordNestedDispatch() noexcept
+        {
+            _nestedDispatchCount.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        [[nodiscard]] int NestedDispatchCount() const noexcept
+        {
+            return _nestedDispatchCount.load(std::memory_order_relaxed);
+        }
+
+    private:
+        ScopedEvent _sinkEntered;
+        ScopedEvent _wakePosted;
+        ScopedEvent _allowFinish;
+        ScopedEvent _workerFinished;
+        std::atomic_bool _started{false};
+        std::atomic_int _nestedDispatchCount{0};
+    };
+
+    std::atomic<NestedDispatchBarrier*> nestedDispatchBarrier{nullptr};
+
+    class HostedNestedDispatchAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        explicit HostedNestedDispatchAlgorithm(
+            NestedDispatchBarrier* const barrier)
+            : GDALAlgorithm(
+                  "mwg-test-activex-nested-progress",
+                  "Test nested COM progress dispatch",
+                  ""),
+              _barrier(barrier)
+        {
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc progress, void* userData) override
+        {
+            if (_barrier == nullptr || progress == nullptr)
+            {
+                return false;
+            }
+
+            struct FinishSignal final
+            {
+                NestedDispatchBarrier& barrier;
+                ~FinishSignal()
+                {
+                    static_cast<void>(barrier.SignalWorkerFinished());
+                }
+            } finishSignal{*_barrier};
+
+            if (progress(0.1, "COM nested progress", userData) == 0 ||
+                !_barrier->WaitForSinkEntered())
+            {
+                return false;
+            }
+            if (progress(0.2, "COM nested progress", userData) == 0)
+            {
+                return false;
+            }
+            static_cast<void>(_barrier->SignalWakePosted());
+            return _barrier->WaitForCompletionDelivery();
+        }
+
+    private:
+        NestedDispatchBarrier* _barrier = nullptr;
     };
 
     class VectorPreparationBarrier final
@@ -542,6 +674,13 @@ namespace
                 {"mwg-test-activex", "progress"},
                 [] { return std::make_unique<HostedProgressAlgorithm>(); });
             registry.DeclareAlgorithm(
+                {"mwg-test-activex", "nested-progress"},
+                []
+                {
+                    return std::make_unique<HostedNestedDispatchAlgorithm>(
+                        nestedDispatchBarrier.load(std::memory_order_acquire));
+                });
+            registry.DeclareAlgorithm(
                 {"mwg-test-activex", "diagnostics"},
                 [] { return std::make_unique<HostedDiagnosticsAlgorithm>(); });
         });
@@ -577,15 +716,43 @@ namespace
 
     // Simulates a sink that shows UI from a progress event: the nested pump
     // consumes dispatch messages posted while the control is still delivering.
-    HRESULT PumpNestedMessages(void*, LONGLONG)
+    HRESULT PumpNestedMessages(void* const context, LONGLONG)
     {
-        MSG message{};
-        while (::PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+        auto& barrier = *static_cast<NestedDispatchBarrier*>(context);
+        if (barrier.NestedDispatchCount() != 0)
         {
-            ::TranslateMessage(&message);
-            ::DispatchMessageW(&message);
+            return barrier.SignalAllowFinish() ? S_OK : E_FAIL;
         }
-        return S_OK;
+        if (!barrier.SignalSinkEntered())
+        {
+            return E_FAIL;
+        }
+
+        const auto dispatchWake = [&barrier]
+        {
+            MSG message{};
+            if (!::PeekMessageW(
+                    &message,
+                    nullptr,
+                    mwg::activex::kGdalDispatchMessage,
+                    mwg::activex::kGdalDispatchMessage,
+                    PM_REMOVE))
+            {
+                return false;
+            }
+            ::DispatchMessageW(&message);
+            barrier.RecordNestedDispatch();
+            return true;
+        };
+
+        if (!barrier.WaitForWakePosted() || !dispatchWake())
+        {
+            return E_FAIL;
+        }
+        while (dispatchWake())
+        {
+        }
+        return barrier.NestedDispatchCount() == 1 ? S_OK : E_FAIL;
     }
 
     HRESULT FailCompletion(void*, LONGLONG)
@@ -2670,20 +2837,51 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
                 warningResult.warnings.front().find(L"COM test warning"),
                 std::wstring::npos);
 
-            eventSink->SetProgressCallback(&PumpNestedMessages, nullptr);
+            NestedDispatchBarrier nestedBarrier;
+            struct NestedDispatchCleanup final
+            {
+                GdalEventSink& eventSink;
+                ~NestedDispatchCleanup()
+                {
+                    eventSink.SetProgressCallback(nullptr, nullptr);
+                    nestedDispatchBarrier.store(
+                        nullptr,
+                        std::memory_order_release);
+                }
+            } nestedDispatchCleanup{*eventSink.Get()};
+            static_cast<void>(nestedDispatchCleanup);
+            nestedDispatchBarrier.store(
+                &nestedBarrier,
+                std::memory_order_release);
+            eventSink->SetProgressCallback(
+                &PumpNestedMessages,
+                &nestedBarrier);
             LONGLONG nestedPumpOperationId = 0;
             ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
                 gdalControl,
-                L"mwg-test-activex progress",
+                L"mwg-test-activex nested-progress",
                 {},
                 &nestedPumpOperationId)));
+            nestedBarrier.MarkStarted();
+            const HWND dispatchWindow = ::FindWindowExW(
+                HWND_MESSAGE,
+                nullptr,
+                L"MapWinGIS6.GdalDispatchWindow",
+                nullptr);
+            ASSERT_NE(dispatchWindow, nullptr);
+            ASSERT_TRUE(::KillTimer(
+                dispatchWindow,
+                mwg::activex::kGdalDispatchRetryTimerId));
             ComGdalResult nestedPumpResult;
             ASSERT_TRUE(SUCCEEDED(finishOperation(
                 nestedPumpOperationId,
                 nestedPumpResult)));
             EXPECT_EQ(nestedPumpResult.succeeded, VARIANT_TRUE);
             EXPECT_EQ(nestedPumpResult.callbackErrorCode, 0);
-            eventSink->SetProgressCallback(nullptr, nullptr);
+            EXPECT_EQ(
+                eventSink->ProgressCount(nestedPumpOperationId),
+                2u);
+            EXPECT_EQ(nestedBarrier.NestedDispatchCount(), 1);
 
             LONGLONG failureOperationId = 0;
             ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
