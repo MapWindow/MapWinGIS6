@@ -179,7 +179,11 @@ namespace mwg::activex
         {
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
-                const rendering::VectorRenderScene& vectorScene = layer.scene;
+                if (layer.scene == nullptr)
+                {
+                    return false;
+                }
+                const rendering::VectorRenderScene& vectorScene = *layer.scene;
                 if (vectorScene.fillMeshes.size() != vectorScene.polygons.size())
                 {
                     return false;
@@ -714,7 +718,8 @@ namespace mwg::activex
 
         for (const rendering::LayerRenderScene& layer : scene.layers)
         {
-            const HRESULT layerResult = DrawLayer(layer.scene, *transform);
+            // IsSupported above rejected null layer scenes.
+            const HRESULT layerResult = DrawLayer(*layer.scene, *transform);
             if (FAILED(layerResult))
             {
                 _lastFailureReason = L"OpenGL could not allocate its vertex buffers.";

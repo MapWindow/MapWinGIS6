@@ -306,10 +306,10 @@ TEST_F(MapViewTest, SceneIsReusedUntilTheMapChanges)
 {
     _view.AddLayer(OpenRectangles({{0.0, 0.0, 1.0, 1.0}}));
     const rendering::MapRenderScene& scene = _view.Scene();
-    const auto* polygons = scene.layers.front().scene.polygons.Coordinates().data();
+    const auto* polygons = scene.layers.front().scene->polygons.Coordinates().data();
 
     ASSERT_TRUE(_view.Resize(300, 200));
-    EXPECT_EQ(_view.Scene().layers.front().scene.polygons.Coordinates().data(), polygons);
+    EXPECT_EQ(_view.Scene().layers.front().scene->polygons.Coordinates().data(), polygons);
 
     EXPECT_TRUE(_view.InvalidateScene());
     EXPECT_EQ(&_view.Scene(), &scene);
@@ -334,13 +334,46 @@ TEST_F(MapViewTest, PreparedLayersRetainTheirGeometryUntilInvalidated)
     ASSERT_EQ(view.Scene().layers.size(), 2U);
     EXPECT_EQ(view.Scene().layers[0].layerId, firstId);
     EXPECT_EQ(view.Scene().layers[1].layerId, secondId);
-    EXPECT_EQ(view.Scene().layers[0].scene.polygons.Coordinates().data(), firstPolygons);
-    EXPECT_EQ(view.Scene().layers[1].scene.polygons.Coordinates().data(), secondPolygons);
+    EXPECT_EQ(view.Scene().layers[0].scene->polygons.Coordinates().data(), firstPolygons);
+    EXPECT_EQ(view.Scene().layers[1].scene->polygons.Coordinates().data(), secondPolygons);
     EXPECT_EQ(driver.readCalls, 8);
 
     EXPECT_TRUE(view.InvalidateScene());
     EXPECT_EQ(view.Scene().layers.size(), 2U);
     EXPECT_EQ(driver.readCalls, 16);
+}
+
+TEST_F(MapViewTest, SharedPreparedSceneIsStoredWithoutCopyAndOutlivesInvalidation)
+{
+    const auto dataset = OpenRectangles({{0.0, 0.0, 1.0, 1.0}});
+    const auto prepared = std::make_shared<const rendering::VectorRenderScene>(
+        rendering::CreateVectorRenderScene(*dataset));
+
+    const LayerId id = _view.AddLayer(dataset, prepared);
+    ASSERT_EQ(_view.Scene().layers.size(), 1U);
+    EXPECT_EQ(_view.Scene().layers.front().layerId, id);
+    EXPECT_EQ(_view.Scene().layers.front().scene, prepared);
+
+    // A renderer holding the assembled layer scene keeps valid geometry after
+    // the view drops it.
+    const std::shared_ptr<const rendering::VectorRenderScene> held =
+        _view.Scene().layers.front().scene;
+    EXPECT_TRUE(_view.InvalidateScene());
+    ASSERT_EQ(_view.Scene().layers.size(), 1U);
+    EXPECT_NE(_view.Scene().layers.front().scene, held);
+    EXPECT_TRUE(_view.RemoveLayer(id));
+    ASSERT_EQ(held->polygons.size(), 1U);
+    EXPECT_EQ(held->polygons.front().front().size(), 5U);
+}
+
+TEST_F(MapViewTest, NullPreparedSceneIsRejectedBeforeTheMapChanges)
+{
+    const auto dataset = OpenRectangles({{0.0, 0.0, 1.0, 1.0}});
+    EXPECT_THROW(
+        (void)_view.AddLayer(dataset, std::shared_ptr<const rendering::VectorRenderScene>{}),
+        InvalidArgument);
+    EXPECT_EQ(_view.GetMap().LayerCount(), 0);
+    EXPECT_FALSE(_view.GetViewport().HasView());
 }
 
 TEST_F(MapViewTest, VisibilityChangesReuseCachedLayerScenes)
@@ -497,14 +530,14 @@ TEST_F(MapViewTest, AllocationFailurePreservesThePublishedSceneAndAllowsRetry)
     const LayerId first = view.AddLayer(dataset);
     const auto& scene = view.Scene();
     ASSERT_EQ(scene.layers.size(), 1U);
-    const auto* coordinates = scene.layers.front().scene.polygons.Coordinates().data();
+    const auto* coordinates = scene.layers.front().scene->polygons.Coordinates().data();
     const LayerId second = view.AddLayer(dataset);
     driver.failExtentCapabilityAllocation = true;
 
     EXPECT_THROW((void)view.Scene(), std::bad_alloc);
     ASSERT_EQ(scene.layers.size(), 1U);
     EXPECT_EQ(scene.layers.front().layerId, first);
-    EXPECT_EQ(scene.layers.front().scene.polygons.Coordinates().data(), coordinates);
+    EXPECT_EQ(scene.layers.front().scene->polygons.Coordinates().data(), coordinates);
     EXPECT_TRUE(scene.skippedLayers.empty());
 
     driver.failExtentCapabilityAllocation = false;
@@ -520,7 +553,7 @@ TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
 
     const rendering::MapRenderScene& scene = _view.Scene();
     ASSERT_EQ(scene.layers.size(), 1U);
-    const rendering::VectorRenderScene& layerScene = scene.layers.front().scene;
+    const rendering::VectorRenderScene& layerScene = *scene.layers.front().scene;
     ASSERT_EQ(layerScene.polygons.size(), 2U);
     ASSERT_EQ(layerScene.fillMeshes.size(), 2U);
     // Both the concave component and the holed component are triangulated.
@@ -536,8 +569,8 @@ TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
     // its triangulated meshes stay alive and are not rebuilt.
     ASSERT_TRUE(_view.Resize(640, 480));
     EXPECT_EQ(&_view.Scene(), &scene);
-    EXPECT_EQ(_view.Scene().layers.front().scene.fillMeshes.data(), meshStorage);
-    EXPECT_EQ(_view.Scene().layers.front().scene.fillMeshes[1]->vertices.data(),
+    EXPECT_EQ(_view.Scene().layers.front().scene->fillMeshes.data(), meshStorage);
+    EXPECT_EQ(_view.Scene().layers.front().scene->fillMeshes[1]->vertices.data(),
               holedMeshVertices);
 
     ASSERT_TRUE(_view.ZoomIn());
@@ -545,7 +578,7 @@ TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
     ASSERT_TRUE(_view.ZoomAt(ScreenPoint{150.0, 100.0}, 2.0));
     ASSERT_TRUE(_view.Pan(1.0, -0.5));
     EXPECT_EQ(&_view.Scene(), &scene);
-    const rendering::VectorRenderScene& navigated = _view.Scene().layers.front().scene;
+    const rendering::VectorRenderScene& navigated = *_view.Scene().layers.front().scene;
     EXPECT_EQ(navigated.fillMeshes[1]->vertices.data(), holedMeshVertices);
     EXPECT_EQ(navigated.fillMeshes[1]->indices.size(), holedMeshIndices);
     EXPECT_EQ(navigated.polygons[1].size(), holedPolygonRings);
@@ -553,7 +586,7 @@ TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
     // Reassembly keeps the cached meshes and original rings for outlines and GDI.
     const LayerId second = _view.AddLayer(OpenRectangles({{100.0, 0.0, 110.0, 10.0}}));
     ASSERT_EQ(_view.Scene().layers.size(), 2U);
-    const rendering::VectorRenderScene& rebuilt = _view.Scene().layers.front().scene;
+    const rendering::VectorRenderScene& rebuilt = *_view.Scene().layers.front().scene;
     ASSERT_EQ(rebuilt.polygons.size(), 2U);
     ASSERT_EQ(rebuilt.fillMeshes.size(), 2U);
     EXPECT_TRUE(rebuilt.fillMeshes[0].has_value());
@@ -562,7 +595,7 @@ TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
 
     EXPECT_TRUE(_view.RemoveLayer(second));
     ASSERT_EQ(_view.Scene().layers.size(), 1U);
-    EXPECT_TRUE(_view.Scene().layers.front().scene.fillMeshes[1].has_value());
+    EXPECT_TRUE(_view.Scene().layers.front().scene->fillMeshes[1].has_value());
 }
 
 TEST_F(MapViewTest, PreparedEmptyLayerPreservesExistingAndStaleScenes)

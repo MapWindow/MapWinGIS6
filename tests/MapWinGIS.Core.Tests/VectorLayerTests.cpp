@@ -421,6 +421,27 @@ TEST_P(VectorLayerEditTest, FlushesPendingEdits)
                   reopened->Layer(0).FieldIndex(Provinces::kNameField), 0), "Flushed");
 }
 
+TEST_P(VectorLayerEditTest, ReadsBackTheStoredValueAfterTheDriverCoercesAWrite)
+{
+    const std::string longName(Provinces::kNameWidth + 300, 'x');
+    std::string readBack;
+    {
+        const GdalEnvironment::QuietScope quiet;
+        const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(_path, OpenMode::Update);
+        VectorLayer& layer = dataset->Layer(0);
+        const int name = layer.FieldIndex(Provinces::kNameField);
+        layer.SetCellString(name, 0, longName);
+        readBack = layer.CellString(name, 0);
+    }
+
+    const std::unique_ptr<VectorDataset> reopened = Reopen();
+    const std::string stored = reopened->Layer(0).CellString(
+        reopened->Layer(0).FieldIndex(Provinces::kNameField), 0);
+    EXPECT_EQ(readBack, stored);
+    if (_path.extension() == ".shp")
+        EXPECT_EQ(stored.size(), 254U);
+}
+
 TEST_P(VectorLayerEditTest, RejectsOutOfRangeFeatureIndexes)
 {
     Edit([](VectorLayer& layer)

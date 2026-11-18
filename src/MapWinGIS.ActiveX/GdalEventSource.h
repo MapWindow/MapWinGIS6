@@ -92,6 +92,7 @@ namespace mwg::activex
         void* _completionContext = nullptr;
         std::shared_ptr<GdalDispatchWindow> _dispatchWindow;
         bool _dispatching = false;
+        bool _redispatchRequested = false;
         bool _dispatchWindowDestroyPending = false;
         bool _closing = false;
     };

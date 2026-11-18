@@ -338,7 +338,7 @@ namespace mwg::test
 
         OGRFieldDefn idField(Provinces::kIdField, OFTInteger);
         OGRFieldDefn nameField(Provinces::kNameField, OFTString);
-        nameField.SetWidth(32);
+        nameField.SetWidth(Provinces::kNameWidth);
         OGRFieldDefn areaField(Provinces::kAreaField, OFTReal);
         areaField.SetWidth(18);
         areaField.SetPrecision(4);

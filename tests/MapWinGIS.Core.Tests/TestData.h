@@ -80,6 +80,8 @@ namespace mwg::test
         static constexpr const char* kLayerName = "provinces";
         static constexpr const char* kIdField = "ID";
         static constexpr const char* kNameField = "NAME";
+        /// Initial declared width of NAME in generated fixtures.
+        static constexpr int kNameWidth = 32;
         static constexpr const char* kAreaField = "AREA_KM2";
         static constexpr const char* kSurveyedField = "SURVEYED";
         static constexpr const char* kActiveField = "ACTIVE";

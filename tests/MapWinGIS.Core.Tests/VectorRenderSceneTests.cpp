@@ -512,6 +512,51 @@ TEST(VectorRenderScene, LinearizesCurvedPolygonGeometry)
     EXPECT_GT(scene.polygons.front().front().size(), 5u);
 }
 
+TEST(VectorRenderScene, RendersPolygonalCollectionMembersAndCountsSkippedParts)
+{
+    GdalEnvironment::Initialize();
+    TempDirectory directory;
+    std::filesystem::path path;
+    {
+        const GdalEnvironment::QuietScope quiet;
+        path = MakeDimensionalPolygonDataset(
+            directory.Path(),
+            "collection.gpkg",
+            wkbMultiPolygon,
+            "GEOMETRYCOLLECTION (POLYGON ((0 0, 4 0, 4 4, 0 4, 0 0)), "
+            "LINESTRING (0 0, 1 1), POINT (2 2))");
+    }
+    const auto dataset = VectorDataset::Open(path);
+
+    const rendering::VectorRenderScene scene =
+        rendering::CreateVectorRenderScene(dataset->Layer(0));
+
+    ASSERT_EQ(scene.polygons.size(), 1u);
+    EXPECT_EQ(scene.polygons.front().front().size(), 5u);
+    EXPECT_EQ(scene.skippedGeometryCount, 2);
+}
+
+TEST(VectorRenderScene, SkipsPolygonsWithADegenerateExteriorInsteadOfPromotingAHole)
+{
+    GdalEnvironment::Initialize();
+    TempDirectory directory;
+    const auto path = MakeDimensionalPolygonDataset(
+        directory.Path(),
+        "degenerate-exterior.gpkg",
+        wkbMultiPolygon,
+        "MULTIPOLYGON (((0 0, 1 1), (1 1, 2 1, 2 2, 1 1)), "
+        "((10 10, 14 10, 14 14, 10 10)))");
+    const auto dataset = VectorDataset::Open(path);
+
+    const rendering::VectorRenderScene scene =
+        rendering::CreateVectorRenderScene(dataset->Layer(0));
+
+    ASSERT_EQ(scene.polygons.size(), 1u);
+    ASSERT_EQ(scene.polygons.front().size(), 1u);
+    EXPECT_DOUBLE_EQ(scene.polygons.front().front().front().x, 10.0);
+    EXPECT_EQ(scene.skippedGeometryCount, 1);
+}
+
 TEST(VectorRenderScene, RejectsDatasetWithoutLayers)
 {
     GdalEnvironment::Initialize();

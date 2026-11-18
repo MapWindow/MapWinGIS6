@@ -264,6 +264,7 @@ bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresul
 | `MwgVcpkgRoot` | resolved (see above) | vcpkg location |
 | `MwgVcpkgFeatures` | `tests` | Semicolon-separated manifest features |
 | `MwgEnableAsan` | `false` | Adds `/fsanitize=address` |
+| `MwgEnableActiveXTestHooks` | `true` | Exports test-only hooks from `MapWinGIS.ocx`. Set `false` for distributed binaries. CMake: `MWG_ENABLE_ACTIVEX_TEST_HOOKS`, which defaults to `MWG_BUILD_TESTS` |
 | `MwgDeployRuntimeData` | `true` for Core, `false` otherwise | Copies `gdal-data` and `proj` to the output folder |
 
 ## CMake migration

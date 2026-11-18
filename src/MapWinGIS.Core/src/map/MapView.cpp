@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <map>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -113,8 +114,23 @@ namespace mwg
     LayerId MapView::AddLayer(std::shared_ptr<VectorDataset> dataset,
                              rendering::VectorRenderScene scene, const int layerIndex)
     {
+        return AddLayer(
+            std::move(dataset),
+            std::make_shared<const rendering::VectorRenderScene>(std::move(scene)),
+            layerIndex);
+    }
+
+    LayerId MapView::AddLayer(std::shared_ptr<VectorDataset> dataset,
+                             std::shared_ptr<const rendering::VectorRenderScene> scene,
+                             const int layerIndex)
+    {
+        if (scene == nullptr)
+        {
+            throw InvalidArgument("Layer scene must not be null");
+        }
+
         (void)Scene();
-        const bool empty = scene.polygons.empty();
+        const bool empty = scene->polygons.empty();
         if (empty)
         {
             _impl->_scene.skippedLayers.reserve(_impl->_scene.skippedLayers.size() + 1);

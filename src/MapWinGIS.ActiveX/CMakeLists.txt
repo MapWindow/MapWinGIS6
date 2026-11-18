@@ -85,6 +85,9 @@ target_link_libraries(MapWinGIS.ActiveX PRIVATE
 )
 
 target_compile_definitions(MapWinGIS.ActiveX PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:_ATL_APARTMENT_THREADED>")
+if(MWG_ENABLE_ACTIVEX_TEST_HOOKS)
+    target_compile_definitions(MapWinGIS.ActiveX PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:MWG_ACTIVEX_TEST_HOOKS>")
+endif()
 
 # MSBuild ResourceCompile: /l 0x0409 and the MIDL output directory on the include path.
 target_compile_options(MapWinGIS.ActiveX PRIVATE "$<$<COMPILE_LANGUAGE:RC>:/l0x0409>")

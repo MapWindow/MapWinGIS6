@@ -621,6 +621,16 @@ namespace mwg::activex
     {
         std::vector<GdalOperationNotification> notifications;
         std::lock_guard lock(_state->mutex);
+        // Reserve the whole batch before clearing any pending flag. After this
+        // point the pushes cannot reallocate and the moves cannot throw, so a
+        // bad_alloc leaves every notification pending for a later drain.
+        std::size_t pendingCount = 0;
+        for (const auto& entry : _state->operations)
+        {
+            pendingCount += (entry.second->progress.has_value() ? 1u : 0u) +
+                (entry.second->completionPending ? 1u : 0u);
+        }
+        notifications.reserve(pendingCount);
         _state->wakePending = false;
         for (auto& [operationId, operation] : _state->operations)
         {

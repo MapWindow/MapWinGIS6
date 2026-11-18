@@ -46,6 +46,21 @@ ActiveX-specific implementation units are also compiled into
 `MapWinGIS.ActiveX.Impl.lib`, allowing native tests to exercise them without
 requiring COM activation.
 
+Alternate-size draws (printing, scaled metafiles) fit the live visible extent
+into the target size, so they show what the screen shows instead of the
+viewport's scale at a different pixel size.
+
+GDAL notifications are delivered one drained batch per dispatch message.
+Notifications queued while sinks run post their own wake, and a wake consumed
+by a sink's nested message pump is re-posted after the batch. Do not
+reintroduce a drain-until-empty loop: it keeps the STA thread busy for as long
+as an operation reports progress.
+
+Test-only exports such as `MapWinGISControlSetVectorPreparationHookForTesting`
+exist only when `MWG_ACTIVEX_TEST_HOOKS` is defined
+(`MWG_ENABLE_ACTIVEX_TEST_HOOKS` in CMake, which defaults to `MWG_BUILD_TESTS`;
+`MwgEnableActiveXTestHooks` in MSBuild). Tests that need them skip when absent.
+
 ## Current limits
 
 The control exposes a deliberately small v6 automation API. It does not expose

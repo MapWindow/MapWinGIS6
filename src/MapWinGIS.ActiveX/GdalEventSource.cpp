@@ -239,12 +239,20 @@ namespace mwg::activex
     LRESULT GdalEventSource::OnDispatch(BOOL& handled)
     {
         handled = TRUE;
-        if (_dispatching || !_dispatcher.IsDispatchActive())
+        if (_dispatching)
+        {
+            // A sink pumped messages and consumed a wake meant for work queued
+            // after the current batch was drained. Re-post it once that batch ends.
+            _redispatchRequested = true;
+            return 0;
+        }
+        if (!_dispatcher.IsDispatchActive())
         {
             return 0;
         }
 
         _dispatching = true;
+        _redispatchRequested = false;
         const std::uint64_t generation = _dispatcher.GetGeneration();
         struct DispatchGuard final
         {
@@ -260,63 +268,65 @@ namespace mwg::activex
             }
         } dispatchGuard{*this};
 
-        while (_dispatcher.GetGeneration() == generation &&
-               _dispatcher.IsDispatchActive())
+        // Deliver one batch per message. Notifications queued while the sinks
+        // run post their own wake message, so the owner thread returns to its
+        // message loop between batches instead of looping here for as long as
+        // a fast-reporting operation keeps producing progress.
+        const auto notifications = _dispatcher.DrainNotifications();
+        for (const GdalOperationNotification& notification : notifications)
         {
-            const auto notifications = _dispatcher.DrainNotifications();
-            if (notifications.empty())
+            if (_dispatcher.GetGeneration() != generation ||
+                !_dispatcher.IsDispatchActive())
             {
                 break;
             }
-
-            for (const GdalOperationNotification& notification : notifications)
+            if (!_dispatcher.BeginNotificationDelivery(notification.operationId))
             {
-                if (_dispatcher.GetGeneration() != generation ||
-                    !_dispatcher.IsDispatchActive())
-                {
-                    break;
-                }
-                if (!_dispatcher.BeginNotificationDelivery(notification.operationId))
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                struct NotificationGuard final
-                {
-                    GdalOperationDispatcher& dispatcher;
-                    std::uint64_t operationId;
-                    std::uint64_t generation;
+            struct NotificationGuard final
+            {
+                GdalOperationDispatcher& dispatcher;
+                std::uint64_t operationId;
+                std::uint64_t generation;
 
-                    ~NotificationGuard()
+                ~NotificationGuard()
+                {
+                    if (dispatcher.GetGeneration() == generation)
                     {
-                        if (dispatcher.GetGeneration() == generation)
-                        {
-                            dispatcher.EndNotificationDelivery(operationId);
-                        }
+                        dispatcher.EndNotificationDelivery(operationId);
                     }
-                } notificationGuard{_dispatcher, notification.operationId, generation};
+                }
+            } notificationGuard{_dispatcher, notification.operationId, generation};
 
-                if (notification.kind == GdalNotificationKind::Completed &&
-                    _completionCallback != nullptr)
-                {
-                    _completionCallback(_completionContext, notification.operationId);
-                }
-                const HRESULT result =
-                    notification.kind == GdalNotificationKind::Progress
-                    ? FireProgress(notification, generation)
-                    : FireCompleted(notification.operationId, generation);
-                if (FAILED(result) && _dispatcher.GetGeneration() == generation)
-                {
-                    RecordCallbackError(notification.operationId, result);
-                }
-                if (_dispatcher.GetGeneration() != generation)
-                {
-                    break;
-                }
+            if (notification.kind == GdalNotificationKind::Completed &&
+                _completionCallback != nullptr)
+            {
+                _completionCallback(_completionContext, notification.operationId);
+            }
+            const HRESULT result =
+                notification.kind == GdalNotificationKind::Progress
+                ? FireProgress(notification, generation)
+                : FireCompleted(notification.operationId, generation);
+            if (FAILED(result) && _dispatcher.GetGeneration() == generation)
+            {
+                RecordCallbackError(notification.operationId, result);
+            }
+            if (_dispatcher.GetGeneration() != generation)
+            {
+                break;
             }
         }
         if (_dispatcher.GetGeneration() == generation)
         {
+            if (_redispatchRequested && _dispatchWindow != nullptr &&
+                !_dispatchWindowDestroyPending && _dispatcher.IsDispatchActive() &&
+                !_dispatchWindow->PostWake())
+            {
+                ArmRetryTimer();
+            }
+            _redispatchRequested = false;
             UpdateRetryTimer();
         }
         return 0;

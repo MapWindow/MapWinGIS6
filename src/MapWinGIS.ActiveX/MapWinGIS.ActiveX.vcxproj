@@ -45,6 +45,10 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
 
+  <PropertyGroup>
+    <MwgEnableActiveXTestHooks Condition="'$(MwgEnableActiveXTestHooks)' == ''">true</MwgEnableActiveXTestHooks>
+  </PropertyGroup>
+
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>$(MwgRepoRoot)src\MapWinGIS.Core\include;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -62,6 +66,12 @@
     <Link>
       <ModuleDefinitionFile>MapWinGIS.ActiveX.def</ModuleDefinitionFile>
     </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(MwgEnableActiveXTestHooks)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>MWG_ACTIVEX_TEST_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
   </ItemDefinitionGroup>
 
   <ItemGroup>
