@@ -52,14 +52,34 @@ endif()
 
 # A mismatch means the CLion toolchain or vcvars environment targets another
 # architecture than the preset; linking would fail much later with LNK1112.
-if(NOT VCPKG_TARGET_TRIPLET STREQUAL _mwg_expected_triplet)
+# "<triplet>-release" is the release-only variant (VCPKG_BUILD_TYPE release).
+if(NOT VCPKG_TARGET_TRIPLET STREQUAL _mwg_expected_triplet
+   AND NOT VCPKG_TARGET_TRIPLET STREQUAL "${_mwg_expected_triplet}-release")
     message(FATAL_ERROR
         "VCPKG_TARGET_TRIPLET is '${VCPKG_TARGET_TRIPLET}', but the compiler targets ${MWG_PLATFORM} "
-        "(expected '${_mwg_expected_triplet}').\n"
+        "(expected '${_mwg_expected_triplet}' or '${_mwg_expected_triplet}-release').\n"
         "In CLion, assign this profile a Visual Studio toolchain with the matching architecture "
         "(amd64 for x64 presets, x86 or amd64_x86 for x86 presets), then Reset Cache and Reload.")
 endif()
 unset(_mwg_expected_triplet)
+
+# A release-only triplet has no debug libraries, so a Debug build would mix the
+# debug CRT with release dependencies.
+if(VCPKG_TARGET_TRIPLET MATCHES "-release$")
+    get_property(_mwg_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(NOT _mwg_multi_config AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        message(FATAL_ERROR
+            "VCPKG_TARGET_TRIPLET '${VCPKG_TARGET_TRIPLET}' is release-only and cannot be used for a Debug build.")
+    elseif(_mwg_multi_config)
+        # Multi-config generators always offer Debug; fail when it is built.
+        add_custom_target(mwg_release_only_triplet_guard ALL
+            COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Debug>,echo,true>
+                "error: VCPKG_TARGET_TRIPLET '${VCPKG_TARGET_TRIPLET}' is release-only; build a non-Debug configuration."
+            COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Debug>,false,true>
+            VERBATIM)
+    endif()
+    unset(_mwg_multi_config)
+endif()
 
 # --- Windows SDK --------------------------------------------------------------
 # Visual Studio generators pin the SDK through CMAKE_SYSTEM_VERSION (set from

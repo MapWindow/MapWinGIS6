@@ -9,8 +9,86 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# vcpkg binary caches
+# -------------------
+# Only the vcpkg-deps jobs write caches. They save the binary cache under
+# "<prefix><run_id>-<run_attempt>" after vcpkg installs dependencies.
+# Consumers wait only for their matching platform and configuration leg. The
+# prefix covers vcpkg.json, whose builtin-baseline pins the vcpkg checkout
+# (bootstrap-vcpkg.ps1 -Baseline). Legs:
+#   <platform>-tests         Debug builds: default triplet, "tests" feature.
+#   <platform>-release-full  Release builds: release-only triplet,
+#                            "tests" and "full-drivers" features.
+
 jobs:
+  vcpkg-deps-x64-tests:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/vcpkg-deps.yml
+    with:
+      leg: x64-tests
+
+  vcpkg-deps-win32-tests:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/vcpkg-deps.yml
+    with:
+      leg: Win32-tests
+
+  vcpkg-deps-x64-release-full:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/vcpkg-deps.yml
+    with:
+      leg: x64-release-full
+
+  vcpkg-deps-win32-release-full:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/vcpkg-deps.yml
+    with:
+      leg: Win32-release-full
+
+  vcpkg-cache-cleanup:
+    needs: [vcpkg-deps-x64-tests, vcpkg-deps-win32-tests, vcpkg-deps-x64-release-full, vcpkg-deps-win32-release-full]
+    if: ${{ !cancelled() }}
+    runs-on: windows-2025
+    timeout-minutes: 10
+
+    permissions:
+      actions: write
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [x64-tests, x64-release-full, Win32-tests, Win32-release-full]
+
+    steps:
+      - name: Delete superseded vcpkg caches
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $leg = "vcpkg-binary-$env:RUNNER_OS-${{ matrix.leg }}-"
+          $suffix = "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $caches = gh cache list --repo $env:GITHUB_REPOSITORY --ref $env:GITHUB_REF `
+            --key $leg --limit 100 --json id,key | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $keep = @($caches | Where-Object { $_.key.EndsWith($suffix, [StringComparison]::Ordinal) })
+          if ($keep.Count -eq 0) { Write-Host "No cache was saved for ${{ matrix.leg }}."; exit 0 }
+          foreach ($cache in @($caches | Where-Object id -ne $keep[0].id)) {
+            Write-Host "Deleting $($cache.key)"
+            gh cache delete $cache.id --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
   cmake-parity:
+    needs: vcpkg-deps-x64-tests
+    # Still build when a dependency leg failed; the job then builds what is missing.
+    if: ${{ !cancelled() }}
     runs-on: windows-2025
     timeout-minutes: 180
 
@@ -22,27 +100,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Record runner image version
-        id: runner_image
+      - name: Compute vcpkg cache key
+        id: cache_key
         shell: pwsh
-        run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
+        run: |
+          $leg = 'vcpkg-binary-${{ runner.os }}-x64-tests-'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "leg=$leg"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prefix=$leg$env:ImageVersion-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}-"
 
       - name: Restore vcpkg binary packages
-        id: cache
         uses: actions/cache/restore@v6
         with:
           path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-x64-tests-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkg-binary-${{ runner.os }}-x64-tests-
-            vcpkg-binary-${{ runner.os }}-x64-
+            ${{ steps.cache_key.outputs.prefix }}
+            ${{ steps.cache_key.outputs.leg }}
 
       - name: Bootstrap vcpkg
         shell: pwsh
-        run: ./build/scripts/bootstrap-vcpkg.ps1
+        run: ./build/scripts/bootstrap-vcpkg.ps1 -Baseline
 
       - name: Configure CMake preset
-        id: configure
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -55,13 +134,6 @@ jobs:
           $commands = 'call "{0}" && cmake --preset x64-debug -DMWG_WINDOWS_SDK={1}' -f $vcvars,$env:MWG_WINDOWS_SDK
           & $env:ComSpec /d /s /c $commands
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
-        uses: actions/cache/save@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-x64-tests-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
 
       - name: Build CMake preset
         id: build
@@ -86,191 +158,82 @@ jobs:
             -FailOnLostFlags `
             -FailOnNewWarnings
 
-  cmake-vs:
-    runs-on: windows-2025
-    timeout-minutes: 180
+  cmake-vs-debug-x64:
+    needs: vcpkg-deps-x64-tests
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/cmake-vs.yml
+    with:
+      platform: x64
+      configuration: Debug
 
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"include":[{"platform":"x64","configuration":"Debug"},{"platform":"x64","configuration":"Release"},{"platform":"Win32","configuration":"Debug"}]}') }}
+  cmake-vs-debug-win32:
+    needs: vcpkg-deps-win32-tests
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/cmake-vs.yml
+    with:
+      platform: Win32
+      configuration: Debug
 
-    env:
-      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
-      MWG_WINDOWS_SDK: '10.0'
+  cmake-vs-release-x64:
+    needs: vcpkg-deps-x64-release-full
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/cmake-vs.yml
+    with:
+      platform: x64
+      configuration: Release
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+  cmake-vs-release-win32:
+    needs: vcpkg-deps-win32-release-full
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/cmake-vs.yml
+    with:
+      platform: Win32
+      configuration: Release
 
-      - name: Record runner image version
-        id: runner_image
-        shell: pwsh
-        run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
+  build-debug-x64:
+    needs: vcpkg-deps-x64-tests
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-msbuild.yml
+    with:
+      platform: x64
+      configuration: Debug
 
-      - name: Restore vcpkg binary packages
-        id: cache
-        uses: actions/cache/restore@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
-          restore-keys: |
-            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-
-            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
+  build-debug-win32:
+    needs: vcpkg-deps-win32-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-msbuild.yml
+    with:
+      platform: Win32
+      configuration: Debug
 
-      - name: Bootstrap vcpkg
-        shell: pwsh
-        run: ./build/scripts/bootstrap-vcpkg.ps1
+  build-release-x64:
+    needs: vcpkg-deps-x64-release-full
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-msbuild.yml
+    with:
+      platform: x64
+      configuration: Release
 
-      - name: Configure CMake
-        id: configure
-        shell: pwsh
-        run: |
-          $platform = '${{ matrix.platform }}'
-          $configuration = '${{ matrix.configuration }}'
-          $architecture = if ($platform -eq 'x64') { 'x64' } else { 'x86' }
-          $configurePreset = "vs2026-$architecture"
-          $buildPreset = "$configurePreset-$($configuration.ToLowerInvariant())"
-          $features = if ($configuration -eq 'Release') { 'tests;full-drivers' } else { 'tests' }
-          cmake --preset $configurePreset `
-            "-DMWG_WINDOWS_SDK=$env:MWG_WINDOWS_SDK" `
-            "-DVCPKG_MANIFEST_FEATURES=$features"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Add-Content -Path $env:GITHUB_ENV -Value "MWG_CMAKE_BUILD_PRESET=$buildPreset"
-
-      - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
-        uses: actions/cache/save@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
-
-      - name: Build CMake preset
-        shell: pwsh
-        run: |
-          cmake --build --preset $env:MWG_CMAKE_BUILD_PRESET --parallel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Test CMake preset
-        shell: pwsh
-        run: |
-          ctest --preset $env:MWG_CMAKE_BUILD_PRESET --output-on-failure -LE interactive
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: testresults-cmake-${{ matrix.platform }}-${{ matrix.configuration }}
-          path: out/b/${{ matrix.platform == 'x64' && 'vs-x64' || 'vs-x86' }}/test-results/*.xml
-          if-no-files-found: warn
-
-      - name: Upload Release binaries
-        if: matrix.configuration == 'Release'
-        uses: actions/upload-artifact@v7
-        with:
-          name: MapWinGIS.CMake-${{ matrix.platform }}
-          path: out/b/${{ matrix.platform == 'x64' && 'vs-x64' || 'vs-x86' }}/bin/Release/
-          if-no-files-found: error
-
-  build:
-    runs-on: windows-2025
-    timeout-minutes: 180
-
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"platform":["x64","Win32"],"configuration":["Debug","Release"]}' || '{"platform":["x64"],"configuration":["Debug","Release"]}') }}
-
-    env:
-      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
-      # The runner image does not ship SDK 10.0.28000 yet.
-      MWG_WINDOWS_SDK: '10.0'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Record runner image version
-        id: runner_image
-        shell: pwsh
-        run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
-
-      - name: Restore vcpkg binary packages
-        id: cache
-        uses: actions/cache/restore@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
-          restore-keys: |
-            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-
-            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
-
-      - name: Bootstrap vcpkg
-        shell: pwsh
-        run: ./build/scripts/bootstrap-vcpkg.ps1
-
-      - name: Set up MSBuild
-        uses: microsoft/setup-msbuild@v3
-
-      - name: Check build configuration
-        shell: pwsh
-        run: ./build/scripts/Test-BuildConfiguration.ps1
-
-      - name: Build
-        id: build
-        shell: pwsh
-        run: |
-          $features = if ('${{ matrix.configuration }}' -eq 'Release') { 'tests%3Bfull-drivers' } else { 'tests' }
-          msbuild MapWinGIS6.slnx `
-            -restore `
-            -p:Configuration=${{ matrix.configuration }} `
-            -p:Platform=${{ matrix.platform }} `
-            -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
-            "-p:MwgVcpkgFeatures=$features" `
-            -m -v:m
-
-      - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
-        uses: actions/cache/save@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
-
-      - name: Measure build parity baseline
-        shell: pwsh
-        run: |
-          pwsh -File build/scripts/Compare-CompileCommands.ps1 `
-            -Configuration ${{ matrix.configuration }} `
-            -Platform ${{ matrix.platform }} `
-            -FailOnLostFlags
-
-      - name: Test
-        shell: pwsh
-        run: |
-          foreach ($test in @(
-            @{ Name = "core"; Project = "MapWinGIS.Core.Tests" },
-            @{ Name = "core-gdal-init"; Project = "MapWinGIS.Core.GdalInitialization.Tests" },
-            @{ Name = "activex"; Project = "MapWinGIS.ActiveX.Tests" }
-          )) {
-            $exe = "bin/${{ matrix.configuration }}/${{ matrix.platform }}/$($test.Project).exe"
-            $report = "testresults-$($test.Name)-${{ matrix.platform }}-${{ matrix.configuration }}.xml"
-            & $exe --gtest_output="xml:$report"
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
-          }
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: testresults-${{ matrix.platform }}-${{ matrix.configuration }}
-          path: testresults-*-${{ matrix.platform }}-${{ matrix.configuration }}.xml
-          if-no-files-found: ignore
-
-      - name: Upload binaries
-        if: matrix.configuration == 'Release'
-        uses: actions/upload-artifact@v7
-        with:
-          name: MapWinGIS.Core-${{ matrix.platform }}
-          path: bin/Release/${{ matrix.platform }}/
-          if-no-files-found: error
+  build-release-win32:
+    needs: vcpkg-deps-win32-release-full
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-msbuild.yml
+    with:
+      platform: Win32
+      configuration: Release

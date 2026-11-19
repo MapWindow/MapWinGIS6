@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Tests SDK selection, dependency argument quoting and single-owner runtime deployment.
+    Tests SDK selection, vcpkg triplet selection, dependency argument quoting and
+    single-owner runtime deployment.
 #>
 [CmdletBinding()]
 param(
@@ -63,7 +64,44 @@ $commandLine | Select-Object -Skip $start | Set-Content (Join-Path $PSScriptRoot
         }
     }
 
+    foreach ($case in @(
+        @{ Platform = 'x64'; ReleaseOnly = 'false'; Triplet = 'x64-windows-v145'; HostTriplet = 'x64-windows-v145'; InstallDir = 'x64' },
+        @{ Platform = 'Win32'; ReleaseOnly = 'true'; Triplet = 'x86-windows-v145-release'; HostTriplet = 'x64-windows-v145-release'; InstallDir = 'Win32-release' }
+    )) {
+        $json = & $MSBuild "$temp\SdkSelection.proj" -nologo "-p:Platform=$($case.Platform)" "-p:MwgVcpkgReleaseOnly=$($case.ReleaseOnly)" `
+            -getProperty:VcpkgTriplet -getProperty:VcpkgHostTriplet -getProperty:VcpkgInstalledDir
+        if ($LASTEXITCODE -ne 0) { throw 'Triplet selection failed.' }
+        $properties = ($json | ConvertFrom-Json).Properties
+        if ($properties.VcpkgTriplet -ne $case.Triplet -or
+            $properties.VcpkgHostTriplet -ne $case.HostTriplet -or
+            $properties.VcpkgInstalledDir -ne "$temp\vcpkg_installed\$($case.InstallDir)\") {
+            throw "Triplet selection failed for $($case.Platform), release-only $($case.ReleaseOnly): $($json -join ' ')"
+        }
+    }
+
+    foreach ($releaseTriplet in Get-ChildItem "$repoRoot\build\triplets\*-release.cmake") {
+        $baseTriplet = $releaseTriplet.FullName -replace '-release\.cmake$', '.cmake'
+        if (-not (Test-Path -LiteralPath $baseTriplet)) {
+            throw "Base triplet not found for $($releaseTriplet.Name)."
+        }
+        $baseSettings = @(Get-Content -LiteralPath $baseTriplet | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and -not $_.StartsWith('#') })
+        $releaseSettings = @(Get-Content -LiteralPath $releaseTriplet.FullName | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and -not $_.StartsWith('#') })
+        $expectedSettings = @($baseSettings + 'set(VCPKG_BUILD_TYPE release)')
+        if (($releaseSettings -join "`n") -ne ($expectedSettings -join "`n")) {
+            throw "$($releaseTriplet.Name) must match its base triplet plus 'set(VCPKG_BUILD_TYPE release)'."
+        }
+    }
+
     $powerShell = (Get-Process -Id $PID).Path
+    & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:MwgCheckVcpkgReleaseOnly | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'The release-only triplet check failed without a release-only triplet.' }
+    $output = & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:MwgCheckVcpkgReleaseOnly -p:MwgVcpkgReleaseOnly=true 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -or $output -notmatch 'cannot build the Debug configuration') {
+        throw 'The release-only Debug guard did not report its expected error.'
+    }
+
     & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:CaptureArguments "-p:MwgTestPowerShell=$powerShell" '-p:MwgVcpkgFeatures=tests%3Bfull-drivers'
     if ($LASTEXITCODE -ne 0) { throw 'Dependency argument capture failed.' }
     $arguments = @(Get-Content "$temp\arguments.txt")

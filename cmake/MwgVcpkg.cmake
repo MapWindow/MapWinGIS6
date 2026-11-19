@@ -87,14 +87,34 @@ endif()
 # --- install tree -------------------------------------------------------------
 # One CMake install tree per platform, shared by Debug and Release and separate
 # from the MSBuild tree (vcpkg_installed/<Platform>), see docs/CMAKE-MIGRATION.md (D2).
+# Release-only triplets get their own tree, because vcpkg removes packages of
+# other triplets from a shared tree.
 if(NOT DEFINED VCPKG_INSTALLED_DIR)
     if(VCPKG_TARGET_TRIPLET MATCHES "^x86-")
         set(_mwg_vcpkg_platform "Win32")
     else()
         set(_mwg_vcpkg_platform "x64")
     endif()
+    if(VCPKG_TARGET_TRIPLET MATCHES "-release$" OR VCPKG_HOST_TRIPLET MATCHES "-release$")
+        string(APPEND _mwg_vcpkg_platform "-release")
+    endif()
     set(VCPKG_INSTALLED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/cmake-${_mwg_vcpkg_platform}"
         CACHE PATH "vcpkg install tree used by the CMake build")
+endif()
+
+if(VCPKG_TARGET_TRIPLET MATCHES "-release$" OR VCPKG_HOST_TRIPLET MATCHES "-release$")
+    file(TO_CMAKE_PATH "${VCPKG_INSTALLED_DIR}" _mwg_vcpkg_installed_dir)
+    if(NOT _mwg_vcpkg_installed_dir MATCHES "-release/?$")
+        message(FATAL_ERROR
+            "A release-only vcpkg triplet requires a separate install tree whose path ends in '-release'.\n"
+            "Set VCPKG_INSTALLED_DIR to a release-only path, for example "
+            "'${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/cmake-x64-release'.")
+    endif()
+
+    if(CMAKE_GENERATOR MATCHES "^Visual Studio|Multi-Config$")
+        set(CMAKE_CONFIGURATION_TYPES "Release" CACHE STRING "Supported configurations" FORCE)
+    endif()
+    unset(_mwg_vcpkg_installed_dir)
 endif()
 
 # --- manifest features --------------------------------------------------------

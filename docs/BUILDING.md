@@ -168,13 +168,19 @@ Release with it again reinstalls the tree each time.
 The build quotes the overlay-triplet path when it invokes vcpkg, so checkout
 paths can contain spaces.
 
+`bootstrap-vcpkg.ps1 -Baseline` checks out the vcpkg commit named by
+`builtin-baseline` in `vcpkg.json` instead of the latest vcpkg. vcpkg's own
+scripts are part of every package ABI, so an unpinned checkout can invalidate
+all binary caches whenever vcpkg changes. CI always uses `-Baseline`; the clone
+keeps its full history because vcpkg resolves older port versions from it.
+
 ## Configurations and platforms
 
 | | |
 |---|---|
 | Configurations | `Debug` (`/MDd`, `_DEBUG`), `Release` (`/MD`, `/O2`) |
 | Platforms | `x64`, `Win32` |
-| Triplets | `x64-windows-v145`, `x86-windows-v145` (in `build/triplets`, pinned to v145) |
+| Triplets | `x64-windows-v145`, `x86-windows-v145` (in `build/triplets`, pinned to v145); release-only variants `x64-windows-v145-release`, `x86-windows-v145-release` |
 | Output | MSBuild: `bin\<Configuration>\<Platform>\`; CMake build tree: `out\b\<preset directory>\` (runtime files under `bin\`) |
 | Intermediates | `obj\<Project>\<Configuration>\<Platform>\` |
 
@@ -207,6 +213,30 @@ full-driver Release with both CMake and MSBuild; CMake also covers Win32 Debug.
 Pushes to `main` cover both Win32 configurations.
 Each job has a 180-minute timeout.
 
+### Release-only triplets
+
+The `-release` triplets set `VCPKG_BUILD_TYPE release`, so vcpkg builds no
+debug libraries, which roughly halves the dependency build time. They can only
+be used for non-Debug builds and get their own install tree. CI uses them for
+all Release builds:
+
+```powershell
+# MSBuild: installs to vcpkg_installed\<Platform>-release
+msbuild MapWinGIS6.slnx -restore -p:Platform=x64 -p:Configuration=Release -p:MwgVcpkgReleaseOnly=true "-p:MwgVcpkgFeatures=tests%3Bfull-drivers"
+
+# CMake: pass both triplets and a separate install tree
+cmake --preset vs2026-x64 -DVCPKG_TARGET_TRIPLET=x64-windows-v145-release `
+    -DVCPKG_HOST_TRIPLET=x64-windows-v145-release `
+    -DVCPKG_INSTALLED_DIR="$PWD/vcpkg_installed/cmake-x64-release"
+cmake --build --preset vs2026-x64-release
+```
+
+MSBuild rejects `MwgVcpkgReleaseOnly=true` for the Debug configuration. CMake
+requires the install tree to end in `-release` (the presets set a normal
+platform tree, so pass the separate path as shown above). For multi-config
+generators CMake exposes only Release when a release-only triplet is selected;
+the build guard also rejects a Debug build.
+
 ### Runtime data
 
 vcpkg installs `gdal-data` and `proj.db` under
@@ -229,13 +259,30 @@ rebuild or a second platform is fast. To share a cache across machines, set
 $env:VCPKG_BINARY_SOURCES = 'clear;files,\\server\share\vcpkg-cache,readwrite'
 ```
 
-GitHub Actions keys its vcpkg cache by platform, requested feature set, runner
-image, and the dependency manifests and triplets. Pushes to `development` and
-`main` save the cache after dependency installation; `main` needs its own
-entries because GitHub does not let the default branch restore caches from
-`development`. Pull requests restore these caches without creating separate
-pull-request caches. Debug and CMake parity use the `tests` feature set, while
-Release uses `full` drivers.
+In GitHub Actions, separate per-leg dependency jobs write vcpkg caches. They
+run `vcpkg install` once per leg: `<Platform>-tests` (default triplet, `tests`
+feature, for Debug and CMake parity) or `<Platform>-release-full`
+(release-only triplet, `tests` and `full-drivers`, for Release). The key prefix
+contains the leg, the runner image, and a hash of `vcpkg.json`,
+`vcpkg-configuration.json` and the triplets; because `-Baseline` pins vcpkg to
+the manifest baseline, the prefix also identifies the vcpkg version. The job
+saves a new cache, `<prefix><run_id>-<run_attempt>`, when vcpkg built a
+package or the cache was restored from an older prefix. Pull requests save a
+cache only when vcpkg added packages; pushes also refresh a stale-prefix cache.
+`build\scripts\Sync-VcpkgBinaryCache.ps1` first removes archives that no
+installed package uses after a successful install. On a failed install it
+keeps all archives and can save the packages that were built. A separate
+cleanup job deletes superseded caches of the same leg and branch.
+
+Each build waits only for its matching platform and configuration dependency
+leg. Consumers restore the newest cache with their prefix and still run when
+their dependency leg fails, then build what is missing. `main` is the default
+branch and cannot restore caches from `development`, so pushes to `main` warm
+their own caches.
+
+Stale caches from earlier workflow versions can be removed with
+`gh cache list` and `gh cache delete <key>`; they also expire after 7 days
+without use.
 
 ## Running the legacy MSBuild tests
 
@@ -265,6 +312,7 @@ bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresul
 | `MwgVcpkgFeatures` | `tests` | Semicolon-separated manifest features |
 | `MwgEnableAsan` | `false` | Adds `/fsanitize=address` |
 | `MwgEnableActiveXTestHooks` | `true` | Exports test-only hooks from `MapWinGIS.ocx`. Set `false` for distributed binaries. CMake: `MWG_ENABLE_ACTIVEX_TEST_HOOKS`, which defaults to `MWG_BUILD_TESTS` |
+| `MwgVcpkgReleaseOnly` | `false` | Uses release-only vcpkg triplets (`<triplet>-release`) and a separate install tree. Non-Debug configurations only |
 | `MwgDeployRuntimeData` | `true` for Core, `false` otherwise | Copies `gdal-data` and `proj` to the output folder |
 
 ## CMake migration
@@ -277,7 +325,11 @@ audit of the MSBuild settings and the decisions followed by CMake are in
 To measure flag and binary parity, `build\scripts\Compare-CompileCommands.ps1`
 records a detailed MSBuild log and writes a normalised report to `out\parity\`.
 It finds MSBuild through `MWG_MSBUILD`, `PATH`, or `vswhere`, including Visual
-Studio installations outside the default `C:\Program Files` location.
+Studio installations outside the default `C:\Program Files` location. Its own
+rebuild uses the default `MwgVcpkgFeatures`; to measure another build, such as
+a full-driver Release, pass the detailed log of a clean build with
+`-MSBuildLog`. The MSBuild CI jobs do this so the parity step does not rebuild
+the solution and its dependencies with a different feature set.
 
 ### Finding MSBuild for the legacy build
 

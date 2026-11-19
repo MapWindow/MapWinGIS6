@@ -39,16 +39,20 @@
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
     <VcpkgManifestInstall>true</VcpkgManifestInstall>
     <VcpkgManifestRoot>$(MwgRepoRoot)</VcpkgManifestRoot>
+    <!-- Release-only triplets ("<triplet>-release") skip the debug build of every
+         dependency; CI uses them for Release builds. Debug builds cannot use them. -->
+    <MwgVcpkgReleaseOnly Condition="'$(MwgVcpkgReleaseOnly)' == ''">false</MwgVcpkgReleaseOnly>
+    <_MwgVcpkgTripletSuffix Condition="'$(MwgVcpkgReleaseOnly)' == 'true'">-release</_MwgVcpkgTripletSuffix>
     <!-- One install tree per platform: vcpkg prunes the other triplet from a shared tree,
          which breaks alternating Win32 and x64 builds. -->
-    <VcpkgInstalledDir>$(MwgRepoRoot)vcpkg_installed\$(Platform)\</VcpkgInstalledDir>
+    <VcpkgInstalledDir>$(MwgRepoRoot)vcpkg_installed\$(Platform)$(_MwgVcpkgTripletSuffix)\</VcpkgInstalledDir>
     <VcpkgUseStatic>false</VcpkgUseStatic>
     <VcpkgAutoLink>true</VcpkgAutoLink>
     <VcpkgApplocalDeps>true</VcpkgApplocalDeps>
 
-    <VcpkgTriplet Condition="'$(Platform)' == 'x64'">x64-windows-v145</VcpkgTriplet>
-    <VcpkgTriplet Condition="'$(Platform)' == 'Win32'">x86-windows-v145</VcpkgTriplet>
-    <VcpkgHostTriplet>x64-windows-v145</VcpkgHostTriplet>
+    <VcpkgTriplet Condition="'$(Platform)' == 'x64'">x64-windows-v145$(_MwgVcpkgTripletSuffix)</VcpkgTriplet>
+    <VcpkgTriplet Condition="'$(Platform)' == 'Win32'">x86-windows-v145$(_MwgVcpkgTripletSuffix)</VcpkgTriplet>
+    <VcpkgHostTriplet>x64-windows-v145$(_MwgVcpkgTripletSuffix)</VcpkgHostTriplet>
 
     <!-- Manifest features. "full-drivers" is what release packages build. -->
     <MwgVcpkgFeatures Condition="'$(MwgVcpkgFeatures)' == ''">tests</MwgVcpkgFeatures>

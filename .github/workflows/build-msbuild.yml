@@ -1,0 +1,116 @@
+name: MSBuild build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        required: true
+        type: string
+      configuration:
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 180
+
+    env:
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
+      # The runner image does not ship SDK 10.0.28000 yet.
+      MWG_WINDOWS_SDK: '10.0'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Compute vcpkg cache key
+        id: cache_key
+        shell: pwsh
+        run: |
+          $leg = 'vcpkg-binary-${{ runner.os }}-${{ inputs.platform }}-${{ inputs.configuration == 'Release' && 'release-full' || 'tests' }}-'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "leg=$leg"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prefix=$leg$env:ImageVersion-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}-"
+
+      - name: Restore vcpkg binary packages
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg-binary-cache
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ steps.cache_key.outputs.prefix }}
+            ${{ steps.cache_key.outputs.leg }}
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: ./build/scripts/bootstrap-vcpkg.ps1 -Baseline
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Check build configuration
+        shell: pwsh
+        run: ./build/scripts/Test-BuildConfiguration.ps1
+
+      # The detailed log feeds the parity baseline below; a clean checkout
+      # compiles every translation unit, so no second (re)build is needed.
+      - name: Build
+        shell: pwsh
+        run: |
+          $release = '${{ inputs.configuration }}' -eq 'Release'
+          # Release builds use the release-only vcpkg triplets.
+          $vcpkgArguments = @('-p:MwgVcpkgFeatures=tests')
+          if ($release) {
+            $vcpkgArguments = @('-p:MwgVcpkgFeatures=tests%3Bfull-drivers', '-p:MwgVcpkgReleaseOnly=true')
+          }
+          New-Item -ItemType Directory -Force -Path out/parity | Out-Null
+          msbuild MapWinGIS6.slnx `
+            -restore `
+            -p:Configuration=${{ inputs.configuration }} `
+            -p:Platform=${{ inputs.platform }} `
+            -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
+            @vcpkgArguments `
+            -m -v:m `
+            "-flp:logfile=out\parity\msbuild-${{ inputs.configuration }}-${{ inputs.platform }}.log;verbosity=detailed"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Measure build parity baseline
+        shell: pwsh
+        run: |
+          pwsh -File build/scripts/Compare-CompileCommands.ps1 `
+            -Configuration ${{ inputs.configuration }} `
+            -Platform ${{ inputs.platform }} `
+            -MSBuildLog out/parity/msbuild-${{ inputs.configuration }}-${{ inputs.platform }}.log `
+            -FailOnLostFlags
+
+      - name: Test
+        shell: pwsh
+        run: |
+          foreach ($test in @(
+            @{ Name = "core"; Project = "MapWinGIS.Core.Tests" },
+            @{ Name = "core-gdal-init"; Project = "MapWinGIS.Core.GdalInitialization.Tests" },
+            @{ Name = "activex"; Project = "MapWinGIS.ActiveX.Tests" }
+          )) {
+            $exe = "bin/${{ inputs.configuration }}/${{ inputs.platform }}/$($test.Project).exe"
+            $report = "testresults-$($test.Name)-${{ inputs.platform }}-${{ inputs.configuration }}.xml"
+            & $exe --gtest_output="xml:$report"
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: testresults-${{ inputs.platform }}-${{ inputs.configuration }}
+          path: testresults-*-${{ inputs.platform }}-${{ inputs.configuration }}.xml
+          if-no-files-found: ignore
+
+      - name: Upload binaries
+        if: ${{ inputs.configuration == 'Release' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: MapWinGIS.Core-${{ inputs.platform }}
+          path: bin/Release/${{ inputs.platform }}/
+          if-no-files-found: error

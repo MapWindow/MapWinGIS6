@@ -40,6 +40,13 @@
   <Import Project="$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets"
           Condition="'$(MwgCMakeBuild)' != 'true' And Exists('$(MwgVcpkgRoot)\scripts\buildsystems\msbuild\vcpkg.targets')" />
 
+  <!-- A release-only triplet has no debug libraries; a Debug build would mix
+       the debug CRT with release dependencies. -->
+  <Target Name="MwgCheckVcpkgReleaseOnly"
+          BeforeTargets="PrepareForBuild;VcpkgInstallManifestDependencies"
+          Condition="'$(MwgCMakeBuild)' != 'true' And '$(MwgVcpkgReleaseOnly)' == 'true' And '$(Configuration)' == 'Debug'">
+    <Error Text="MwgVcpkgReleaseOnly=true uses the release-only triplet $(VcpkgTriplet), which cannot build the Debug configuration." />
+  </Target>
   <!--
     vcpkg's incremental install check only compares vcpkg.json and
     vcpkg-configuration.json with its stamp file, so changing MwgVcpkgFeatures
