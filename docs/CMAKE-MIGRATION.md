@@ -248,8 +248,11 @@ build needs). The binary cache makes the second install cheap. Presets pin
 The vcpkg root is resolved before `project()` in the same order as
 `bootstrap-vcpkg.ps1` (`MWG_VCPKG_ROOT`, sibling `../vcpkg`, `VCPKG_ROOT`),
 unless `CMAKE_TOOLCHAIN_FILE` is already set. The release-only triplets
-(`<triplet>-release`) are accepted for non-Debug builds and default to
-`<repo>/vcpkg_installed/cmake-<Platform>-release`; see
+(`<triplet>-release`) require an install tree whose path ends in `-release`.
+Without a preset, the default is
+`<repo>/vcpkg_installed/cmake-<Platform>-release`; with a preset, pass
+`VCPKG_INSTALLED_DIR` explicitly. Multi-config generators expose only the
+Release configuration for these triplets; see
 [BUILDING.md](BUILDING.md#release-only-triplets).
 
 ### D3. MIDL output ownership

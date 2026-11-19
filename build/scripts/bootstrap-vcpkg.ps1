@@ -49,8 +49,11 @@ function Resolve-VcpkgRoot {
     return $sibling
 }
 
-$root = Resolve-VcpkgRoot
+$root = [System.IO.Path]::GetFullPath((Resolve-VcpkgRoot))
 Write-Host "vcpkg root: $root"
+if ($env:GITHUB_ENV) {
+    Add-Content -LiteralPath $env:GITHUB_ENV -Value "MWG_VCPKG_ROOT=$root"
+}
 
 $vcpkgUrl = 'https://github.com/microsoft/vcpkg.git'
 $checkedOut = $false

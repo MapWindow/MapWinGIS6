@@ -79,11 +79,28 @@ $commandLine | Select-Object -Skip $start | Set-Content (Join-Path $PSScriptRoot
         }
     }
 
+    foreach ($releaseTriplet in Get-ChildItem "$repoRoot\build\triplets\*-release.cmake") {
+        $baseTriplet = $releaseTriplet.FullName -replace '-release\.cmake$', '.cmake'
+        if (-not (Test-Path -LiteralPath $baseTriplet)) {
+            throw "Base triplet not found for $($releaseTriplet.Name)."
+        }
+        $baseSettings = @(Get-Content -LiteralPath $baseTriplet | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and -not $_.StartsWith('#') })
+        $releaseSettings = @(Get-Content -LiteralPath $releaseTriplet.FullName | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and -not $_.StartsWith('#') })
+        $expectedSettings = @($baseSettings + 'set(VCPKG_BUILD_TYPE release)')
+        if (($releaseSettings -join "`n") -ne ($expectedSettings -join "`n")) {
+            throw "$($releaseTriplet.Name) must match its base triplet plus 'set(VCPKG_BUILD_TYPE release)'."
+        }
+    }
+
     $powerShell = (Get-Process -Id $PID).Path
     & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:MwgCheckVcpkgReleaseOnly | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'The release-only triplet check failed without a release-only triplet.' }
-    & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:MwgCheckVcpkgReleaseOnly -p:MwgVcpkgReleaseOnly=true | Out-Null
-    if ($LASTEXITCODE -eq 0) { throw 'A Debug build accepted the release-only vcpkg triplet.' }
+    $output = & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:MwgCheckVcpkgReleaseOnly -p:MwgVcpkgReleaseOnly=true 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -or $output -notmatch 'cannot build the Debug configuration') {
+        throw 'The release-only Debug guard did not report its expected error.'
+    }
 
     & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:CaptureArguments "-p:MwgTestPowerShell=$powerShell" '-p:MwgVcpkgFeatures=tests%3Bfull-drivers'
     if ($LASTEXITCODE -ne 0) { throw 'Dependency argument capture failed.' }

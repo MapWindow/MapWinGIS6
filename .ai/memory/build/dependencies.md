@@ -47,11 +47,15 @@ but rebuilt GDAL and its dependencies for 30-86 minutes per job, and the
 save-on-miss-only rule never refreshed the stale caches. CI therefore runs
 `bootstrap-vcpkg.ps1 -Baseline` (vcpkg at the manifest baseline, full clone
 because vcpkg reads older port versions from git history; a depth-1 clone fails
-to load `gdal@3.12.4`). Only the `vcpkg-deps` job saves caches, under unique
-`<prefix><run_id>-<run_attempt>` keys and only when vcpkg built something;
-`Sync-VcpkgBinaryCache.ps1` prunes unused archives first. An archive is named by
-the SHA-256 of `share/<port>/vcpkg_abi_info.txt` in the install tree (verified
-locally). Release jobs use the release-only `-release` triplets.
+to load `gdal@3.12.4`). Separate per-leg dependency jobs save caches under unique
+`<prefix><run_id>-<run_attempt>` keys. The sync script prunes unused archives
+only after a successful install; after a failed install it retains all
+archives, including packages not reached in the install plan. Pull requests
+save only when vcpkg added packages; pushes also refresh stale-prefix caches.
+An archive is named by the SHA-256 of `share/<port>/vcpkg_abi_info.txt` in the
+install tree (verified locally). Each consumer waits only for its matching
+platform and configuration dependency job; Release jobs use `-release`
+triplets.
 
 The MSBuild parity step must not rebuild on its own: `Compare-CompileCommands.ps1`
 without `-MSBuildLog` rebuilds with the default features, which in a

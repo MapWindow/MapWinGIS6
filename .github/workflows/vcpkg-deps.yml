@@ -1,0 +1,91 @@
+name: vcpkg dependency leg
+
+on:
+  workflow_call:
+    inputs:
+      leg:
+        required: true
+        type: string
+
+jobs:
+  install:
+    runs-on: windows-2025
+    timeout-minutes: 180
+
+    permissions:
+      contents: read
+
+    env:
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Compute vcpkg cache key
+        id: cache_key
+        shell: pwsh
+        run: |
+          $leg = 'vcpkg-binary-${{ runner.os }}-${{ inputs.leg }}-'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "leg=$leg"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prefix=$leg$env:ImageVersion-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}-"
+
+      - name: Restore vcpkg binary packages
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg-binary-cache
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ steps.cache_key.outputs.prefix }}
+            ${{ steps.cache_key.outputs.leg }}
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: ./build/scripts/bootstrap-vcpkg.ps1 -Baseline
+
+      - name: Record restored packages
+        shell: pwsh
+        run: ./build/scripts/Sync-VcpkgBinaryCache.ps1 -Record -CacheDir vcpkg-binary-cache -SnapshotFile "$env:RUNNER_TEMP\vcpkg-cache-before.txt"
+
+      - name: Install vcpkg dependencies
+        id: install
+        shell: pwsh
+        run: |
+          $platform, $kind = '${{ inputs.leg }}' -split '-', 2
+          $architecture = if ($platform -eq 'x64') { 'x64' } else { 'x86' }
+          $suffix = if ($kind -eq 'release-full') { '-release' } else { '' }
+          $features = if ($kind -eq 'release-full') { @('tests', 'full-drivers') } else { @('tests') }
+          $vcpkg = Join-Path $env:MWG_VCPKG_ROOT 'vcpkg.exe'
+          & $vcpkg install `
+            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
+            "--x-install-root=$env:RUNNER_TEMP\vcpkg-deps-installed" `
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\build\triplets" `
+            --triplet "$architecture-windows-v145$suffix" `
+            --host-triplet "x64-windows-v145$suffix" `
+            @($features | ForEach-Object { "--x-feature=$_" }) `
+            --clean-after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Prune vcpkg binary packages
+        id: sync
+        if: always() && steps.install.outcome != 'skipped'
+        shell: pwsh
+        run: |
+          $arguments = @(
+            '-Finish',
+            '-CacheDir', 'vcpkg-binary-cache',
+            '-SnapshotFile', "$env:RUNNER_TEMP\vcpkg-cache-before.txt",
+            '-InstalledDir', "$env:RUNNER_TEMP\vcpkg-deps-installed",
+            '-RestoredKey', '${{ steps.cache.outputs.cache-matched-key }}',
+            '-KeyPrefix', '${{ steps.cache_key.outputs.prefix }}'
+          )
+          if ('${{ steps.install.outcome }}' -ne 'success') { $arguments += '-SkipPrune' }
+          ./build/scripts/Sync-VcpkgBinaryCache.ps1 @arguments
+
+      - name: Save vcpkg binary packages
+        if: always() && steps.sync.outputs.changed == 'true' && (github.event_name != 'pull_request' || steps.sync.outputs.added == 'true')
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg-binary-cache
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}

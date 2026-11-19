@@ -232,8 +232,10 @@ cmake --build --preset vs2026-x64-release
 ```
 
 MSBuild rejects `MwgVcpkgReleaseOnly=true` for the Debug configuration. CMake
-rejects a single-config Debug build, and with a multi-config generator the
-Debug build fails in the `mwg_release_only_triplet_guard` target.
+requires the install tree to end in `-release` (the presets set a normal
+platform tree, so pass the separate path as shown above). For multi-config
+generators CMake exposes only Release when a release-only triplet is selected;
+the build guard also rejects a Debug build.
 
 ### Runtime data
 
@@ -257,24 +259,26 @@ rebuild or a second platform is fast. To share a cache across machines, set
 $env:VCPKG_BINARY_SOURCES = 'clear;files,\\server\share\vcpkg-cache,readwrite'
 ```
 
-In GitHub Actions only the `vcpkg-deps` job writes vcpkg caches. It runs
-`vcpkg install` once per leg: `<Platform>-tests` (default triplet, `tests`
-feature, for Debug and CMake parity) and `<Platform>-release-full`
+In GitHub Actions, separate per-leg dependency jobs write vcpkg caches. They
+run `vcpkg install` once per leg: `<Platform>-tests` (default triplet, `tests`
+feature, for Debug and CMake parity) or `<Platform>-release-full`
 (release-only triplet, `tests` and `full-drivers`, for Release). The key prefix
 contains the leg, the runner image, and a hash of `vcpkg.json`,
 `vcpkg-configuration.json` and the triplets; because `-Baseline` pins vcpkg to
 the manifest baseline, the prefix also identifies the vcpkg version. The job
-saves a new cache, `<prefix><run_id>-<run_attempt>`, only when vcpkg built a
-package or the cache was restored from an older prefix.
+saves a new cache, `<prefix><run_id>-<run_attempt>`, when vcpkg built a
+package or the cache was restored from an older prefix. Pull requests save a
+cache only when vcpkg added packages; pushes also refresh a stale-prefix cache.
 `build\scripts\Sync-VcpkgBinaryCache.ps1` first removes archives that no
-installed package uses, and the job then deletes the superseded caches of the
-same leg and branch. Pull requests save their own caches the same way, so a
-re-run of a pull request does not rebuild changed dependencies.
+installed package uses after a successful install. On a failed install it
+keeps all archives and can save the packages that were built. A separate
+cleanup job deletes superseded caches of the same leg and branch.
 
-The build jobs wait for `vcpkg-deps` and only restore the newest cache with
-their prefix. They still run when a `vcpkg-deps` leg fails and then build what
-is missing. `main` is the default branch and cannot restore caches from
-`development`, so pushes to `main` warm their own caches.
+Each build waits only for its matching platform and configuration dependency
+leg. Consumers restore the newest cache with their prefix and still run when
+their dependency leg fails, then build what is missing. `main` is the default
+branch and cannot restore caches from `development`, so pushes to `main` warm
+their own caches.
 
 Stale caches from earlier workflow versions can be removed with
 `gh cache list` and `gh cache delete <key>`; they also expire after 7 days
@@ -307,6 +311,8 @@ bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_output=xml:activex-testresul
 | `MwgVcpkgRoot` | resolved (see above) | vcpkg location |
 | `MwgVcpkgFeatures` | `tests` | Semicolon-separated manifest features |
 | `MwgEnableAsan` | `false` | Adds `/fsanitize=address` |
+| `MwgEnableActiveXTestHooks` | `true` | Exports test-only hooks from `MapWinGIS.ocx`. Set `false` for distributed binaries. CMake: `MWG_ENABLE_ACTIVEX_TEST_HOOKS`, which defaults to `MWG_BUILD_TESTS` |
+| `MwgVcpkgReleaseOnly` | `false` | Uses release-only vcpkg triplets (`<triplet>-release`) and a separate install tree. Non-Debug configurations only |
 | `MwgDeployRuntimeData` | `true` for Core, `false` otherwise | Copies `gdal-data` and `proj` to the output folder |
 
 ## CMake migration

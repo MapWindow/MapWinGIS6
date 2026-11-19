@@ -3,8 +3,8 @@
     Decides whether a vcpkg binary cache must be saved, and prunes it first.
 
 .DESCRIPTION
-    Used by the vcpkg-deps CI job around "vcpkg install" with a files binary
-    source (VCPKG_BINARY_SOURCES=files,<CacheDir>,readwrite).
+    Used by the vcpkg dependency CI job around "vcpkg install" with a files
+    binary source (VCPKG_BINARY_SOURCES=files,<CacheDir>,readwrite).
 
     -Record writes the archive names present after the cache restore to
     -SnapshotFile.
@@ -17,7 +17,7 @@
     warning if an installed package has no archive, which would mean the
     ABI-to-archive mapping no longer holds.
 
-    Writes "changed=true|false" to GITHUB_OUTPUT when that is set.
+    Writes "changed=true|false" and "added=true|false" to GITHUB_OUTPUT when set.
 
 .PARAMETER CacheDir
     The files binary source directory (<abi[0:2]>\<abi>.zip).
@@ -35,6 +35,9 @@
 
 .PARAMETER KeyPrefix
     Prefix shared by all cache keys for the current inputs.
+
+.PARAMETER SkipPrune
+    Keep all restored and newly built archives when the vcpkg install failed.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Finish')]
 param(
@@ -58,7 +61,10 @@ param(
     [string] $RestoredKey = '',
 
     [Parameter(Mandatory, ParameterSetName = 'Finish')]
-    [string] $KeyPrefix
+    [string] $KeyPrefix,
+
+    [Parameter(ParameterSetName = 'Finish')]
+    [switch] $SkipPrune
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,30 +98,37 @@ if ($RestoredKey) { Write-Host "Restored key: $RestoredKey" } else { Write-Host 
 
 $changed = $archives.Count -gt 0 -and ($added.Count -gt 0 -or $staleKey)
 if ($changed) {
-    $used = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($root in $InstalledDir) {
-        if (-not (Test-Path -LiteralPath $root)) { throw "Install root '$root' does not exist." }
-        foreach ($info in Get-ChildItem -Path (Join-Path $root '*\share\*\vcpkg_abi_info.txt') -File) {
-            [void]$used.Add((Get-FileHash -LiteralPath $info.FullName -Algorithm SHA256).Hash)
-        }
-    }
-
-    $present = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($archive in $archives) { [void]$present.Add($archive.BaseName) }
-    $missing = @($used | Where-Object { -not $present.Contains($_) })
-
-    if ($used.Count -eq 0 -or $missing.Count -gt 0) {
-        Write-Warning (("Not pruning the cache: {0} installed packages, {1} without an archive. " -f $used.Count, $missing.Count) +
-            'vcpkg may have changed how archives are named.')
+    if ($SkipPrune) {
+        Write-Host 'Install did not succeed; keeping all archives.'
     }
     else {
-        $unused = @($archives | Where-Object { -not $used.Contains($_.BaseName) })
-        $unused | Remove-Item -Force
-        Write-Host "Pruned $($unused.Count) unused archives ($(Format-Size (($unused | Measure-Object Length -Sum).Sum))); keeping $($used.Count)."
+        $used = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($root in $InstalledDir) {
+            if (-not (Test-Path -LiteralPath $root)) { throw "Install root '$root' does not exist." }
+            foreach ($info in Get-ChildItem -Path (Join-Path $root '*\share\*\vcpkg_abi_info.txt') -File) {
+                [void]$used.Add((Get-FileHash -LiteralPath $info.FullName -Algorithm SHA256).Hash)
+            }
+        }
+
+        $present = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($archive in $archives) { [void]$present.Add($archive.BaseName) }
+        $missing = @($used | Where-Object { -not $present.Contains($_) })
+
+        if ($used.Count -eq 0 -or $missing.Count -gt 0) {
+            Write-Warning (("Not pruning the cache: {0} installed packages, {1} without an archive. " -f $used.Count, $missing.Count) +
+                'vcpkg may have changed how archives are named.')
+        }
+        else {
+            $unused = @($archives | Where-Object { -not $used.Contains($_.BaseName) })
+            $unused | Remove-Item -Force
+            Write-Host "Pruned $($unused.Count) unused archives ($(Format-Size (($unused | Measure-Object Length -Sum).Sum))); keeping $($used.Count)."
+        }
     }
 }
 
 Write-Host "Save cache: $changed"
 if ($env:GITHUB_OUTPUT) {
+    $hasAdded = $added.Count -gt 0
     Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "changed=$($changed.ToString().ToLowerInvariant())"
+    Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "added=$($hasAdded.ToString().ToLowerInvariant())"
 }
