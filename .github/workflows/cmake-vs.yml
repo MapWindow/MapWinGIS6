@@ -44,6 +44,9 @@ jobs:
         shell: pwsh
         run: ./build/scripts/bootstrap-vcpkg.ps1 -Baseline
 
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v3
+
       - name: Configure CMake
         shell: pwsh
         run: |
