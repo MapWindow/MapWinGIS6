@@ -9,8 +9,129 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# vcpkg binary caches
+# -------------------
+# Only the vcpkg-deps job writes caches. It builds the dependencies of one
+# "leg" (platform + triplet + manifest features) and saves the binary cache
+# under "<prefix><run_id>-<run_attempt>" when vcpkg built something, after
+# pruning archives that the current dependency set does not use. The other jobs
+# wait for it and restore the newest cache with the same prefix. The prefix
+# covers vcpkg.json, whose builtin-baseline pins the vcpkg checkout
+# (bootstrap-vcpkg.ps1 -Baseline), so a cache always matches the vcpkg scripts
+# that produced it. Legs:
+#   <platform>-tests         Debug builds: default triplet, "tests" feature.
+#   <platform>-release-full  Release builds: release-only triplet,
+#                            "tests" and "full-drivers" features.
+
 jobs:
+  vcpkg-deps:
+    runs-on: windows-2025
+    timeout-minutes: 180
+
+    permissions:
+      # actions: write deletes the caches that a new save supersedes.
+      actions: write
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '{"leg":["x64-tests","x64-release-full","Win32-tests","Win32-release-full"]}' || '{"leg":["x64-tests","x64-release-full","Win32-tests"]}') }}
+
+    env:
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Compute vcpkg cache key
+        id: cache_key
+        shell: pwsh
+        run: |
+          $leg = 'vcpkg-binary-${{ runner.os }}-${{ matrix.leg }}-'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "leg=$leg"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prefix=$leg$env:ImageVersion-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}-"
+
+      - name: Restore vcpkg binary packages
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg-binary-cache
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ steps.cache_key.outputs.prefix }}
+            ${{ steps.cache_key.outputs.leg }}
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: ./build/scripts/bootstrap-vcpkg.ps1 -Baseline
+
+      - name: Record restored packages
+        shell: pwsh
+        run: ./build/scripts/Sync-VcpkgBinaryCache.ps1 -Record -CacheDir vcpkg-binary-cache -SnapshotFile "$env:RUNNER_TEMP\vcpkg-cache-before.txt"
+
+      - name: Install vcpkg dependencies
+        id: install
+        shell: pwsh
+        run: |
+          $platform, $kind = '${{ matrix.leg }}' -split '-', 2
+          $architecture = if ($platform -eq 'x64') { 'x64' } else { 'x86' }
+          $suffix = if ($kind -eq 'release-full') { '-release' } else { '' }
+          $features = if ($kind -eq 'release-full') { @('tests', 'full-drivers') } else { @('tests') }
+          $vcpkg = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) 'vcpkg\vcpkg.exe'
+          & $vcpkg install `
+            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
+            "--x-install-root=$env:RUNNER_TEMP\vcpkg-deps-installed" `
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\build\triplets" `
+            --triplet "$architecture-windows-v145$suffix" `
+            --host-triplet "x64-windows-v145$suffix" `
+            @($features | ForEach-Object { "--x-feature=$_" }) `
+            --clean-after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Also after a failed install: the packages that were built are kept.
+      - name: Prune vcpkg binary packages
+        id: sync
+        if: always() && steps.install.outcome != 'skipped'
+        shell: pwsh
+        run: |
+          ./build/scripts/Sync-VcpkgBinaryCache.ps1 -Finish `
+            -CacheDir vcpkg-binary-cache `
+            -SnapshotFile "$env:RUNNER_TEMP\vcpkg-cache-before.txt" `
+            -InstalledDir "$env:RUNNER_TEMP\vcpkg-deps-installed" `
+            -RestoredKey '${{ steps.cache.outputs.cache-matched-key }}' `
+            -KeyPrefix '${{ steps.cache_key.outputs.prefix }}'
+
+      - name: Save vcpkg binary packages
+        id: save
+        if: always() && steps.sync.outputs.changed == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg-binary-cache
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Fork pull requests get a read-only token; the old caches then age out.
+      - name: Delete superseded vcpkg caches
+        if: always() && steps.save.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $keep = '${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}'
+          $caches = gh cache list --repo $env:GITHUB_REPOSITORY --ref $env:GITHUB_REF `
+            --key '${{ steps.cache_key.outputs.leg }}' --limit 100 --json id,key | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($cache in @($caches | Where-Object key -ne $keep)) {
+            Write-Host "Deleting $($cache.key)"
+            gh cache delete $cache.id --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
   cmake-parity:
+    needs: vcpkg-deps
+    # Still build when a dependency leg failed; the job then builds what is missing.
+    if: ${{ !cancelled() }}
     runs-on: windows-2025
     timeout-minutes: 180
 
@@ -22,27 +143,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Record runner image version
-        id: runner_image
+      - name: Compute vcpkg cache key
+        id: cache_key
         shell: pwsh
-        run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
+        run: |
+          $leg = 'vcpkg-binary-${{ runner.os }}-x64-tests-'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "leg=$leg"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prefix=$leg$env:ImageVersion-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}-"
 
       - name: Restore vcpkg binary packages
-        id: cache
         uses: actions/cache/restore@v6
         with:
           path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-x64-tests-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkg-binary-${{ runner.os }}-x64-tests-
-            vcpkg-binary-${{ runner.os }}-x64-
+            ${{ steps.cache_key.outputs.prefix }}
+            ${{ steps.cache_key.outputs.leg }}
 
       - name: Bootstrap vcpkg
         shell: pwsh
-        run: ./build/scripts/bootstrap-vcpkg.ps1
+        run: ./build/scripts/bootstrap-vcpkg.ps1 -Baseline
 
       - name: Configure CMake preset
-        id: configure
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -55,13 +177,6 @@ jobs:
           $commands = 'call "{0}" && cmake --preset x64-debug -DMWG_WINDOWS_SDK={1}' -f $vcvars,$env:MWG_WINDOWS_SDK
           & $env:ComSpec /d /s /c $commands
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
-        uses: actions/cache/save@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-x64-tests-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
 
       - name: Build CMake preset
         id: build
@@ -87,6 +202,8 @@ jobs:
             -FailOnNewWarnings
 
   cmake-vs:
+    needs: vcpkg-deps
+    if: ${{ !cancelled() }}
     runs-on: windows-2025
     timeout-minutes: 180
 
@@ -102,27 +219,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Record runner image version
-        id: runner_image
+      - name: Compute vcpkg cache key
+        id: cache_key
         shell: pwsh
-        run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
+        run: |
+          $leg = 'vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'release-full' || 'tests' }}-'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "leg=$leg"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prefix=$leg$env:ImageVersion-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}-"
 
       - name: Restore vcpkg binary packages
-        id: cache
         uses: actions/cache/restore@v6
         with:
           path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-
-            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
+            ${{ steps.cache_key.outputs.prefix }}
+            ${{ steps.cache_key.outputs.leg }}
 
       - name: Bootstrap vcpkg
         shell: pwsh
-        run: ./build/scripts/bootstrap-vcpkg.ps1
+        run: ./build/scripts/bootstrap-vcpkg.ps1 -Baseline
 
       - name: Configure CMake
-        id: configure
         shell: pwsh
         run: |
           $platform = '${{ matrix.platform }}'
@@ -130,19 +248,22 @@ jobs:
           $architecture = if ($platform -eq 'x64') { 'x64' } else { 'x86' }
           $configurePreset = "vs2026-$architecture"
           $buildPreset = "$configurePreset-$($configuration.ToLowerInvariant())"
-          $features = if ($configuration -eq 'Release') { 'tests;full-drivers' } else { 'tests' }
-          cmake --preset $configurePreset `
-            "-DMWG_WINDOWS_SDK=$env:MWG_WINDOWS_SDK" `
-            "-DVCPKG_MANIFEST_FEATURES=$features"
+          $arguments = @("-DMWG_WINDOWS_SDK=$env:MWG_WINDOWS_SDK")
+          if ($configuration -eq 'Release') {
+            # Release-only triplets skip the debug build of every dependency.
+            $arguments += @(
+              '-DVCPKG_MANIFEST_FEATURES=tests;full-drivers',
+              "-DVCPKG_TARGET_TRIPLET=$architecture-windows-v145-release",
+              '-DVCPKG_HOST_TRIPLET=x64-windows-v145-release',
+              "-DVCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE/vcpkg_installed/cmake-$platform-release"
+            )
+          }
+          else {
+            $arguments += '-DVCPKG_MANIFEST_FEATURES=tests'
+          }
+          cmake --preset $configurePreset @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Add-Content -Path $env:GITHUB_ENV -Value "MWG_CMAKE_BUILD_PRESET=$buildPreset"
-
-      - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
-        uses: actions/cache/save@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
 
       - name: Build CMake preset
         shell: pwsh
@@ -173,6 +294,8 @@ jobs:
           if-no-files-found: error
 
   build:
+    needs: vcpkg-deps
+    if: ${{ !cancelled() }}
     runs-on: windows-2025
     timeout-minutes: 180
 
@@ -189,24 +312,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Record runner image version
-        id: runner_image
+      - name: Compute vcpkg cache key
+        id: cache_key
         shell: pwsh
-        run: Add-Content -Path $env:GITHUB_OUTPUT -Value "image_version=$env:ImageVersion"
+        run: |
+          $leg = 'vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'release-full' || 'tests' }}-'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "leg=$leg"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prefix=$leg$env:ImageVersion-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}-"
 
       - name: Restore vcpkg binary packages
-        id: cache
         uses: actions/cache/restore@v6
         with:
           path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
+          key: ${{ steps.cache_key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-
-            vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
+            ${{ steps.cache_key.outputs.prefix }}
+            ${{ steps.cache_key.outputs.leg }}
 
       - name: Bootstrap vcpkg
         shell: pwsh
-        run: ./build/scripts/bootstrap-vcpkg.ps1
+        run: ./build/scripts/bootstrap-vcpkg.ps1 -Baseline
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v3
@@ -215,25 +340,24 @@ jobs:
         shell: pwsh
         run: ./build/scripts/Test-BuildConfiguration.ps1
 
+      # The detailed log feeds the parity baseline below; a clean checkout
+      # compiles every translation unit, so no second (re)build is needed.
       - name: Build
-        id: build
         shell: pwsh
         run: |
-          $features = if ('${{ matrix.configuration }}' -eq 'Release') { 'tests%3Bfull-drivers' } else { 'tests' }
+          $release = '${{ matrix.configuration }}' -eq 'Release'
+          # Release builds use the release-only vcpkg triplets.
+          $vcpkgArguments = if ($release) { @('-p:MwgVcpkgFeatures=tests%3Bfull-drivers', '-p:MwgVcpkgReleaseOnly=true') } else { @('-p:MwgVcpkgFeatures=tests') }
+          New-Item -ItemType Directory -Force -Path out/parity | Out-Null
           msbuild MapWinGIS6.slnx `
             -restore `
             -p:Configuration=${{ matrix.configuration }} `
             -p:Platform=${{ matrix.platform }} `
             -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
-            "-p:MwgVcpkgFeatures=$features" `
-            -m -v:m
-
-      - name: Save vcpkg binary packages
-        if: always() && github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
-        uses: actions/cache/save@v6
-        with:
-          path: vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ matrix.configuration == 'Release' && 'full' || 'tests' }}-${{ steps.runner_image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'build/triplets/*.cmake') }}
+            @vcpkgArguments `
+            -m -v:m `
+            "-flp:logfile=out\parity\msbuild-${{ matrix.configuration }}-${{ matrix.platform }}.log;verbosity=detailed"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Measure build parity baseline
         shell: pwsh
@@ -241,6 +365,7 @@ jobs:
           pwsh -File build/scripts/Compare-CompileCommands.ps1 `
             -Configuration ${{ matrix.configuration }} `
             -Platform ${{ matrix.platform }} `
+            -MSBuildLog out/parity/msbuild-${{ matrix.configuration }}-${{ matrix.platform }}.log `
             -FailOnLostFlags
 
       - name: Test

@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Tests SDK selection, dependency argument quoting and single-owner runtime deployment.
+    Tests SDK selection, vcpkg triplet selection, dependency argument quoting and
+    single-owner runtime deployment.
 #>
 [CmdletBinding()]
 param(
@@ -63,7 +64,27 @@ $commandLine | Select-Object -Skip $start | Set-Content (Join-Path $PSScriptRoot
         }
     }
 
+    foreach ($case in @(
+        @{ Platform = 'x64'; ReleaseOnly = 'false'; Triplet = 'x64-windows-v145'; HostTriplet = 'x64-windows-v145'; InstallDir = 'x64' },
+        @{ Platform = 'Win32'; ReleaseOnly = 'true'; Triplet = 'x86-windows-v145-release'; HostTriplet = 'x64-windows-v145-release'; InstallDir = 'Win32-release' }
+    )) {
+        $json = & $MSBuild "$temp\SdkSelection.proj" -nologo "-p:Platform=$($case.Platform)" "-p:MwgVcpkgReleaseOnly=$($case.ReleaseOnly)" `
+            -getProperty:VcpkgTriplet -getProperty:VcpkgHostTriplet -getProperty:VcpkgInstalledDir
+        if ($LASTEXITCODE -ne 0) { throw 'Triplet selection failed.' }
+        $properties = ($json | ConvertFrom-Json).Properties
+        if ($properties.VcpkgTriplet -ne $case.Triplet -or
+            $properties.VcpkgHostTriplet -ne $case.HostTriplet -or
+            $properties.VcpkgInstalledDir -ne "$temp\vcpkg_installed\$($case.InstallDir)\") {
+            throw "Triplet selection failed for $($case.Platform), release-only $($case.ReleaseOnly): $($json -join ' ')"
+        }
+    }
+
     $powerShell = (Get-Process -Id $PID).Path
+    & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:MwgCheckVcpkgReleaseOnly | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'The release-only triplet check failed without a release-only triplet.' }
+    & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:MwgCheckVcpkgReleaseOnly -p:MwgVcpkgReleaseOnly=true | Out-Null
+    if ($LASTEXITCODE -eq 0) { throw 'A Debug build accepted the release-only vcpkg triplet.' }
+
     & $MSBuild "$temp\RuntimeDataOwner.proj" -nologo -v:q -t:CaptureArguments "-p:MwgTestPowerShell=$powerShell" '-p:MwgVcpkgFeatures=tests%3Bfull-drivers'
     if ($LASTEXITCODE -ne 0) { throw 'Dependency argument capture failed.' }
     $arguments = @(Get-Content "$temp\arguments.txt")

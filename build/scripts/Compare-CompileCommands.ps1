@@ -288,11 +288,12 @@ function Get-Placeholders([string] $intRoot, [string] $binDir, [string] $buildDi
 }
 
 # vcpkg install trees differ between the builds (vcpkg_installed\x64 for
-# MSBuild, vcpkg_installed\cmake-x64 or similar for CMake). Collapse the
-# platform folder so both report <vcpkg_installed>/<triplet>/...
+# MSBuild, vcpkg_installed\cmake-x64 or similar for CMake, with a "-release"
+# suffix for release-only triplets). Collapse the platform folder so both
+# report <vcpkg_installed>/<triplet>/...
 function Merge-VcpkgPlatform([string[]] $options) {
     return @($options | ForEach-Object {
-        $_ -replace '<vcpkg_installed>/(cmake-)?(x64|Win32|x86)/', '<vcpkg_installed>/'
+        $_ -replace '<vcpkg_installed>/(cmake-)?(x64|Win32|x86)(-release)?/', '<vcpkg_installed>/'
     } | Sort-Object -Unique -CaseSensitive)
 }
 
