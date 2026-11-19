@@ -80,4 +80,13 @@ namespace mwg::rendering
     ///         errors from individual layers are reported in skippedLayers.
     ///         Exceptions not derived from std::exception propagate.
     [[nodiscard]] MWG_CORE_API MapRenderScene CreateMapRenderScene(const Map& map);
+
+    /// Creates a map scene with explicit fill-preparation behavior.
+    ///
+    /// Hidden, empty, and failed layers retain the same handling as the
+    /// default overload. When prepareFillMeshes is false, every drawable
+    /// scene contains rings but no fill meshes.
+    [[nodiscard]] MWG_CORE_API MapRenderScene CreateMapRenderScene(
+        const Map& map,
+        const VectorRenderSceneOptions& options);
 }

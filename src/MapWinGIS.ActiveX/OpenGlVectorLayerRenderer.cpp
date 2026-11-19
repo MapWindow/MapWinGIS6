@@ -30,6 +30,7 @@
 #pragma comment(lib, "opengl32.lib")
 
 #include "ViewTransform.h"
+#include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 
 namespace mwg::activex
 {
@@ -292,6 +293,8 @@ namespace mwg::activex
             const rendering::VectorRenderScene& scene,
             const ViewTransform& transform) noexcept
         {
+            const diagnostics::PerformanceScope submissionScope(
+                diagnostics::PerformanceOperation::OpenGlGeometrySubmission);
             glEnableClientState(GL_VERTEX_ARRAY);
             std::vector<GLdouble> deviceVertices;
             for (std::size_t index = 0; index < scene.polygons.size(); ++index)
@@ -729,14 +732,18 @@ namespace mwg::activex
 
         glFlush();
         glReadBuffer(kColorAttachment0);
-        glReadPixels(
-            0,
-            0,
-            target.width,
-            target.height,
-            kBgra,
-            GL_UNSIGNED_BYTE,
-            _pixelBuffer.data());
+        {
+            const diagnostics::PerformanceScope readbackScope(
+                diagnostics::PerformanceOperation::FramebufferReadback);
+            glReadPixels(
+                0,
+                0,
+                target.width,
+                target.height,
+                kBgra,
+                GL_UNSIGNED_BYTE,
+                _pixelBuffer.data());
+        }
         if (glGetError() != GL_NO_ERROR)
         {
             _lastFailureReason =
@@ -847,6 +854,8 @@ namespace mwg::activex
                 temporaryRenderer._initializationRetryDrawsRemaining;
             return result;
         }
+        const diagnostics::PerformanceScope frameScope(
+            diagnostics::PerformanceOperation::FrameRender);
         _lastFailureReason = L"OpenGL did not render this frame.";
         const TargetValidation validation =
             ValidateTarget(deviceContext, bounds, scene, viewport);

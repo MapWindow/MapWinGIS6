@@ -127,6 +127,15 @@ namespace mwg
             std::vector<std::uint32_t> indices;
         };
 
+        /// Controls optional fill preparation while constructing a scene.
+        struct VectorRenderSceneOptions
+        {
+            /// When false, preserves polygon rings and leaves fillMeshes empty.
+            /// This is useful for baseline measurements and outline-only
+            /// backends; OpenGL currently requires fill meshes.
+            bool prepareFillMeshes = true;
+        };
+
         /// Owned polygon geometry and its source-coordinate bounds.
         struct MWG_CORE_API VectorRenderScene
         {
@@ -138,12 +147,11 @@ namespace mwg
             /// exterior ring of at least three points.
             std::int64_t skippedGeometryCount = 0;
             PolygonBuffer polygons;
-            /// Triangulated fill meshes prepared once when the scene is
-            /// created, aligned with polygons: fillMeshes[i] belongs to
-            /// polygons[i]. An entry is std::nullopt when that polygon could
-            /// not be triangulated; its rings in polygons remain available
-            /// for outline drawing and for backends that draw rings directly,
-            /// such as GDI.
+            /// Fill meshes prepared once when the scene is created. This is
+            /// empty when scene options disable fill preparation; otherwise
+            /// fillMeshes[i] belongs to polygons[i]. An entry is std::nullopt
+            /// when that polygon could not be triangulated; its rings remain
+            /// available for outline drawing and for backends such as GDI.
             std::vector<std::optional<TriangleMesh>> fillMeshes;
         };
 
@@ -162,6 +170,14 @@ namespace mwg
         [[nodiscard]] MWG_CORE_API VectorRenderScene CreateVectorRenderScene(
             const VectorLayer& layer);
 
+        /// Creates a scene with explicit fill-preparation behavior.
+        ///
+        /// Disabling fill meshes measures and renders only original polygon
+        /// geometry; the default overload remains unchanged.
+        [[nodiscard]] MWG_CORE_API VectorRenderScene CreateVectorRenderScene(
+            const VectorLayer& layer,
+            const VectorRenderSceneOptions& options);
+
         /// Copies polygon geometry from the first layer into owned scene data.
         ///
         /// A dataset with no layers is rejected. Only the first layer is
@@ -170,5 +186,11 @@ namespace mwg
         ///         is not polygonal or contains no polygon geometry to render.
         [[nodiscard]] MWG_CORE_API VectorRenderScene CreateVectorRenderScene(
             const VectorDataset& dataset);
+
+        /// Creates the first layer's scene with explicit fill preparation.
+        /// Layer selection and errors match the default overload.
+        [[nodiscard]] MWG_CORE_API VectorRenderScene CreateVectorRenderScene(
+            const VectorDataset& dataset,
+            const VectorRenderSceneOptions& options);
     }
 }

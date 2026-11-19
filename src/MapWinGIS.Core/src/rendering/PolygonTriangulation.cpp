@@ -24,6 +24,7 @@
 #include <ogrsf_frmts.h>
 
 #include "mapwingis/core/Error.h"
+#include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/gdal/GdalDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
@@ -205,24 +206,55 @@ namespace mwg::rendering
                 throw CoreError("Triangulation returned an unexpected geometry type");
             }
         }
+
+        class TriangulationFailureScope final
+        {
+        public:
+            void MarkSucceeded() noexcept
+            {
+                _succeeded = true;
+            }
+
+            ~TriangulationFailureScope()
+            {
+                if (!_succeeded)
+                {
+                    diagnostics::PerformanceDiagnostics::IncrementCounter(
+                        diagnostics::PerformanceCounter::TriangulationFailures);
+                }
+            }
+
+        private:
+            bool _succeeded = false;
+        };
     }
 
     template <typename PolygonType>
     TriangleMesh Triangulate(const PolygonType& polygon)
     {
+        TriangulationFailureScope failureScope;
         GdalEnvironment::Initialize();
         const std::unique_ptr<OGRPolygon> source = MakeOgrPolygon(polygon);
 
         GdalErrorScope scope;
-        const bool valid = source->IsValid();
+        bool valid = false;
+        {
+            const diagnostics::PerformanceScope validationScope(
+                diagnostics::PerformanceOperation::GeometryValidation);
+            valid = source->IsValid();
+        }
         scope.RethrowCaptureException();
         if (!valid)
         {
+            diagnostics::PerformanceDiagnostics::IncrementCounter(
+                diagnostics::PerformanceCounter::InvalidGeometries);
             throw CoreError(
                 "Polygon triangulation requires a valid polygon; the input is "
                 "self-intersecting or otherwise invalid");
         }
 
+        const diagnostics::PerformanceScope triangulationScope(
+            diagnostics::PerformanceOperation::PolygonTriangulation);
         std::unique_ptr<OGRGeometry> triangulation;
         try
         {
@@ -255,6 +287,12 @@ namespace mwg::rendering
         {
             throw CoreError("Polygon triangulation produced no triangles");
         }
+        diagnostics::PerformanceDiagnostics::IncrementCounter(
+            diagnostics::PerformanceCounter::PolygonsTriangulated);
+        diagnostics::PerformanceDiagnostics::IncrementCounter(
+            diagnostics::PerformanceCounter::TrianglesGenerated,
+            static_cast<std::int64_t>(mesh.indices.size() / 3U));
+        failureScope.MarkSucceeded();
         return mesh;
     }
 

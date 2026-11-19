@@ -10,6 +10,7 @@ set(MWG_CORE_PUBLIC_HEADERS
     include/mapwingis/core/Enums.h
     include/mapwingis/core/Error.h
     include/mapwingis/core/Extent.h
+    include/mapwingis/diagnostics/PerformanceDiagnostics.h
     include/mapwingis/gdal/GdalAlgorithmRunner.h
     include/mapwingis/gdal/GdalConfig.h
     include/mapwingis/gdal/GdalDiagnostics.h
@@ -39,6 +40,7 @@ set(MWG_CORE_PRIVATE_HEADERS
 )
 
 set(MWG_CORE_SOURCES
+    src/diagnostics/PerformanceDiagnostics.cpp
     src/gdal/GdalAlgorithmRunner.cpp
     src/gdal/GdalEnvironment.cpp
     src/gdal/GdalModern.cpp

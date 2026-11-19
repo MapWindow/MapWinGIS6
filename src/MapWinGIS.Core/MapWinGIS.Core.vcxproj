@@ -52,6 +52,7 @@
     <ClInclude Include="include\mapwingis\core\Enums.h" />
     <ClInclude Include="include\mapwingis\core\Error.h" />
     <ClInclude Include="include\mapwingis\core\Extent.h" />
+    <ClInclude Include="include\mapwingis\diagnostics\PerformanceDiagnostics.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalEnvironment.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalConfig.h" />
     <ClInclude Include="include\mapwingis\gdal\GdalDiagnostics.h" />
@@ -78,6 +79,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ClCompile Include="src\diagnostics\PerformanceDiagnostics.cpp" />
     <ClCompile Include="src\gdal\GdalAlgorithmRunner.cpp" />
     <ClCompile Include="src\gdal\GdalEnvironment.cpp" />
     <ClCompile Include="src\gdal\GdalModern.cpp" />

@@ -14,6 +14,7 @@
 #include <variant>
 
 #include "mapwingis/core/Error.h"
+#include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/vector/VectorDataset.h"
 #include "internal/VectorRenderSceneBuilder.h"
 
@@ -305,8 +306,15 @@ namespace mwg
                 auto cached = _impl->_layerScenes.find(layer.Id());
                 if (cached == _impl->_layerScenes.end())
                 {
+                    diagnostics::PerformanceDiagnostics::IncrementCounter(
+                        diagnostics::PerformanceCounter::SceneCacheMisses);
                     cached = _impl->_layerScenes.emplace(
                         layer.Id(), rendering::detail::BuildLayerRenderScene(layer)).first;
+                }
+                else
+                {
+                    diagnostics::PerformanceDiagnostics::IncrementCounter(
+                        diagnostics::PerformanceCounter::SceneCacheHits);
                 }
 
                 if (const auto* drawable =
@@ -323,6 +331,12 @@ namespace mwg
 
             _impl->_scene = std::move(scene);
             _impl->_sceneStale = false;
+        }
+        else
+        {
+            diagnostics::PerformanceDiagnostics::IncrementCounter(
+                diagnostics::PerformanceCounter::SceneCacheHits,
+                static_cast<std::int64_t>(_impl->_scene.layers.size()));
         }
         return _impl->_scene;
     }

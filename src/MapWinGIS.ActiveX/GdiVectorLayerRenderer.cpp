@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "ViewTransform.h"
+#include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 
 namespace mwg::activex
 {
@@ -214,6 +215,8 @@ namespace mwg::activex
         const Viewport& viewport,
         const bool) noexcept
     {
+        const diagnostics::PerformanceScope scope(
+            diagnostics::PerformanceOperation::FrameRender);
         _failedLayers.clear();
         if (deviceContext == nullptr || !MatchesViewport(bounds, viewport))
         {

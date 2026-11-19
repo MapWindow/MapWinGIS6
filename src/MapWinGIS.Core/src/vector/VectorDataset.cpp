@@ -25,6 +25,7 @@
 #include "internal/Utf8.h"
 #include "internal/VectorLayerAccess.h"
 #include "mapwingis/core/Error.h"
+#include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 namespace mwg
@@ -163,6 +164,8 @@ namespace mwg
         Impl(GDALDataset& dataset, OGRLayer* layer, const bool writable)
             : _dataset(dataset), _layer(layer), _writable(writable)
         {
+            const diagnostics::PerformanceScope scope(
+                diagnostics::PerformanceOperation::LayerMetadataRead);
             if (const OGRFeatureDefn* defn = _layer->GetLayerDefn())
             {
                 _fields.reserve(static_cast<std::size_t>(defn->GetFieldCount()));
@@ -473,16 +476,31 @@ namespace mwg
 
         std::optional<Extent> computedExtent;
         std::int64_t count = 0;
-        while (const OGRFeatureUniquePtr feature{ReadNextFeature(ogrLayer)})
+        while (true)
         {
+            OGRFeatureUniquePtr feature;
+            {
+                const diagnostics::PerformanceScope scope(
+                    diagnostics::PerformanceOperation::FeatureGeometryRead);
+                feature = ReadNextFeature(ogrLayer);
+            }
+            if (feature == nullptr)
+            {
+                break;
+            }
+
             if (count == std::numeric_limits<std::int64_t>::max())
             {
                 throw CoreError("Vector layer feature count is out of range");
             }
             ++count;
+            diagnostics::PerformanceDiagnostics::IncrementCounter(
+                diagnostics::PerformanceCounter::FeaturesProcessed);
             const OGRGeometry* geometry = feature->GetGeometryRef();
             if (geometry != nullptr && !geometry->IsEmpty())
             {
+                diagnostics::PerformanceDiagnostics::IncrementCounter(
+                    diagnostics::PerformanceCounter::GeometriesLoaded);
                 if (extent != nullptr)
                 {
                     OGREnvelope envelope;
@@ -744,6 +762,8 @@ namespace mwg
     std::unique_ptr<VectorDataset> VectorDataset::TryOpen(const std::filesystem::path& path,
                                                           const OpenMode mode)
     {
+        const diagnostics::PerformanceScope scope(
+            diagnostics::PerformanceOperation::DatasetOpen);
         GdalEnvironment::Initialize();
         GdalEnvironment::ClearLastError();
 
