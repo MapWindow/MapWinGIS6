@@ -72,15 +72,15 @@ jobs:
         if: always() && steps.install.outcome != 'skipped'
         shell: pwsh
         run: |
-          $arguments = @(
-            '-Finish',
-            '-CacheDir', 'vcpkg-binary-cache',
-            '-SnapshotFile', "$env:RUNNER_TEMP\vcpkg-cache-before.txt",
-            '-InstalledDir', "$env:RUNNER_TEMP\vcpkg-deps-installed",
-            '-RestoredKey', '${{ steps.cache.outputs.cache-matched-key }}',
-            '-KeyPrefix', '${{ steps.cache_key.outputs.prefix }}'
-          )
-          if ('${{ steps.install.outcome }}' -ne 'success') { $arguments += '-SkipPrune' }
+          $arguments = @{
+            Finish = $true
+            CacheDir = 'vcpkg-binary-cache'
+            SnapshotFile = "$env:RUNNER_TEMP\vcpkg-cache-before.txt"
+            InstalledDir = "$env:RUNNER_TEMP\vcpkg-deps-installed"
+            RestoredKey = '${{ steps.cache.outputs.cache-matched-key }}'
+            KeyPrefix = '${{ steps.cache_key.outputs.prefix }}'
+          }
+          if ('${{ steps.install.outcome }}' -ne 'success') { $arguments.SkipPrune = $true }
           ./build/scripts/Sync-VcpkgBinaryCache.ps1 @arguments
 
       - name: Save vcpkg binary packages
