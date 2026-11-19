@@ -25,7 +25,10 @@ flags and warnings against the MSBuild baseline. CTest excludes tests labelled
 `interactive`; the C# host checks require a desktop and are not part of CI.
 The runner overrides the default SDK with `10.0` because `windows-2025` does
 not include the repository's pinned SDK. Each build job has a 180-minute
-timeout.
+timeout. The CMake Visual Studio jobs pin the exact `VCToolsVersion` selected
+by the MSBuild project and install vcpkg dependencies with the standalone CLI
+before configuring CMake; otherwise CMake's automatic manifest install can
+select a different installed v145 patch version and miss the prewarmed cache.
 
 ## References
 

@@ -52,20 +52,45 @@ jobs:
           $architecture = if ($platform -eq 'x64') { 'x64' } else { 'x86' }
           $configurePreset = "vs2026-$architecture"
           $buildPreset = "$configurePreset-$($configuration.ToLowerInvariant())"
-          $arguments = @("-DMWG_WINDOWS_SDK=$env:MWG_WINDOWS_SDK")
-          if ($configuration -eq 'Release') {
-            # Release-only triplets skip the debug build of every dependency.
-            $arguments += @(
-              '-DVCPKG_MANIFEST_FEATURES=tests;full-drivers',
-              "-DVCPKG_TARGET_TRIPLET=$architecture-windows-v145-release",
-              '-DVCPKG_HOST_TRIPLET=x64-windows-v145-release',
-              "-DVCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE/vcpkg_installed/cmake-$platform-release"
-            )
+          $toolsetVersion = (& msbuild `
+            src/MapWinGIS.Core/MapWinGIS.Core.vcxproj `
+            -getProperty:VCToolsVersion `
+            -p:Configuration=$configuration `
+            -p:Platform=$platform `
+            -p:MwgWindowsSdk=$env:MWG_WINDOWS_SDK `
+            -nologo | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $toolsetVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Could not determine the MSVC v145 toolset version (MSBuild exit code: $LASTEXITCODE, value: '$toolsetVersion')."
           }
-          else {
-            $arguments += '-DVCPKG_MANIFEST_FEATURES=tests'
-          }
-          cmake --preset $configurePreset @arguments
+          $release = $configuration -eq 'Release'
+          $suffix = if ($release) { '-release' } else { '' }
+          $triplet = "$architecture-windows-v145$suffix"
+          $hostTriplet = "x64-windows-v145$suffix"
+          $installedDir = "$env:GITHUB_WORKSPACE/vcpkg_installed/cmake-$platform$suffix"
+          $features = if ($release) { @('tests', 'full-drivers') } else { @('tests') }
+          $vcpkg = Join-Path $env:MWG_VCPKG_ROOT 'vcpkg.exe'
+
+          & $vcpkg install `
+            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
+            "--x-install-root=$installedDir" `
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\build\triplets" `
+            --triplet $triplet `
+            --host-triplet $hostTriplet `
+            @($features | ForEach-Object { "--x-feature=$_" }) `
+            --clean-after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $arguments = @(
+            "-DMWG_WINDOWS_SDK=$env:MWG_WINDOWS_SDK",
+            "-DVCPKG_MANIFEST_FEATURES=$($features -join ';')",
+            "-DVCPKG_TARGET_TRIPLET=$triplet",
+            "-DVCPKG_HOST_TRIPLET=$hostTriplet",
+            "-DVCPKG_INSTALLED_DIR=$installedDir",
+            '-DVCPKG_MANIFEST_INSTALL=OFF'
+          )
+          cmake --preset $configurePreset `
+            -T "v145,version=$toolsetVersion" `
+            @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Add-Content -Path $env:GITHUB_ENV -Value "MWG_CMAKE_BUILD_PRESET=$buildPreset"
 
