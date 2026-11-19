@@ -202,11 +202,12 @@ For build and manual-use instructions, see the
 
 The `RenderingBaseline` tests are opt-in. They use either a generated
 GeoPackage grid of convex 32-vertex polygons or the dataset named by
-`MWG_RENDERING_BASELINE_DATASET`. `MeasuresTriangulationDisabledCosts` builds an
-outline-only scene (configuration A for GDI and configuration C for OpenGL).
+`MWG_RENDERING_BASELINE_DATASET`. `MeasuresTriangulationDisabledCosts` builds a
+mesh-free scene (configuration A for GDI, which still fills the original rings,
+and configuration C for OpenGL, which rejects it).
 `MeasuresCoreSceneAndBackendCosts` uses the default fill-mesh preparation
-(configurations B and D). Both report first and steady frame times, plus pan
-and zoom frames, for a 1280x720 off-screen target.
+(configurations B and D). Successful backends report first and steady frame
+times, plus pan and zoom frames, for a 1280x720 off-screen target.
 
 Performance diagnostics are disabled by default and aggregate process-wide
 timings with `std::chrono::steady_clock`. The collector records dataset
