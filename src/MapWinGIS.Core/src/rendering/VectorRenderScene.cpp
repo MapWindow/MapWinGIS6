@@ -18,6 +18,7 @@
 #include <ogrsf_frmts.h>
 
 #include "mapwingis/core/Error.h"
+#include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 #include "internal/VectorLayerAccess.h"
@@ -231,8 +232,12 @@ namespace mwg::rendering
         };
     }
 
-    VectorRenderScene detail::BuildVectorRenderScene(const VectorLayer& layer)
+    VectorRenderScene detail::BuildVectorRenderScene(
+        const VectorLayer& layer,
+        const VectorRenderSceneOptions& options)
     {
+        const diagnostics::PerformanceScope scope(
+            diagnostics::PerformanceOperation::SceneBuild);
         if (BaseShapeType(layer.Type()) != ShapeType::Polygon)
         {
             throw CoreError("Vector rendering supports polygon layers only");
@@ -249,14 +254,17 @@ namespace mwg::rendering
             layer,
             [&builder](const OGRGeometry& geometry)
             {
+                const diagnostics::PerformanceScope conversionScope(
+                    diagnostics::PerformanceOperation::GeometryConversion);
                 builder.AppendGeometry(geometry);
             },
             hasFastExtent ? nullptr : &scene.extent);
 
-        // Prepare one fill mesh per polygon while the scene is created, so
-        // renderers never triangulate per frame. A polygon that cannot be
-        // triangulated keeps a null mesh; its rings above remain available
-        // for outlines and ring-based backends such as GDI.
+        if (!options.prepareFillMeshes)
+        {
+            return scene;
+        }
+
         scene.fillMeshes.reserve(scene.polygons.size());
         for (std::size_t index = 0; index < scene.polygons.size(); ++index)
         {
@@ -275,7 +283,14 @@ namespace mwg::rendering
 
     VectorRenderScene CreateVectorRenderScene(const VectorLayer& layer)
     {
-        VectorRenderScene scene = detail::BuildVectorRenderScene(layer);
+        return CreateVectorRenderScene(layer, {});
+    }
+
+    VectorRenderScene CreateVectorRenderScene(
+        const VectorLayer& layer,
+        const VectorRenderSceneOptions& options)
+    {
+        VectorRenderScene scene = detail::BuildVectorRenderScene(layer, options);
         if (scene.polygons.empty())
         {
             throw CoreError("Vector layer contains no polygon geometry to render");
@@ -285,11 +300,18 @@ namespace mwg::rendering
 
     VectorRenderScene CreateVectorRenderScene(const VectorDataset& dataset)
     {
+        return CreateVectorRenderScene(dataset, {});
+    }
+
+    VectorRenderScene CreateVectorRenderScene(
+        const VectorDataset& dataset,
+        const VectorRenderSceneOptions& options)
+    {
         if (dataset.LayerCount() == 0)
         {
             throw CoreError("Vector dataset contains no layers");
         }
 
-        return CreateVectorRenderScene(dataset.Layer(0));
+        return CreateVectorRenderScene(dataset.Layer(0), options);
     }
 }

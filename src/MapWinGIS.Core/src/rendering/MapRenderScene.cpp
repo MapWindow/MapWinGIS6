@@ -15,7 +15,9 @@
 
 namespace mwg::rendering
 {
-    detail::LayerScene detail::BuildLayerRenderScene(const MapLayer& layer)
+    detail::LayerScene detail::BuildLayerRenderScene(
+        const MapLayer& layer,
+        const VectorRenderSceneOptions& options)
     {
         if (!layer.IsVisible())
         {
@@ -25,7 +27,7 @@ namespace mwg::rendering
         VectorRenderScene scene;
         try
         {
-            scene = detail::BuildVectorRenderScene(layer.Source());
+            scene = detail::BuildVectorRenderScene(layer.Source(), options);
         }
         catch (const std::bad_alloc&)
         {
@@ -45,10 +47,18 @@ namespace mwg::rendering
 
     MapRenderScene CreateMapRenderScene(const Map& map)
     {
+        return CreateMapRenderScene(map, {});
+    }
+
+    MapRenderScene CreateMapRenderScene(
+        const Map& map,
+        const VectorRenderSceneOptions& options)
+    {
         MapRenderScene result;
         for (int position = 0; position < map.LayerCount(); ++position)
         {
-            detail::LayerScene layerScene = detail::BuildLayerRenderScene(map.Layer(position));
+            detail::LayerScene layerScene =
+                detail::BuildLayerRenderScene(map.Layer(position), options);
             if (auto* drawable = std::get_if<LayerRenderScene>(&layerScene))
             {
                 result.layers.push_back(std::move(*drawable));

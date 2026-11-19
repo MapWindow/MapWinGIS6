@@ -19,12 +19,16 @@ namespace mwg::rendering::detail
 
     /// Builds drawable geometry or a skip diagnostic for one map layer.
     /// Allocation failures and non-standard exceptions propagate.
-    [[nodiscard]] LayerScene BuildLayerRenderScene(const MapLayer& layer);
+    [[nodiscard]] LayerScene BuildLayerRenderScene(
+        const MapLayer& layer,
+        const VectorRenderSceneOptions& options = {});
 
     /// Copies polygon geometry from a layer into scene data. Unlike
     /// CreateVectorRenderScene, a layer without polygon geometry gives a
     /// scene with no polygons instead of an error.
     /// \throws CoreError when the layer is not polygonal or its geometry
     ///         cannot be converted.
-    [[nodiscard]] VectorRenderScene BuildVectorRenderScene(const VectorLayer& layer);
+    [[nodiscard]] VectorRenderScene BuildVectorRenderScene(
+        const VectorLayer& layer,
+        const VectorRenderSceneOptions& options = {});
 }

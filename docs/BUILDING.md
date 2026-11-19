@@ -269,6 +269,10 @@ the manifest baseline, the prefix also identifies the vcpkg version. The job
 saves a new cache, `<prefix><run_id>-<run_attempt>`, when vcpkg built a
 package or the cache was restored from an older prefix. Pull requests save a
 cache only when vcpkg added packages; pushes also refresh a stale-prefix cache.
+The CMake Visual Studio jobs query the runner's `VCToolsVersion` from the
+MSBuild project and pass that exact v145 patch version to CMake. They install
+dependencies through the vcpkg CLI before configuring, matching the dependency
+prewarm job's compiler and ABI, then disable the automatic manifest install.
 `build\scripts\Sync-VcpkgBinaryCache.ps1` first removes archives that no
 installed package uses after a successful install. On a failed install it
 keeps all archives and can save the packages that were built. A separate

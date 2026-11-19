@@ -26,6 +26,7 @@
 #include "ViewTransform.h"
 
 #include "mapwingis/core/Error.h"
+#include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/rendering/PolygonTriangulation.h"
 
 namespace
@@ -222,6 +223,23 @@ namespace
 
     constexpr mwg::Extent kTwoLayerExtent{0.0, 0.0, 10.0, 5.0};
 
+    class PerformanceCapture final
+    {
+    public:
+        PerformanceCapture()
+        {
+            mwg::diagnostics::PerformanceDiagnostics::SetEnabled(false);
+            mwg::diagnostics::PerformanceDiagnostics::Reset();
+            mwg::diagnostics::PerformanceDiagnostics::SetEnabled(true);
+        }
+
+        ~PerformanceCapture()
+        {
+            mwg::diagnostics::PerformanceDiagnostics::SetEnabled(false);
+            mwg::diagnostics::PerformanceDiagnostics::Reset();
+        }
+    };
+
     /// Checks the pixels of MakeTwoLayerScene drawn through viewport.
     void ExpectTwoLayerPixels(const HDC surface, const mwg::Viewport& viewport)
     {
@@ -232,6 +250,28 @@ namespace
         EXPECT_EQ(MapPixel(surface, viewport, 1.0, 4.0), background) << "above first layer";
         EXPECT_EQ(MapPixel(surface, viewport, 9.0, 1.0), background) << "below second layer";
     }
+}
+
+TEST(VectorLayerRenderer, RecordsGdiFrameDurationWhenDiagnosticsAreEnabled)
+{
+    PerformanceCapture diagnostics;
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+
+    const RECT bounds{0, 0, 120, 100};
+    const mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    const mwg::Viewport viewport = FitViewport(bounds);
+    mwg::activex::VectorLayerRenderer renderer;
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Gdi);
+
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+
+    const mwg::diagnostics::PerformanceSnapshot snapshot =
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot();
+    const mwg::diagnostics::PerformanceTiming& frame =
+        snapshot.Timing(mwg::diagnostics::PerformanceOperation::FrameRender);
+    EXPECT_EQ(frame.callCount, 1);
+    EXPECT_GE(frame.durationNanoseconds, 0);
 }
 
 TEST(VectorLayerRenderer, UsesOpenGlForConvexPolygonWhenAvailable)

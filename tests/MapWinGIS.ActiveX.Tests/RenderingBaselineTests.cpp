@@ -39,6 +39,7 @@
 #include "OpenGlVectorLayerRenderer.h"
 #include "GdiVectorLayerRenderer.h"
 #include "TestData.h"
+#include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/map/Map.h"
 #include "mapwingis/map/Viewport.h"
@@ -149,6 +150,26 @@ namespace
         if (dataset->CommitTransaction() != OGRERR_NONE)
         {
             throw std::runtime_error("Cannot commit the baseline dataset");
+        }
+        return path;
+    }
+
+    [[nodiscard]] std::filesystem::path BaselineDatasetPath(
+        const std::filesystem::path& directory,
+        const int generatedFeatureCount)
+    {
+        const char* const configuredPath =
+            std::getenv("MWG_RENDERING_BASELINE_DATASET");
+        if (configuredPath == nullptr || configuredPath[0] == '\0')
+        {
+            return MakePolygonGrid(directory, generatedFeatureCount);
+        }
+
+        const std::filesystem::path path(configuredPath);
+        if (!std::filesystem::exists(path))
+        {
+            throw std::runtime_error(
+                "MWG_RENDERING_BASELINE_DATASET does not exist: " + path.string());
         }
         return path;
     }
@@ -371,10 +392,70 @@ namespace
                       << ' ' << unit << '\n';
             RecordProperty(name, std::to_string(value));
         }
+
+        void ReportPerformanceDiagnostics()
+        {
+            using diagnostics::PerformanceCounter;
+            using diagnostics::PerformanceDiagnostics;
+            using diagnostics::PerformanceOperation;
+
+            constexpr std::pair<PerformanceOperation, const char*> operations[] = {
+                {PerformanceOperation::DatasetOpen, "Diagnostic dataset open"},
+                {PerformanceOperation::LayerMetadataRead, "Diagnostic layer metadata"},
+                {PerformanceOperation::FeatureGeometryRead, "Diagnostic feature geometry read"},
+                {PerformanceOperation::GeometryConversion, "Diagnostic geometry conversion"},
+                {PerformanceOperation::SceneBuild, "Diagnostic scene build"},
+                {PerformanceOperation::GeometryValidation, "Diagnostic geometry validation"},
+                {PerformanceOperation::PolygonTriangulation, "Diagnostic polygon triangulation"},
+                {PerformanceOperation::OpenGlGeometrySubmission, "Diagnostic OpenGL geometry submission"},
+                {PerformanceOperation::FrameRender, "Diagnostic complete frame render"},
+                {PerformanceOperation::FramebufferReadback, "Diagnostic framebuffer readback"}};
+            constexpr std::pair<PerformanceCounter, const char*> counters[] = {
+                {PerformanceCounter::FeaturesProcessed, "Diagnostic features processed"},
+                {PerformanceCounter::GeometriesLoaded, "Diagnostic geometries loaded"},
+                {PerformanceCounter::PolygonsTriangulated, "Diagnostic polygons triangulated"},
+                {PerformanceCounter::TrianglesGenerated, "Diagnostic triangles generated"},
+                {PerformanceCounter::InvalidGeometries, "Diagnostic invalid geometries"},
+                {PerformanceCounter::TriangulationFailures, "Diagnostic triangulation failures"},
+                {PerformanceCounter::FeaturesSkippedOutsideViewport,
+                 "Diagnostic features outside viewport"},
+                {PerformanceCounter::SceneCacheHits, "Diagnostic scene cache hits"},
+                {PerformanceCounter::SceneCacheMisses, "Diagnostic scene cache misses"}};
+
+            const diagnostics::PerformanceSnapshot snapshot =
+                PerformanceDiagnostics::Snapshot();
+            for (const auto& [operation, name] : operations)
+            {
+                const diagnostics::PerformanceTiming& timing = snapshot.Timing(operation);
+                Report(name, timing.DurationMilliseconds(), "ms");
+                Report((std::string(name) + " calls").c_str(), static_cast<double>(timing.callCount), "");
+            }
+            for (const auto& [counter, name] : counters)
+            {
+                Report(name, static_cast<double>(snapshot.Counter(counter)), "");
+            }
+        }
+
+        class DiagnosticCapture final
+        {
+        public:
+            DiagnosticCapture()
+            {
+                diagnostics::PerformanceDiagnostics::SetEnabled(false);
+                diagnostics::PerformanceDiagnostics::Reset();
+                diagnostics::PerformanceDiagnostics::SetEnabled(true);
+            }
+
+            ~DiagnosticCapture()
+            {
+                diagnostics::PerformanceDiagnostics::SetEnabled(false);
+                diagnostics::PerformanceDiagnostics::Reset();
+            }
+        };
     };
 }
 
-TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
+TEST_F(RenderingBaseline, MeasuresTriangulationDisabledCosts)
 {
     const char* enabled = std::getenv("MWG_RUN_RENDERING_BASELINE");
     if (enabled == nullptr || std::string(enabled) != "1")
@@ -382,25 +463,28 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
         GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
     }
 
+    DiagnosticCapture diagnostics;
     const int featureCount = FeatureCountFromEnvironment();
     TempDirectory directory;
-    const std::filesystem::path path = MakePolygonGrid(directory.Path(), featureCount);
+    const std::filesystem::path path =
+        BaselineDatasetPath(directory.Path(), featureCount);
 
-    DWORD memoryError = ERROR_SUCCESS;
-    const std::optional<double> memoryBefore = PrivateMiB(memoryError);
-    ASSERT_TRUE(memoryBefore.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     Clock::time_point start = Clock::now();
     Map map;
     map.AddLayer(VectorDataset::Open(path));
     const double openMs = ElapsedMilliseconds(start);
 
     start = Clock::now();
-    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(map);
+    const rendering::MapRenderScene scene =
+        rendering::CreateMapRenderScene(
+            map,
+            rendering::VectorRenderSceneOptions{.prepareFillMeshes = false});
     const double sceneMs = ElapsedMilliseconds(start);
-    const std::optional<double> memoryAfterScene = PrivateMiB(memoryError);
-    ASSERT_TRUE(memoryAfterScene.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     ASSERT_EQ(scene.layers.size(), 1U);
-    ASSERT_EQ(scene.layers.front().scene->polygons.size(), static_cast<std::size_t>(featureCount));
+    ASSERT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+    const std::int64_t measuredFeatureCount =
+        scene.layers.front().scene->sourceFeatureCount;
+    ASSERT_GT(measuredFeatureCount, 0);
 
     DibSurface surface(kTargetWidth, kTargetHeight);
     ASSERT_TRUE(surface.IsValid());
@@ -417,13 +501,114 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
         gdiFrames.push_back(ElapsedMilliseconds(start));
     }
 
-    std::cout << "Rendering baseline: " << featureCount << " convex polygons x "
-              << kVerticesPerPolygon << " vertices, " << kTargetWidth << 'x'
-              << kTargetHeight << " target\n";
+    Viewport panned = viewport;
+    ASSERT_TRUE(panned.Pan(1.0, 1.0));
+    start = Clock::now();
+    ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, panned), S_OK);
+    const double gdiPanMs = ElapsedMilliseconds(start);
+
+    Viewport zoomed = viewport;
+    ASSERT_TRUE(zoomed.Zoom(2.0));
+    start = Clock::now();
+    ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, zoomed), S_OK);
+    const double gdiZoomMs = ElapsedMilliseconds(start);
+
+    activex::OpenGlVectorLayerRenderer openGl;
+    start = Clock::now();
+    const HRESULT openGlResult = openGl.Draw(surface.Get(), bounds, scene, viewport);
+    const double openGlMs = ElapsedMilliseconds(start);
+    EXPECT_EQ(openGlResult, S_FALSE)
+        << "The current OpenGL backend must reject scenes without fill meshes.";
+
+    std::cout << "Triangulation-disabled baseline: " << measuredFeatureCount
+              << " source features (" << scene.layers.front().scene->polygons.size()
+              << " polygons), " << kTargetWidth << 'x' << kTargetHeight << " target\n";
+    Report("Core open dataset", openMs, "ms");
+    Report("Core prepare outline-only scene", sceneMs, "ms");
+    Report("GDI first frame", gdiFrames.front(), "ms");
+    Report(
+        "GDI steady frame median",
+        Median(std::vector<double>(gdiFrames.begin() + 1, gdiFrames.end())),
+        "ms");
+    Report("GDI pan frame", gdiPanMs, "ms");
+    Report("GDI zoom frame", gdiZoomMs, "ms");
+    Report("OpenGL no-mesh rejection", openGlMs, "ms");
+    ReportPerformanceDiagnostics();
+}
+
+TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
+{
+    const char* enabled = std::getenv("MWG_RUN_RENDERING_BASELINE");
+    if (enabled == nullptr || std::string(enabled) != "1")
+    {
+        GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
+    }
+
+    DiagnosticCapture diagnostics;
+    const int featureCount = FeatureCountFromEnvironment();
+    TempDirectory directory;
+    const std::filesystem::path path =
+        BaselineDatasetPath(directory.Path(), featureCount);
+
+    DWORD memoryError = ERROR_SUCCESS;
+    const std::optional<double> memoryBefore = PrivateMiB(memoryError);
+    ASSERT_TRUE(memoryBefore.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
+    Clock::time_point start = Clock::now();
+    Map map;
+    map.AddLayer(VectorDataset::Open(path));
+    const double openMs = ElapsedMilliseconds(start);
+
+    start = Clock::now();
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(map);
+    const double sceneMs = ElapsedMilliseconds(start);
+    const std::optional<double> memoryAfterScene = PrivateMiB(memoryError);
+    ASSERT_TRUE(memoryAfterScene.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_FALSE(scene.layers.front().scene->polygons.empty());
+    const std::int64_t measuredFeatureCount =
+        scene.layers.front().scene->sourceFeatureCount;
+    ASSERT_GT(measuredFeatureCount, 0);
+
+    DibSurface surface(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, kTargetWidth, kTargetHeight};
+    Viewport viewport(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(viewport.FitExtent(map.GetExtent(), 12.0));
+
+    activex::GdiVectorLayerRenderer gdi;
+    std::vector<double> gdiFrames;
+    for (int frame = 0; frame < kSteadyFrames; ++frame)
+    {
+        start = Clock::now();
+        ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+        gdiFrames.push_back(ElapsedMilliseconds(start));
+    }
+
+    Viewport pannedGdi = viewport;
+    ASSERT_TRUE(pannedGdi.Pan(1.0, 1.0));
+    start = Clock::now();
+    ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, pannedGdi), S_OK);
+    const double gdiPanMs = ElapsedMilliseconds(start);
+
+    Viewport zoomedGdi = viewport;
+    ASSERT_TRUE(zoomedGdi.Zoom(2.0));
+    start = Clock::now();
+    ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, zoomedGdi), S_OK);
+    const double gdiZoomMs = ElapsedMilliseconds(start);
+
+    std::cout << "Rendering baseline: " << measuredFeatureCount
+              << " source features (" << scene.layers.front().scene->polygons.size()
+              << " polygons), " << kTargetWidth << 'x' << kTargetHeight << " target\n";
     Report("Core open dataset", openMs, "ms");
     Report("Core prepare render scene", sceneMs, "ms");
     Report("Private memory increase for scene", *memoryAfterScene - *memoryBefore, "MiB");
-    Report("GDI frame (median)", Median(gdiFrames), "ms");
+    Report("GDI first frame", gdiFrames.front(), "ms");
+    Report(
+        "GDI frame (median)",
+        Median(std::vector<double>(gdiFrames.begin() + 1, gdiFrames.end())),
+        "ms");
+    Report("GDI pan frame", gdiPanMs, "ms");
+    Report("GDI zoom frame", gdiZoomMs, "ms");
 
     activex::OpenGlVectorLayerRenderer openGl;
     start = Clock::now();
@@ -432,6 +617,7 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     if (firstFrame == S_FALSE)
     {
         std::wcout << L"  OpenGL unavailable: " << openGl.GetLastFailureReason() << L'\n';
+        ReportPerformanceDiagnostics();
         return;
     }
     ASSERT_EQ(firstFrame, S_OK);
@@ -444,11 +630,26 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
         openGlFrames.push_back(ElapsedMilliseconds(start));
     }
 
+    Viewport pannedOpenGl = viewport;
+    ASSERT_TRUE(pannedOpenGl.Pan(1.0, 1.0));
+    start = Clock::now();
+    ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, pannedOpenGl), S_OK);
+    const double openGlPanMs = ElapsedMilliseconds(start);
+
+    Viewport zoomedOpenGl = viewport;
+    ASSERT_TRUE(zoomedOpenGl.Zoom(2.0));
+    start = Clock::now();
+    ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, zoomedOpenGl), S_OK);
+    const double openGlZoomMs = ElapsedMilliseconds(start);
+
     Report("OpenGL first frame (context+draw)", firstOpenGlMs, "ms");
     Report("OpenGL frame (median)", Median(openGlFrames), "ms");
+    Report("OpenGL pan frame", openGlPanMs, "ms");
+    Report("OpenGL zoom frame", openGlZoomMs, "ms");
     const std::optional<double> memoryAfterOpenGl = PrivateMiB(memoryError);
     ASSERT_TRUE(memoryAfterOpenGl.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     Report("Private memory increase total", *memoryAfterOpenGl - *memoryBefore, "MiB");
+    ReportPerformanceDiagnostics();
 }
 
 TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)
@@ -459,6 +660,7 @@ TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)
         GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
     }
 
+    DiagnosticCapture diagnostics;
     const int featureCount = FeatureCountFromEnvironment();
     TempDirectory directory;
     const std::filesystem::path path =
@@ -539,6 +741,7 @@ TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)
     if (firstFrame == S_FALSE)
     {
         std::wcout << L"  OpenGL unavailable: " << openGl.GetLastFailureReason() << L'\n';
+        ReportPerformanceDiagnostics();
         return;
     }
     ASSERT_EQ(firstFrame, S_OK);
@@ -556,4 +759,5 @@ TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)
     const std::optional<double> memoryAfterOpenGl = PrivateMiB(memoryError);
     ASSERT_TRUE(memoryAfterOpenGl.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     Report("Private memory increase total", *memoryAfterOpenGl - *memoryBefore, "MiB");
+    ReportPerformanceDiagnostics();
 }

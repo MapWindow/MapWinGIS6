@@ -200,11 +200,25 @@ For build and manual-use instructions, see the
 
 ## Rendering performance baseline
 
-`RenderingBaseline.MeasuresCoreSceneAndBackendCosts` is opt-in. It generates a
-GeoPackage grid of convex 32-vertex polygons and separately reports Core
-dataset open, render-scene preparation, process private-memory growth, the
-median GDI frame, the first OpenGL frame (context creation and drawing), and
-the median steady OpenGL frame, for a 1280x720 off-screen target.
+The `RenderingBaseline` tests are opt-in. They use either a generated
+GeoPackage grid of convex 32-vertex polygons or the dataset named by
+`MWG_RENDERING_BASELINE_DATASET`. `MeasuresTriangulationDisabledCosts` builds a
+mesh-free scene (configuration A for GDI, which still fills the original rings,
+and configuration C for OpenGL, which rejects it).
+`MeasuresCoreSceneAndBackendCosts` uses the default fill-mesh preparation
+(configurations B and D). Successful backends report first and steady frame
+times, plus pan and zoom frames, for a 1280x720 off-screen target.
+
+Performance diagnostics are disabled by default and aggregate process-wide
+timings with `std::chrono::steady_clock`. The collector records dataset
+opening, layer metadata, OGR feature reads, internal geometry conversion,
+scene construction, GEOS validation, triangulation, OpenGL geometry
+submission, complete backend rendering, and `glReadPixels`. It also records
+feature/geometry counts, triangles, invalid and failed triangulations,
+viewport skips, and scene-cache hits and misses. OpenGL currently submits
+client-side transformed arrays with `glDrawElements`; there is no persistent
+GPU buffer-upload stage to measure yet.
+
 `RenderingBaseline.MeasuresComplexPolygonCosts` generates a second dataset —
 concave L-shaped polygons, holed rectangles where every feature is a
 two-component multipolygon, and concave 32-vertex star polygons across three
@@ -217,11 +231,47 @@ stage fails. Use a Release build for meaningful numbers:
 ```powershell
 $env:MWG_RUN_RENDERING_BASELINE = '1'
 $env:MWG_RENDERING_BASELINE_FEATURES = '100000'   # optional; default 50000
+$env:MWG_RENDERING_BASELINE_DATASET = 'C:\data\large-polygons.shp' # optional
 bin\Release\x64\MapWinGIS.ActiveX.Tests.exe --gtest_filter=RenderingBaseline.*
 ```
 
-Measurements on one developer workstation (Release, hardware OpenGL), with
-triangulation included in scene preparation:
+When `MWG_RENDERING_BASELINE_DATASET` is set, the first two tests run both the
+fill-enabled and outline-only configurations against that same source. The
+complex-geometry test continues to generate its own controlled dataset. The
+original 10.3 MB, 2,459-feature shapefile referenced by the performance plan
+is not committed to the repository; set the variable to rerun that exact
+baseline.
+
+Phase 1 measurements on one developer workstation (Release, hardware OpenGL)
+used a generated 2,459-feature grid with 32 vertices per polygon:
+
+| Configuration | Scene preparation | First frame | Steady frame | Pan / zoom |
+|---|---:|---:|---:|---:|
+| A. GDI, no fill meshes | 7.7 ms | 7.2 ms | 6.3 ms | 6.1 / 5.4 ms |
+| B. GDI, fill meshes | 230.6 ms | 7.4 ms | 6.2 ms | 6.1 / 5.6 ms |
+| C. OpenGL, no fill meshes | 7.7 ms | 0.0 ms rejection | — | — |
+| D. OpenGL, fill meshes | 230.6 ms | 220.8 ms | 2.8 ms | 2.8 / 2.5 ms |
+
+In configuration D, GEOS validation took 13.4 ms and triangulation 205.8 ms,
+so triangulation accounted for about 89% of scene construction. The scene
+contained 73,770 triangles. With triangulation disabled, OGR feature reads
+took 5.0 ms and internal geometry conversion took 1.8 ms of the 7.7 ms scene
+build. The first OpenGL frame included 220.8 ms of context and target setup;
+subsequent frames took about 2.8 ms. Across eight OpenGL draws,
+`glReadPixels` took 20.0 ms in aggregate, while transformed client-array
+submission took 5.3 ms. These measurements show scene triangulation is the
+dominant opening cost on the generated grid, without assuming it is the only
+cost for other datasets.
+
+Configuration C is intentionally reported as a rejection rather than a
+successful outline render: the current OpenGL backend requires a triangle
+mesh for every polygon. Measuring successful triangulation-free OpenGL
+outlines is a Phase 2 deliverable. Viewport culling and its skipped-feature
+counter remain zero because scene construction currently processes all
+features.
+
+Previous measurements on one developer workstation, with triangulation
+included in scene preparation, remain useful as history:
 
 | Measurement | Convex grid, 50k polygons | Complex mix, 162.5k meshes |
 |---|---:|---:|
