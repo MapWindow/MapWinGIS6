@@ -10,3 +10,9 @@
 # Datasource local storage ignored files
 /dataSources/
 /dataSources.local.xml
+# Machine- and checkout-specific project files
+/*.local.json
+/*.local.xml
+/misc.xml
+/modules.xml
+/*.iml

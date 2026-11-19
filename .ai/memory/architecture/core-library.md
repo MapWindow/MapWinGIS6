@@ -45,6 +45,13 @@ need separate `InvalidateLayerScene` calls after an edit, or one
 `InvalidateScene` call for the whole map. Invalidating a failed layer also
 allows retrying its source. Visibility changes alone retain the cached result.
 
+Layer scenes are immutable and shared: `LayerRenderScene::scene` is a
+`std::shared_ptr<const VectorRenderScene>`, so composing a `MapRenderScene` or
+handing a prepared scene to `MapView::AddLayer` does not copy geometry.
+Renderers must treat a null scene as a failed layer. Scene building skips empty
+geometry, renders polygonal members of geometry collections, and counts other
+skipped parts in `VectorRenderScene::skippedGeometryCount`.
+
 ## References
 
 - [Architecture documentation](../../../docs/ARCHITECTURE.md#module-design)

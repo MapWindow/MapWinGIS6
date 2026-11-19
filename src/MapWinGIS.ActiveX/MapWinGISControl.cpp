@@ -30,6 +30,7 @@
 #include <exception>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <new>
 #include <string>
 #include <string_view>
@@ -96,7 +97,7 @@ namespace
     struct PreparedVectorDataset final
     {
         std::shared_ptr<mwg::VectorDataset> dataset;
-        mwg::rendering::VectorRenderScene scene;
+        std::shared_ptr<const mwg::rendering::VectorRenderScene> scene;
         LONGLONG featureCount = 0;
     };
 
@@ -122,24 +123,32 @@ namespace
             }
         }
 
-        mwg::rendering::VectorRenderScene preparedScene;
+        std::shared_ptr<const mwg::rendering::VectorRenderScene> preparedScene;
         if (scene.layers.empty())
         {
-            preparedScene.sourceFeatureCount = dataset->Layer(0).FeatureCount();
+            auto emptyScene = std::make_shared<mwg::rendering::VectorRenderScene>();
+            emptyScene->sourceFeatureCount = dataset->Layer(0).FeatureCount();
+            preparedScene = std::move(emptyScene);
         }
         else
         {
+            // The candidate map is discarded, so this is the only owner of the
+            // geometry; MapView stores the same snapshot without copying it.
             preparedScene = std::move(scene.layers.front().scene);
         }
 
+        if (preparedScene == nullptr)
+        {
+            throw mwg::CoreError("Layer render scene is missing");
+        }
         if (std::cmp_greater(
-                preparedScene.sourceFeatureCount,
+                preparedScene->sourceFeatureCount,
                 std::numeric_limits<LONGLONG>::max()))
         {
             throw mwg::CoreError("Map feature count is out of range");
         }
         const LONGLONG count =
-            static_cast<LONGLONG>(preparedScene.sourceFeatureCount);
+            static_cast<LONGLONG>(preparedScene->sourceFeatureCount);
         return {std::move(dataset), std::move(preparedScene), count};
     }
 
@@ -207,6 +216,9 @@ namespace
     }
 }
 
+#if defined(MWG_ACTIVEX_TEST_HOOKS)
+// Test-only export (MWG_ENABLE_ACTIVEX_TEST_HOOKS / MwgEnableActiveXTestHooks).
+// Distributed binaries are built without it, so the hook stays null there.
 extern "C" __declspec(dllexport) void __cdecl
 MapWinGISControlSetVectorPreparationHookForTesting(
     void(*const hook)(void*, bool) noexcept,
@@ -215,11 +227,12 @@ MapWinGISControlSetVectorPreparationHookForTesting(
     g_vectorPreparationContext.store(context, std::memory_order_relaxed);
     g_vectorPreparationHook.store(hook, std::memory_order_release);
 }
+#endif
 
 struct CMapWinGISControl::VectorLoadState final
 {
     std::shared_ptr<mwg::VectorDataset> dataset;
-    mwg::rendering::VectorRenderScene scene;
+    std::shared_ptr<const mwg::rendering::VectorRenderScene> scene;
     LONGLONG featureCount = 0;
     LONGLONG layerId = 0;
     bool cancelRequestedOnOwner = false;
@@ -844,7 +857,10 @@ void CMapWinGISControl::CompleteVectorLoad(
     {
         return;
     }
-    const auto& state = found->second;
+    // Own the state: FireViewChange and other host callbacks can re-enter the
+    // control (for example Close or EndLoadVectorDataset) and erase this entry,
+    // so neither the iterator nor a reference into the map may be used later.
+    const std::shared_ptr<VectorLoadState> state = found->second;
     if (state->committed)
     {
         return;
@@ -947,9 +963,9 @@ void CMapWinGISControl::CompleteVectorLoad(
         catch (...)
         {
         }
-        found->second->dataset.reset();
-        found->second->scene = {};
-        found->second->featureCount = 0;
+        state->dataset.reset();
+        state->scene = {};
+        state->featureCount = 0;
         try
         {
             _gdalEvents.UpdateCompletedResult(operationId, std::move(result));
@@ -974,9 +990,9 @@ void CMapWinGISControl::CompleteVectorLoad(
             result.summary.clear();
             result.diagnostics.clear();
         }
-        found->second->dataset.reset();
-        found->second->scene = {};
-        found->second->featureCount = 0;
+        state->dataset.reset();
+        state->scene = {};
+        state->featureCount = 0;
         try
         {
             _gdalEvents.UpdateCompletedResult(operationId, std::move(result));
@@ -1002,9 +1018,9 @@ void CMapWinGISControl::CompleteVectorLoad(
             result.summary.clear();
             result.diagnostics.clear();
         }
-        found->second->dataset.reset();
-        found->second->scene = {};
-        found->second->featureCount = 0;
+        state->dataset.reset();
+        state->scene = {};
+        state->featureCount = 0;
         try
         {
             _gdalEvents.UpdateCompletedResult(operationId, std::move(result));
@@ -1128,30 +1144,30 @@ STDMETHODIMP CMapWinGISControl::get_FeatureCount(LONGLONG* count)
 
 STDMETHODIMP CMapWinGISControl::get_RenderingBackend(BSTR* backend)
 {
-    if (backend == nullptr) return SetControlComErrorInfo("The rendering backend output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
+    if (backend == nullptr) return SetControlComErrorInfo("The rendering backend output pointer is null.", IID_IMapWinGISControl2, E_POINTER);
     const HRESULT result = CopyToBstr(BackendName(_renderer.GetActiveBackend()), backend);
-    return FAILED(result) ? SetControlComErrorInfo("The rendering backend could not be returned.", IID_IMapWinGISControl4, result) : result;
+    return FAILED(result) ? SetControlComErrorInfo("The rendering backend could not be returned.", IID_IMapWinGISControl2, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingStatus(BSTR* status)
 {
-    if (status == nullptr) return SetControlComErrorInfo("The rendering status output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
+    if (status == nullptr) return SetControlComErrorInfo("The rendering status output pointer is null.", IID_IMapWinGISControl2, E_POINTER);
     const HRESULT result = CopyToBstr(_renderer.GetDiagnostic(), status);
-    return FAILED(result) ? SetControlComErrorInfo("The rendering status could not be returned.", IID_IMapWinGISControl4, result) : result;
+    return FAILED(result) ? SetControlComErrorInfo("The rendering status could not be returned.", IID_IMapWinGISControl2, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::get_RenderingBackendPreference(BSTR* preference)
 {
-    if (preference == nullptr) return SetControlComErrorInfo("The rendering backend preference output pointer is null.", IID_IMapWinGISControl4, E_POINTER);
+    if (preference == nullptr) return SetControlComErrorInfo("The rendering backend preference output pointer is null.", IID_IMapWinGISControl2, E_POINTER);
     const HRESULT result = CopyToBstr(PreferenceName(_renderer.GetPreference()), preference);
-    return FAILED(result) ? SetControlComErrorInfo("The rendering backend preference could not be returned.", IID_IMapWinGISControl4, result) : result;
+    return FAILED(result) ? SetControlComErrorInfo("The rendering backend preference could not be returned.", IID_IMapWinGISControl2, result) : result;
 }
 
 STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
 {
     if (preference == nullptr)
     {
-        return SetControlComErrorInfo("The rendering backend preference is null.", IID_IMapWinGISControl4, E_INVALIDARG);
+        return SetControlComErrorInfo("The rendering backend preference is null.", IID_IMapWinGISControl2, E_INVALIDARG);
     }
 
     const UINT length = ::SysStringLen(preference);
@@ -1181,7 +1197,7 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
     }
     else
     {
-        return SetControlComErrorInfo("The rendering backend preference must be Automatic, OpenGL, or GDI.", IID_IMapWinGISControl4, E_INVALIDARG);
+        return SetControlComErrorInfo("The rendering backend preference must be Automatic, OpenGL, or GDI.", IID_IMapWinGISControl2, E_INVALIDARG);
     }
 
     if (_renderer.GetPreference() != previousPreference)
@@ -1674,6 +1690,12 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
     {
         ::OutputDebugStringA(exception.what());
     }
+    catch (...)
+    {
+        // This callback is noexcept; a non-standard exception must not
+        // terminate the host process.
+        ::OutputDebugStringW(L"MapWinGIS: unexpected exception while dispatching GDAL notifications.\n");
+    }
 }
 
 STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
@@ -1935,7 +1957,15 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
             const mwg::rendering::MapRenderScene& scene = _view.Scene();
             // Printing and scaled draws use a snapshot, never the live viewport.
             mwg::Viewport viewport = _view.GetViewport();
+            const mwg::Extent liveExtent = viewport.VisibleExtent();
             viewport.SetSize(static_cast<int>(width), static_cast<int>(height));
+            if (alternateSize && liveExtent.IsValid())
+            {
+                // Scale what the screen shows to the target: a print or a
+                // larger metafile must not reveal more of the map at screen
+                // resolution.
+                (void)viewport.FitExtent(liveExtent);
+            }
             if (!viewport.HasView())
             {
                 (void)viewport.FitExtent(_view.GetMap().GetExtent(), mwg::MapView::kDefaultPadding);
@@ -1964,6 +1994,11 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
         {
             ::OutputDebugStringA(exception.what());
             return E_FAIL;
+        }
+        catch (...)
+        {
+            ::OutputDebugStringW(L"MapWinGIS: unexpected exception while drawing the map.\n");
+            return E_UNEXPECTED;
         }
     };
 

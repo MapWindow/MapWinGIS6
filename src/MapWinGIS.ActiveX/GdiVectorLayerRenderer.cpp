@@ -161,13 +161,15 @@ namespace mwg::activex
             const rendering::VectorRenderScene& scene,
             const ViewTransform& transform,
             const double originX,
-            const double originY)
+            const double originY,
+            std::vector<POINT>& points,
+            std::vector<int>& ringCounts)
         {
             for (std::size_t polygonIndex = 0; polygonIndex < scene.polygons.size(); ++polygonIndex)
             {
                 const rendering::PolygonView polygon = scene.polygons[polygonIndex];
-                std::vector<POINT> points;
-                std::vector<int> ringCounts;
+                points.clear();
+                ringCounts.clear();
                 for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
                 {
                     const std::span<const rendering::Point> ring = polygon[ringIndex];
@@ -267,16 +269,21 @@ namespace mwg::activex
         std::size_t drawnLayers = 0;
         try
         {
+            // Reused for every polygon so a frame allocates only when a ring set
+            // exceeds the largest one seen so far.
+            std::vector<POINT> points;
+            std::vector<int> ringCounts;
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
-                if (!HasDrawableCoordinates(layer.scene, *transform, originX, originY))
+                if (layer.scene == nullptr ||
+                    !HasDrawableCoordinates(*layer.scene, *transform, originX, originY))
                 {
                     _failedLayers.push_back(layer.layerId);
                     continue;
                 }
 
-                const HRESULT layerResult =
-                    DrawLayer(deviceContext, layer.scene, *transform, originX, originY);
+                const HRESULT layerResult = DrawLayer(
+                    deviceContext, *layer.scene, *transform, originX, originY, points, ringCounts);
                 if (layerResult == E_INVALIDARG)
                 {
                     _failedLayers.push_back(layer.layerId);

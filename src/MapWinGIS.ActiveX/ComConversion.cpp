@@ -7,6 +7,7 @@
 #include "ComConversion.h"
 
 #include <limits>
+#include <memory>
 #include <new>
 #include <utility>
 
@@ -185,10 +186,13 @@ namespace mwg::activex::ComConversion
             {
                 return result;
             }
+            // Own the copy before converting: BstrToUtf8 can throw bad_alloc.
+            const std::unique_ptr<OLECHAR, decltype(&::SysFreeString)> ownedArgument{
+                argument,
+                &::SysFreeString};
 
             std::string converted;
             result = BstrToUtf8(argument, converted);
-            ::SysFreeString(argument);
             if (FAILED(result))
             {
                 return result;

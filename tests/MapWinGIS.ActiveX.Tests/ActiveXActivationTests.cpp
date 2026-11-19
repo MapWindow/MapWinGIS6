@@ -36,6 +36,7 @@
 #include "MapWinGIS.ActiveX_i.h"
 #include "MapWinGISControlTestAccess.h"
 #include "DllInstallScope.h"
+#include "GdalDispatchWindow.h"
 #include "TestData.h"
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -271,6 +272,15 @@ namespace
                 operationId));
         }
 
+        [[nodiscard]] std::size_t ProgressCount(const LONGLONG operationId) const
+        {
+            std::lock_guard lock(_mutex);
+            return static_cast<std::size_t>(std::count(
+                _progressOperations.begin(),
+                _progressOperations.end(),
+                operationId));
+        }
+
         [[nodiscard]] bool HasProgress(const LONGLONG operationId) const
         {
             std::lock_guard lock(_mutex);
@@ -354,6 +364,128 @@ namespace
 
     private:
         HANDLE _handle = nullptr;
+    };
+
+    class NestedDispatchBarrier final
+    {
+    public:
+        ~NestedDispatchBarrier()
+        {
+            static_cast<void>(_sinkEntered.Signal());
+            static_cast<void>(_wakePosted.Signal());
+            static_cast<void>(_allowFinish.Signal());
+            if (_started.load(std::memory_order_acquire))
+            {
+                static_cast<void>(_workerFinished.Wait(10000));
+            }
+        }
+
+        void MarkStarted() noexcept
+        {
+            _started.store(true, std::memory_order_release);
+        }
+
+        [[nodiscard]] bool WaitForSinkEntered() const noexcept
+        {
+            return _sinkEntered.Wait(10000);
+        }
+
+        [[nodiscard]] bool WaitForWakePosted() const noexcept
+        {
+            return _wakePosted.Wait(10000);
+        }
+
+        [[nodiscard]] bool WaitForCompletionDelivery() const noexcept
+        {
+            return _allowFinish.Wait(10000);
+        }
+
+        [[nodiscard]] bool SignalSinkEntered() const noexcept
+        {
+            return _sinkEntered.Signal();
+        }
+
+        [[nodiscard]] bool SignalWakePosted() const noexcept
+        {
+            return _wakePosted.Signal();
+        }
+
+        [[nodiscard]] bool SignalAllowFinish() const noexcept
+        {
+            return _allowFinish.Signal();
+        }
+
+        [[nodiscard]] bool SignalWorkerFinished() const noexcept
+        {
+            return _workerFinished.Signal();
+        }
+
+        void RecordNestedDispatch() noexcept
+        {
+            _nestedDispatchCount.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        [[nodiscard]] int NestedDispatchCount() const noexcept
+        {
+            return _nestedDispatchCount.load(std::memory_order_relaxed);
+        }
+
+    private:
+        ScopedEvent _sinkEntered;
+        ScopedEvent _wakePosted;
+        ScopedEvent _allowFinish;
+        ScopedEvent _workerFinished;
+        std::atomic_bool _started{false};
+        std::atomic_int _nestedDispatchCount{0};
+    };
+
+    std::atomic<NestedDispatchBarrier*> nestedDispatchBarrier{nullptr};
+
+    class HostedNestedDispatchAlgorithm final : public GDALAlgorithm
+    {
+    public:
+        explicit HostedNestedDispatchAlgorithm(
+            NestedDispatchBarrier* const barrier)
+            : GDALAlgorithm(
+                  "mwg-test-activex-nested-progress",
+                  "Test nested COM progress dispatch",
+                  ""),
+              _barrier(barrier)
+        {
+        }
+
+    protected:
+        bool RunImpl(GDALProgressFunc progress, void* userData) override
+        {
+            if (_barrier == nullptr || progress == nullptr)
+            {
+                return false;
+            }
+
+            struct FinishSignal final
+            {
+                NestedDispatchBarrier& barrier;
+                ~FinishSignal()
+                {
+                    static_cast<void>(barrier.SignalWorkerFinished());
+                }
+            } finishSignal{*_barrier};
+
+            if (progress(0.1, "COM nested progress", userData) == 0 ||
+                !_barrier->WaitForSinkEntered())
+            {
+                return false;
+            }
+            if (progress(0.2, "COM nested progress", userData) == 0)
+            {
+                return false;
+            }
+            static_cast<void>(_barrier->SignalWakePosted());
+            return _barrier->WaitForCompletionDelivery();
+        }
+
+    private:
+        NestedDispatchBarrier* _barrier = nullptr;
     };
 
     class VectorPreparationBarrier final
@@ -542,6 +674,13 @@ namespace
                 {"mwg-test-activex", "progress"},
                 [] { return std::make_unique<HostedProgressAlgorithm>(); });
             registry.DeclareAlgorithm(
+                {"mwg-test-activex", "nested-progress"},
+                []
+                {
+                    return std::make_unique<HostedNestedDispatchAlgorithm>(
+                        nestedDispatchBarrier.load(std::memory_order_acquire));
+                });
+            registry.DeclareAlgorithm(
                 {"mwg-test-activex", "diagnostics"},
                 [] { return std::make_unique<HostedDiagnosticsAlgorithm>(); });
         });
@@ -573,6 +712,47 @@ namespace
     HRESULT FailProgress(void*, LONGLONG)
     {
         return E_FAIL;
+    }
+
+    // Simulates a sink that shows UI from a progress event: the nested pump
+    // consumes dispatch messages posted while the control is still delivering.
+    HRESULT PumpNestedMessages(void* const context, LONGLONG)
+    {
+        auto& barrier = *static_cast<NestedDispatchBarrier*>(context);
+        if (barrier.NestedDispatchCount() != 0)
+        {
+            return barrier.SignalAllowFinish() ? S_OK : E_FAIL;
+        }
+        if (!barrier.SignalSinkEntered())
+        {
+            return E_FAIL;
+        }
+
+        const auto dispatchWake = [&barrier]
+        {
+            MSG message{};
+            if (!::PeekMessageW(
+                    &message,
+                    nullptr,
+                    mwg::activex::kGdalDispatchMessage,
+                    mwg::activex::kGdalDispatchMessage,
+                    PM_REMOVE))
+            {
+                return false;
+            }
+            ::DispatchMessageW(&message);
+            barrier.RecordNestedDispatch();
+            return true;
+        };
+
+        if (!barrier.WaitForWakePosted() || !dispatchWake())
+        {
+            return E_FAIL;
+        }
+        while (dispatchWake())
+        {
+        }
+        return barrier.NestedDispatchCount() == 1 ? S_OK : E_FAIL;
     }
 
     HRESULT FailCompletion(void*, LONGLONG)
@@ -1146,6 +1326,18 @@ TEST_F(ActiveXMapTest, InvalidArgumentsSetComErrorInfoForEachAutomationInterface
     ASSERT_EQ(_control.As(&current), S_OK);
     EXPECT_EQ(current->ZoomToLayer(0), E_INVALIDARG);
     expectDescription(L"Layer ID");
+
+    // Rendering properties are declared on IMapWinGISControl2, so their error
+    // information must name that interface for clients that only know it.
+    ComPtr<IMapWinGISControl2> rendering;
+    ASSERT_EQ(_control.As(&rendering), S_OK);
+    EXPECT_EQ(rendering->put_RenderingBackendPreference(ATL::CComBSTR(L"Vulkan")), E_INVALIDARG);
+    ComPtr<IErrorInfo> renderingError;
+    ASSERT_EQ(::GetErrorInfo(0, &renderingError), S_OK);
+    ASSERT_NE(renderingError, nullptr);
+    GUID source{};
+    ASSERT_EQ(renderingError->GetGUID(&source), S_OK);
+    EXPECT_TRUE(IsEqualGUID(source, __uuidof(IMapWinGISControl2)));
 }
 
 TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
@@ -1326,6 +1518,82 @@ TEST_F(ActiveXMapTest, LoadsVectorDatasetAsynchronouslyAndCommitsBeforeCompletio
     EXPECT_EQ(featureCount, 2);
 }
 
+TEST_F(ActiveXMapTest, ClosingTheControlFromTheLoadCommitViewChangeIsSafe)
+{
+    class ClosingViewChangeSink final :
+        public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IAdviseSink>
+    {
+    public:
+        explicit ClosingViewChangeSink(IOleObject* object) noexcept : _object(object) {}
+        void STDMETHODCALLTYPE OnDataChange(FORMATETC*, STGMEDIUM*) override {}
+        void STDMETHODCALLTYPE OnViewChange(DWORD, LONG) override
+        {
+            if (closeResult == S_FALSE)
+            {
+                closeResult = _object->Close(OLECLOSE_NOSAVE);
+            }
+        }
+        void STDMETHODCALLTYPE OnRename(IMoniker*) override {}
+        void STDMETHODCALLTYPE OnSave() override {}
+        void STDMETHODCALLTYPE OnClose() override {}
+        HRESULT closeResult = S_FALSE;
+
+    private:
+        IOleObject* _object;
+    };
+
+    ComPtr<IMapWinGISControl5> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    ComPtr<IOleObject> oleObject;
+    ASSERT_EQ(_control.As(&oleObject), S_OK);
+    const auto sink = Microsoft::WRL::Make<ClosingViewChangeSink>(oleObject.Get());
+    ASSERT_NE(sink, nullptr);
+    ASSERT_EQ(_viewObject->SetAdvise(DVASPECT_CONTENT, 0, sink.Get()), S_OK);
+
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "async-close-on-commit.gpkg",
+        std::vector<mwg::Extent>{{0, 0, 2, 2}});
+    LONGLONG operationId = 0;
+    ASSERT_EQ(control->BeginLoadVectorDataset(
+        ATL::CComBSTR(path.c_str()),
+        &operationId), S_OK);
+
+    // The commit's FireViewChange re-enters Close, which discards every load
+    // state; the commit must finish on its own reference to the state.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (sink->closeResult == S_FALSE && std::chrono::steady_clock::now() < deadline)
+    {
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE)
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        Sleep(1);
+    }
+    ASSERT_EQ(sink->closeResult, S_OK);
+    ASSERT_EQ(_viewObject->SetAdvise(DVASPECT_CONTENT, 0, nullptr), S_OK);
+
+    VARIANT_BOOL succeeded = VARIANT_TRUE;
+    VARIANT_BOOL cancelled = VARIANT_TRUE;
+    LONGLONG layerId = -1;
+    BSTR summary = nullptr;
+    BSTR diagnostics = nullptr;
+    EXPECT_EQ(control->EndLoadVectorDataset(
+        operationId,
+        &succeeded,
+        &cancelled,
+        &layerId,
+        &summary,
+        &diagnostics), E_INVALIDARG);
+    EXPECT_EQ(summary, nullptr);
+    EXPECT_EQ(diagnostics, nullptr);
+    LONG layerCount = 0;
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+}
+
 TEST_F(ActiveXMapTest, CancellingVectorDatasetLoadLeavesTheMapUnchanged)
 {
     ComPtr<IMapWinGISControl5> control;
@@ -1431,7 +1699,10 @@ TEST_F(ActiveXMapTest, DestroyingControlDuringVectorLoadDoesNotAccessTheControlF
         reinterpret_cast<VectorPreparationHookSetter>(GetProcAddress(
             _module->Get(),
             "MapWinGISControlSetVectorPreparationHookForTesting"));
-    ASSERT_NE(setPreparationHook, nullptr);
+    if (setPreparationHook == nullptr)
+    {
+        GTEST_SKIP() << "MapWinGIS.ocx was built without MWG_ENABLE_ACTIVEX_TEST_HOOKS.";
+    }
     ScopedVectorPreparationHook hookReset(setPreparationHook);
     setPreparationHook(&VectorPreparationBarrier::Notify, &barrier);
 
@@ -1987,6 +2258,37 @@ TEST_F(ActiveXMapTest, AlternateDrawBoundsDoNotChangeTheLiveSizeUsedForFitting)
     EXPECT_EQ(GetPixel(resized.Get(), moved->x, moved->y), RGB(61, 122, 169));
 }
 
+TEST_F(ActiveXMapTest, AlternateSizeDrawsScaleTheLiveVisibleExtent)
+{
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    mwg::Viewport live(120, 100);
+    ASSERT_TRUE(live.FitExtent({0, 0, 10, 5}, 12.0));
+    mwg::Viewport printed(240, 200);
+    ASSERT_TRUE(printed.FitExtent(live.VisibleExtent()));
+
+    BitmapSurface surface(240, 200);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 240, 200), S_OK);
+
+    // At the screen resolution the rectangle would cover only the middle of
+    // a double-size target, leaving its right part unpainted.
+    for (const mwg::MapPoint point : {mwg::MapPoint{0.5, 2.5}, mwg::MapPoint{9.5, 2.5}})
+    {
+        const auto pixel = mwg::ToPixel(*printed.MapToScreen(point));
+        ASSERT_TRUE(pixel.has_value());
+        EXPECT_EQ(GetPixel(surface.Get(), pixel->x, pixel->y), RGB(61, 122, 169))
+            << point.x << ", " << point.y;
+    }
+    const auto outside = mwg::ToPixel(*printed.MapToScreen({-0.5, 2.5}));
+    ASSERT_TRUE(outside.has_value());
+    EXPECT_EQ(GetPixel(surface.Get(), outside->x, outside->y), GetSysColor(COLOR_WINDOW));
+
+    // The live view keeps its size and scale.
+    using Access = mwg::activex::testing::MapWinGISControlTestAccess;
+    EXPECT_DOUBLE_EQ(Access::Resolution(Access::Control(_control.Get())), *live.Resolution());
+}
+
 TEST_F(ActiveXMapTest, ScaledDrawsKeepScreenBuffersAtTheClientSize)
 {
     using Access = mwg::activex::testing::MapWinGISControlTestAccess;
@@ -2534,6 +2836,52 @@ TEST(ActiveXHosting, ResizesRepaintsAndRecreatesControl)
             EXPECT_NE(
                 warningResult.warnings.front().find(L"COM test warning"),
                 std::wstring::npos);
+
+            NestedDispatchBarrier nestedBarrier;
+            struct NestedDispatchCleanup final
+            {
+                GdalEventSink& eventSink;
+                ~NestedDispatchCleanup()
+                {
+                    eventSink.SetProgressCallback(nullptr, nullptr);
+                    nestedDispatchBarrier.store(
+                        nullptr,
+                        std::memory_order_release);
+                }
+            } nestedDispatchCleanup{*eventSink.Get()};
+            static_cast<void>(nestedDispatchCleanup);
+            nestedDispatchBarrier.store(
+                &nestedBarrier,
+                std::memory_order_release);
+            eventSink->SetProgressCallback(
+                &PumpNestedMessages,
+                &nestedBarrier);
+            LONGLONG nestedPumpOperationId = 0;
+            ASSERT_TRUE(SUCCEEDED(StartGdalOperation(
+                gdalControl,
+                L"mwg-test-activex nested-progress",
+                {},
+                &nestedPumpOperationId)));
+            nestedBarrier.MarkStarted();
+            const HWND dispatchWindow = ::FindWindowExW(
+                HWND_MESSAGE,
+                nullptr,
+                L"MapWinGIS6.GdalDispatchWindow",
+                nullptr);
+            ASSERT_NE(dispatchWindow, nullptr);
+            ASSERT_TRUE(::KillTimer(
+                dispatchWindow,
+                mwg::activex::kGdalDispatchRetryTimerId));
+            ComGdalResult nestedPumpResult;
+            ASSERT_TRUE(SUCCEEDED(finishOperation(
+                nestedPumpOperationId,
+                nestedPumpResult)));
+            EXPECT_EQ(nestedPumpResult.succeeded, VARIANT_TRUE);
+            EXPECT_EQ(nestedPumpResult.callbackErrorCode, 0);
+            EXPECT_EQ(
+                eventSink->ProgressCount(nestedPumpOperationId),
+                2u);
+            EXPECT_EQ(nestedBarrier.NestedDispatchCount(), 1);
 
             LONGLONG failureOperationId = 0;
             ASSERT_TRUE(SUCCEEDED(StartGdalOperation(

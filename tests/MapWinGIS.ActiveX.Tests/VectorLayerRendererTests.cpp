@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -104,6 +105,7 @@ namespace
         return {
             rectangle,
             1,
+            0,
             {{{{rectangle.xMin, rectangle.yMin},
                {rectangle.xMax, rectangle.yMin},
                {rectangle.xMax, rectangle.yMax},
@@ -132,6 +134,23 @@ namespace
         }
     }
 
+    /// Wraps a layer scene in the shared immutable form held by map scenes.
+    [[nodiscard]] std::shared_ptr<const mwg::rendering::VectorRenderScene> Share(
+        mwg::rendering::VectorRenderScene scene)
+    {
+        return std::make_shared<const mwg::rendering::VectorRenderScene>(std::move(scene));
+    }
+
+    /// Gives a test fixture a private, editable copy of a layer's geometry;
+    /// map scenes otherwise share it immutably.
+    [[nodiscard]] mwg::rendering::VectorRenderScene& Edit(mwg::rendering::LayerRenderScene& layer)
+    {
+        auto copy = std::make_shared<mwg::rendering::VectorRenderScene>(*layer.scene);
+        mwg::rendering::VectorRenderScene& editable = *copy;
+        layer.scene = std::move(copy);
+        return editable;
+    }
+
     /// A map scene with these layers, bottom first, with identities 1, 2, ...
     /// Every polygon gets its Core triangulation mesh.
     [[nodiscard]] mwg::rendering::MapRenderScene MakeMapScene(
@@ -142,7 +161,7 @@ namespace
         for (mwg::rendering::VectorRenderScene& layer : layers)
         {
             TriangulateScene(layer);
-            scene.layers.push_back({mwg::LayerId{++id}, std::move(layer)});
+            scene.layers.push_back({mwg::LayerId{++id}, Share(std::move(layer))});
         }
         return scene;
     }
@@ -155,7 +174,7 @@ namespace
     /// Rebuilds the single-polygon fixture with one additional interior ring.
     void AddInteriorRing(mwg::rendering::MapRenderScene& scene, mwg::rendering::Ring ring)
     {
-        auto& buffer = scene.layers.front().scene.polygons;
+        auto& buffer = Edit(scene.layers.front()).polygons;
         const auto view = buffer.front();
         mwg::rendering::Polygon polygon;
         for (std::size_t index = 0; index < view.size(); ++index)
@@ -288,9 +307,9 @@ TEST(VectorLayerRenderer, OpenGlRendersConcavePolygonWithDuplicateVertex)
     // Concave corner with a consecutive duplicate vertex; Core
     // triangulation tolerates the duplicate and produces the fill mesh.
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
-    scene.layers.front().scene.polygons = {{{
+    Edit(scene.layers.front()).polygons = {{{
         {0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}, {5.0, 5.0}, {5.0, 5.0}, {0.0, 10.0}, {0.0, 0.0}}}};
-    TriangulateScene(scene.layers.front().scene);
+    TriangulateScene(Edit(scene.layers.front()));
 
     const mwg::Viewport viewport = FitViewport(bounds);
     mwg::activex::OpenGlVectorLayerRenderer renderer;
@@ -315,7 +334,7 @@ TEST(VectorLayerRenderer, OpenGlRejectsPolygonWithoutFillMesh)
     // rings remain; OpenGL must decline the frame instead of approximating
     // the fill so the coordinator falls back to GDI.
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
-    scene.layers.front().scene.fillMeshes.front().reset();
+    Edit(scene.layers.front()).fillMeshes.front().reset();
 
     mwg::activex::OpenGlVectorLayerRenderer renderer;
     EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), S_FALSE);
@@ -333,6 +352,7 @@ TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
 
     const mwg::rendering::MapRenderScene scene = MakeMapScene({{
         mwg::Extent{-3.0, -3.0, 3.0, 3.0},
+        0,
         0,
         {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}}});
 
@@ -353,7 +373,7 @@ TEST(VectorLayerRenderer, OpenGlRejectsTheFrameWhenAnyLayerHasNoFillMesh)
     const RECT bounds{0, 0, 120, 100};
 
     mwg::rendering::MapRenderScene scene = MakeTwoLayerScene();
-    scene.layers.back().scene.fillMeshes.front().reset();
+    Edit(scene.layers.back()).fillMeshes.front().reset();
 
     mwg::activex::OpenGlVectorLayerRenderer renderer;
     EXPECT_EQ(
@@ -373,9 +393,9 @@ TEST(VectorLayerRenderer, FailsWithoutDrawingNonFiniteCoordinates)
     const RECT bounds{0, 0, 120, 100};
 
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
-    scene.layers.front().scene.polygons.AppendPolygon(
+    Edit(scene.layers.front()).polygons.AppendPolygon(
         {{{1.0, 1.0}, {std::numeric_limits<double>::quiet_NaN(), 5.0}, {9.0, 9.0}, {1.0, 1.0}}});
-    TriangulateScene(scene.layers.front().scene);
+    TriangulateScene(Edit(scene.layers.front()));
 
     mwg::activex::VectorLayerRenderer renderer;
     EXPECT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), E_INVALIDARG);
@@ -393,9 +413,9 @@ TEST(VectorLayerRenderer, SkipsOnlyTheLayerThatCannotBeDrawn)
     ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
 
     mwg::rendering::MapRenderScene scene = MakeTwoLayerScene();
-    scene.layers.front().scene.polygons.AppendPolygon(
+    Edit(scene.layers.front()).polygons.AppendPolygon(
         {{{0.0, 0.0}, {std::numeric_limits<double>::infinity(), 1.0}, {1.0, 1.0}, {0.0, 0.0}}});
-    TriangulateScene(scene.layers.front().scene);
+    TriangulateScene(Edit(scene.layers.front()));
     const mwg::Viewport viewport = FitViewport(bounds, kTwoLayerExtent);
 
     mwg::activex::VectorLayerRenderer renderer;
@@ -405,6 +425,27 @@ TEST(VectorLayerRenderer, SkipsOnlyTheLayerThatCannotBeDrawn)
     EXPECT_EQ(
         renderer.GetDiagnostic(),
         L"GDI could not draw one or more layers; the other layers were drawn.");
+    ASSERT_EQ(renderer.GetFailedLayers().size(), 1U);
+    EXPECT_EQ(renderer.GetFailedLayers().front(), mwg::LayerId{1});
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 1.0, 1.0), GetSysColor(COLOR_WINDOW));
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 9.0, 4.0), kFill);
+}
+
+TEST(VectorLayerRenderer, ReportsALayerWithoutASceneAndDrawsTheOthers)
+{
+    BitmapSurface surface(200, 120);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 200, 120};
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+
+    mwg::rendering::MapRenderScene scene = MakeTwoLayerScene();
+    scene.layers.front().scene.reset();
+    const mwg::Viewport viewport = FitViewport(bounds, kTwoLayerExtent);
+
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
     ASSERT_EQ(renderer.GetFailedLayers().size(), 1U);
     EXPECT_EQ(renderer.GetFailedLayers().front(), mwg::LayerId{1});
     EXPECT_EQ(MapPixel(surface.Get(), viewport, 1.0, 1.0), GetSysColor(COLOR_WINDOW));
@@ -421,7 +462,7 @@ TEST(VectorLayerRenderer, OpenGlRendersPolygonWithInteriorRing)
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
     AddInteriorRing(scene,
         {{3.0, 3.0}, {3.0, 7.0}, {7.0, 7.0}, {7.0, 3.0}, {3.0, 3.0}});
-    TriangulateScene(scene.layers.front().scene);
+    TriangulateScene(Edit(scene.layers.front()));
 
     mwg::activex::VectorLayerRenderer renderer;
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), S_OK);
@@ -440,7 +481,7 @@ TEST(VectorLayerRenderer, FallsBackToGdiWhenAPolygonHasNoFillMesh)
     const RECT bounds{0, 0, 120, 100};
 
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
-    scene.layers.front().scene.fillMeshes.front().reset();
+    Edit(scene.layers.front()).fillMeshes.front().reset();
 
     mwg::activex::VectorLayerRenderer renderer;
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), S_OK);
@@ -470,7 +511,7 @@ TEST(VectorLayerRenderer, GdiFallbackRendersConcaveHoledPolygonFromRings)
     }};
     layer.fillMeshes.push_back(std::nullopt);
     mwg::rendering::MapRenderScene scene;
-    scene.layers.push_back({mwg::LayerId{1}, std::move(layer)});
+    scene.layers.push_back({mwg::LayerId{1}, Share(std::move(layer))});
 
     const mwg::Viewport viewport = FitViewport(bounds);
     mwg::activex::VectorLayerRenderer renderer;
@@ -509,20 +550,20 @@ TEST(VectorLayerRenderer, OpenGlSupportRequiresAMeshForEveryPolygon)
 
     // No meshes at all.
     mwg::rendering::MapRenderScene withoutMeshes = MakeConvexPolygonScene();
-    withoutMeshes.layers.front().scene.fillMeshes.clear();
+    Edit(withoutMeshes.layers.front()).fillMeshes.clear();
     EXPECT_FALSE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
             withoutMeshes));
 
     // A triangulation failure for one polygon rejects the whole frame.
     mwg::rendering::MapRenderScene nullMesh = MakeConvexPolygonScene();
-    nullMesh.layers.front().scene.fillMeshes.front().reset();
+    Edit(nullMesh.layers.front()).fillMeshes.front().reset();
     EXPECT_FALSE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(nullMesh));
 
     // Non-finite coordinates stay unsupported regardless of the mesh.
     mwg::rendering::MapRenderScene nonFinite = MakeConvexPolygonScene();
-    nonFinite.layers.front().scene.polygons.Coordinates().front().x =
+    Edit(nonFinite.layers.front()).polygons.Coordinates().front().x =
         std::numeric_limits<double>::infinity();
     EXPECT_FALSE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(nonFinite));
@@ -549,7 +590,7 @@ TEST(VectorLayerRenderer, OpenGlSupportsConcaveMultipartAndHoledScenes)
 
     // A malformed mesh reference also rejects the scene.
     mwg::rendering::MapRenderScene broken = scene;
-    broken.layers.front().scene.fillMeshes.front()->indices.resize(4);
+    Edit(broken.layers.front()).fillMeshes.front()->indices.resize(4);
     EXPECT_FALSE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(broken));
 }
@@ -562,9 +603,9 @@ TEST(VectorLayerRenderer, OpenGlRendersLShapedPolygon)
     const RECT bounds{0, 0, 120, 100};
 
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
-    scene.layers.front().scene.polygons = {{{
+    Edit(scene.layers.front()).polygons = {{{
         {0.0, 0.0}, {10.0, 0.0}, {10.0, 4.0}, {4.0, 4.0}, {4.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}}}};
-    TriangulateScene(scene.layers.front().scene);
+    TriangulateScene(Edit(scene.layers.front()));
 
     const mwg::Viewport viewport = FitViewport(bounds);
     mwg::activex::OpenGlVectorLayerRenderer renderer;
@@ -590,7 +631,7 @@ TEST(VectorLayerRenderer, OpenGlRendersPolygonWithMultipleInteriorRings)
     mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
     AddInteriorRing(scene, {{2.0, 2.0}, {2.0, 4.0}, {4.0, 4.0}, {4.0, 2.0}, {2.0, 2.0}});
     AddInteriorRing(scene, {{6.0, 6.0}, {6.0, 8.0}, {8.0, 8.0}, {8.0, 6.0}, {6.0, 6.0}});
-    TriangulateScene(scene.layers.front().scene);
+    TriangulateScene(Edit(scene.layers.front()));
 
     const mwg::Viewport viewport = FitViewport(bounds);
     mwg::activex::OpenGlVectorLayerRenderer renderer;
@@ -745,7 +786,7 @@ TEST(VectorLayerRenderer, FlatSceneCopyPreservesPixelsAfterTheOriginalIsReleased
     auto source = MakeMapScene({
         MakeRectangleLayer({1, 1, 9, 9}), MakeRectangleLayer({7, 7, 10, 10})});
     AddInteriorRing(source, {{3, 3}, {3, 6}, {6, 6}, {6, 3}, {3, 3}});
-    TriangulateScene(source.layers.front().scene);
+    TriangulateScene(Edit(source.layers.front()));
     ASSERT_TRUE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(source));
     ASSERT_NE(FillRect(originalGdi.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
@@ -1018,7 +1059,7 @@ TEST(VectorLayerRenderer, GdiSkipsLayerTraversalWhenTheHostClipDoesNotIntersectB
     const RECT bounds{0, 0, 120, 100};
     const mwg::Viewport viewport = FitViewport(bounds);
     auto scene = MakeConvexPolygonScene();
-    scene.layers.front().scene.polygons.Coordinates().front().x =
+    Edit(scene.layers.front()).polygons.Coordinates().front().x =
         std::numeric_limits<double>::infinity();
     const int saved = SaveDC(surface.Get());
     ASSERT_NE(saved, 0);

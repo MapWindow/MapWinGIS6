@@ -7,6 +7,7 @@
 #include "mapwingis/rendering/MapRenderScene.h"
 
 #include <exception>
+#include <memory>
 #include <new>
 #include <utility>
 
@@ -39,7 +40,7 @@ namespace mwg::rendering
         {
             return SkippedLayer{layer.Id(), LayerSkipReason::NoGeometry, {}};
         }
-        return LayerRenderScene{layer.Id(), std::move(scene)};
+        return LayerRenderScene{layer.Id(), std::make_shared<const VectorRenderScene>(std::move(scene))};
     }
 
     MapRenderScene CreateMapRenderScene(const Map& map)

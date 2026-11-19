@@ -73,12 +73,21 @@ namespace mwg
         /// The scene must match the specified source layer without intervening
         /// edits. An empty scene adds a layer with no drawable geometry.
         /// Transfers scene ownership and retains the current layers' scenes,
-        /// rebuilding stale scenes first. The cache owns a separate copy of
-        /// the new scene. The next Scene() does not reread data.
+        /// rebuilding stale scenes first. The cache and the assembled scene
+        /// share one immutable copy of the new geometry. The next Scene()
+        /// does not reread data.
         /// Fitting and argument errors are the same as the other AddLayer overload.
         /// \throws std::bad_alloc when memory runs out.
         LayerId AddLayer(std::shared_ptr<VectorDataset> dataset,
                          rendering::VectorRenderScene scene, int layerIndex = 0);
+
+        /// Adds a layer with an already prepared, shared snapshot of its
+        /// geometry, as returned in LayerRenderScene::scene. Behaves like the
+        /// overload above but stores the given snapshot without copying it.
+        /// \throws InvalidArgument when scene is null, before the map changes.
+        LayerId AddLayer(std::shared_ptr<VectorDataset> dataset,
+                         std::shared_ptr<const rendering::VectorRenderScene> scene,
+                         int layerIndex = 0);
 
         /// Removes a layer; see Map::RemoveLayer. The view is kept.
         bool RemoveLayer(LayerId id) noexcept;
@@ -152,7 +161,9 @@ namespace mwg
         /// reference stays valid for the lifetime of the MapView; a later
         /// call that reassembles the scene replaces its contents. Geometry
         /// for a visible uncached layer is read once; visibility changes reuse
-        /// its cache. Reassembly copies cached geometry into the map snapshot.
+        /// its cache. Reassembly shares cached geometry with the map snapshot
+        /// instead of copying it, so a held LayerRenderScene::scene stays
+        /// valid after the layer is invalidated or removed.
         /// Failed layers retain their diagnostics until explicitly invalidated.
         /// \throws std::bad_alloc when memory runs out.
         [[nodiscard]] const rendering::MapRenderScene& Scene();

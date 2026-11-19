@@ -4,13 +4,15 @@
  * @file MapRenderScene.h
  * @brief Declares backend-neutral render data for all layers of a map.
  *
- * A map render scene is an owned snapshot of the drawable geometry of a Map,
- * in drawing order. It holds no references to the map, its layers, or their
- * datasets, and it holds no view state: renderers draw it through a separate
- * Viewport, so a view change does not need a new scene.
+ * A map render scene is a snapshot of the drawable geometry of a Map, in
+ * drawing order. Layer geometry is immutable and shared through
+ * reference-counted pointers. The scene holds no references to the map, its
+ * layers, or their datasets, and it holds no view state: renderers draw it
+ * through a separate Viewport, so a view change does not need a new scene.
  */
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -20,13 +22,16 @@
 
 namespace mwg::rendering
 {
-    /// Owned geometry of one map layer.
+    /// Geometry of one map layer.
     struct LayerRenderScene
     {
         /// Identity of the map layer the geometry was copied from.
         LayerId layerId;
-        /// Polygon geometry in map coordinates; never empty in a MapRenderScene.
-        VectorRenderScene scene;
+        /// Immutable polygon geometry in map coordinates; never null or empty
+        /// in a MapRenderScene. Shared, not copied, between a MapView's layer
+        /// cache and the scenes it assembles; replace the pointer rather than
+        /// modifying the geometry.
+        std::shared_ptr<const VectorRenderScene> scene;
     };
 
     /// Why CreateMapRenderScene left a map layer out of the scene.

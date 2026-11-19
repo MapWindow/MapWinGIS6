@@ -254,10 +254,12 @@ namespace mwg
 
     GdalAlgorithmRunner::~GdalAlgorithmRunner()
     {
-        // Destruction only releases the runner's own dataset references
-        // (through GdalDatasetDeleter) and the GDALAlgorithm, which is
-        // refcount-only work. It must not wait for operations holding the
-        // shared GDAL execution lock.
+        // Destruction releases the runner's own dataset references (through
+        // GdalDatasetDeleter) and the GDALAlgorithm. Either may close a dataset
+        // when it holds the last reference; that close runs without the shared
+        // GDAL execution lock so destruction never waits for, or deadlocks with,
+        // an operation holding it. Callers must not destroy a runner while
+        // another thread still uses a dataset only this runner references.
         _impl.reset();
     }
 

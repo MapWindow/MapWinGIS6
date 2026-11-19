@@ -144,7 +144,10 @@ namespace mwg
         [[nodiscard]] static std::unique_ptr<VectorDataset> Open(const std::filesystem::path& path,
                                                                  OpenMode mode = OpenMode::ReadOnly);
 
-        /// Returns nullptr instead of throwing.
+        /// Opens a data source, returning nullptr when no driver can open it or
+        /// update access is unavailable. Only that open probe is non-throwing.
+        /// \throws InvalidArgument when the path cannot be converted to UTF-8.
+        /// \throws CoreError when GDAL initialization fails.
         [[nodiscard]] static std::unique_ptr<VectorDataset> TryOpen(const std::filesystem::path& path,
                                                                     OpenMode mode = OpenMode::ReadOnly);
 

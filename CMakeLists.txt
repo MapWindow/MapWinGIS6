@@ -17,6 +17,9 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # --- options needed before project() -----------------------------------------
 option(MWG_BUILD_TESTS "Build the GoogleTest suite (adds the 'tests' vcpkg feature)" ON)
 option(MWG_BUILD_ACTIVEX "Build the ActiveX control (requires Windows SDK MIDL and ATL)" ON)
+option(MWG_ENABLE_ACTIVEX_TEST_HOOKS
+    "Export test-only hooks from MapWinGIS.ocx; turn OFF for distributed binaries (MSBuild: MwgEnableActiveXTestHooks)"
+    ${MWG_BUILD_TESTS})
 set(MWG_WINDOWS_SDK "10.0.28000.0" CACHE STRING
     "Windows SDK version (MSBuild: MwgWindowsSdk). 10.0 means the newest installed SDK")
 

@@ -133,6 +133,10 @@ namespace mwg
             Extent extent;
             /// Feature count of the layer used to create this scene.
             std::int64_t sourceFeatureCount = 0;
+            /// Non-empty geometry parts that were not rendered: non-polygonal
+            /// geometries or collection members, and polygons without an
+            /// exterior ring of at least three points.
+            std::int64_t skippedGeometryCount = 0;
             PolygonBuffer polygons;
             /// Triangulated fill meshes prepared once when the scene is
             /// created, aligned with polygons: fillMeshes[i] belongs to
@@ -145,8 +149,12 @@ namespace mwg
 
         /// Copies polygon geometry from a layer into backend-neutral scene data.
         ///
-        /// Supports Polygon and MultiPolygon layers. Empty geometries are
-        /// skipped. The returned coordinates remain in the layer's coordinate
+        /// Supports Polygon, MultiPolygon, and curved polygon layers. Empty
+        /// geometries are skipped. Polygonal members of geometry collections
+        /// are rendered; other geometries, and polygons whose exterior ring
+        /// has fewer than three points, are skipped and counted in
+        /// skippedGeometryCount. Interior rings with fewer than three points
+        /// are dropped. The returned coordinates remain in the layer's coordinate
         /// system; this function does not transform projections. Not
         /// thread-safe, consistent with the input layer's contract.
         /// \throws CoreError when the layer is not polygonal or contains no

@@ -35,11 +35,34 @@ $registrationTool = if ($Platform -eq 'x64') {
     Join-Path $env:SystemRoot 'SysWOW64\regsvr32.exe'
 }
 
+$idlPath = [System.IO.Path]::GetFullPath(
+    (Join-Path $PSScriptRoot '..\..\src\MapWinGIS.ActiveX\MapWinGIS.ActiveX.idl'))
+if (-not (Test-Path -LiteralPath $idlPath -PathType Leaf)) {
+    throw "The ActiveX interface definition was not found at '$idlPath'."
+}
+
+# DllRegisterServer also writes the type library and its interfaces, and
+# DllUnregisterServer removes them, so every key the control owns is protected.
 $registrationPaths = @(
-    'Software\Classes\CLSID\{2F0AB6FC-F7C0-4E42-A002-A61F9C6F294F}'
     'Software\Classes\MapWinGIS6.Control.6'
     'Software\Classes\MapWinGIS6.Control'
 )
+$idlDeclarations = [regex]::Matches(
+    (Get-Content -LiteralPath $idlPath -Raw),
+    'uuid\(([0-9A-Fa-f-]{36})\)[^\]]*\]\s*(library|interface|dispinterface|coclass)\b')
+foreach ($declaration in $idlDeclarations) {
+    $guid = '{' + $declaration.Groups[1].Value.ToUpperInvariant() + '}'
+    $registrationPaths += switch ($declaration.Groups[2].Value) {
+        'library' { "Software\Classes\TypeLib\$guid" }
+        'coclass' { "Software\Classes\CLSID\$guid" }
+        default { "Software\Classes\Interface\$guid" }
+    }
+}
+if (-not ($registrationPaths -match '\\TypeLib\\') -or
+    -not ($registrationPaths -match '\\CLSID\\') -or
+    -not ($registrationPaths -match '\\Interface\\')) {
+    throw "Could not read the type library, class, and interface GUIDs from '$idlPath'."
+}
 $testReport = Join-Path ([System.IO.Path]::GetTempPath()) (
     "MapWinGIS.ActiveX.Tests.$([guid]::NewGuid().ToString('N')).xml")
 $existingRegistration = @()

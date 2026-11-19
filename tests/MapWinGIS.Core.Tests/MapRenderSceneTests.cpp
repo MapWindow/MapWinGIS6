@@ -164,9 +164,9 @@ TEST_F(MapRenderSceneTest, ContainsEveryVisibleLayerInDrawingOrder)
     EXPECT_EQ(scene.layers[0].layerId, bottom);
     EXPECT_EQ(scene.layers[1].layerId, middle);
     EXPECT_EQ(scene.layers[2].layerId, top);
-    EXPECT_EQ(scene.layers[0].scene.polygons.size(), 1U);
-    EXPECT_EQ(scene.layers[1].scene.polygons.size(), 2U);
-    EXPECT_EQ(scene.layers[1].scene.sourceFeatureCount, 2);
+    EXPECT_EQ(scene.layers[0].scene->polygons.size(), 1U);
+    EXPECT_EQ(scene.layers[1].scene->polygons.size(), 2U);
+    EXPECT_EQ(scene.layers[1].scene->sourceFeatureCount, 2);
 }
 
 TEST_F(MapRenderSceneTest, KeepsEachLayersOwnExtentAndCoordinates)
@@ -177,10 +177,10 @@ TEST_F(MapRenderSceneTest, KeepsEachLayersOwnExtentAndCoordinates)
     const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(_map);
 
     ASSERT_EQ(scene.layers.size(), 2U);
-    EXPECT_DOUBLE_EQ(scene.layers[0].scene.extent.xMax, 1.0);
-    EXPECT_DOUBLE_EQ(scene.layers[1].scene.extent.xMin, 100.0);
-    EXPECT_DOUBLE_EQ(scene.layers[1].scene.extent.yMax, 60.0);
-    for (const rendering::Point& point : scene.layers[1].scene.polygons.front().front())
+    EXPECT_DOUBLE_EQ(scene.layers[0].scene->extent.xMax, 1.0);
+    EXPECT_DOUBLE_EQ(scene.layers[1].scene->extent.xMin, 100.0);
+    EXPECT_DOUBLE_EQ(scene.layers[1].scene->extent.yMax, 60.0);
+    for (const rendering::Point& point : scene.layers[1].scene->polygons.front().front())
     {
         EXPECT_GE(point.x, 100.0);
         EXPECT_LE(point.x, 140.0);
@@ -287,8 +287,8 @@ TEST_F(MapRenderSceneTest, IsolatesStandardExceptionsButPropagatesAllocationFail
     EXPECT_EQ(scene.skippedLayers[0].layerId, failed);
     EXPECT_EQ(scene.skippedLayers[0].reason, rendering::LayerSkipReason::Failed);
     EXPECT_EQ(scene.skippedLayers[0].message, "Simulated geometry read exception");
-    const auto* polygons = scene.layers[0].scene.polygons.Coordinates().data();
-    EXPECT_EQ(view.Scene().layers[0].scene.polygons.Coordinates().data(), polygons);
+    const auto* polygons = scene.layers[0].scene->polygons.Coordinates().data();
+    EXPECT_EQ(view.Scene().layers[0].scene->polygons.Coordinates().data(), polygons);
 
     view.AddLayer(VectorDataset::Open("MWG_THROWING:allocation"));
     EXPECT_THROW((void)view.Scene(), std::bad_alloc);
@@ -304,5 +304,5 @@ TEST_F(MapRenderSceneTest, SceneIsASnapshotThatOutlivesTheMapLayers)
 
     ASSERT_EQ(scene.layers.size(), 1U);
     EXPECT_EQ(scene.layers[0].layerId, id);
-    EXPECT_EQ(scene.layers[0].scene.polygons.front().front().size(), 5U);
+    EXPECT_EQ(scene.layers[0].scene->polygons.front().front().size(), 5U);
 }

@@ -138,7 +138,9 @@ Call the interface on its owning COM apartment, which must continue pumping
 messages while operations are active. A message-only dispatcher delivers
 `GdalProgress` and `GdalOperationCompleted` events on that thread. Progress is
 coalesced per operation;
-the terminal event is retained. The wrapper permits sixteen outstanding
+the terminal event is retained. Each dispatch message delivers one batch of
+pending events and then returns to the message loop, so a fast-reporting
+operation does not keep the thread inside event delivery. The wrapper permits sixteen outstanding
 operations. Call `EndGdalOperation` after completion to retrieve success,
 cancellation, GDAL error code, summary, full diagnostics, callback error code
 and message, and warnings, and to release the operation slot. An incomplete

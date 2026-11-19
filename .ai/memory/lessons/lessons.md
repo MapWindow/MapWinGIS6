@@ -112,3 +112,25 @@ back the writes. Other formats retain their driver's stored-extent behavior.
 See [VectorDataset.cpp](../../../src/MapWinGIS.Core/src/vector/VectorDataset.cpp)
 and the shrinking and reopening cases in
 [VectorLayerTests.cpp](../../../tests/MapWinGIS.Core.Tests/VectorLayerTests.cpp).
+
+## Squash-merging development into main breaks later merges
+
+**Problem:** After `main` received `development` as one squash commit, a trial
+merge of `development` into `main` conflicted in 29 files, although the squash
+tree was identical to a commit already on `development`.
+
+**Cause:** The squash commit is not an ancestor of `development`, so Git sees
+both branches adding the same files independently.
+
+**Resolution:** Verify that `git diff <development-commit> origin/main` is
+empty, then record the merge on `development` with
+`git merge -s ours origin/main`. Use merge commits, not squash commits, for
+`development` to `main` releases.
+
+## Driver coercion makes cached written values stale
+
+OGR drivers can coerce a written value; the Shapefile driver truncates a string
+to the DBF field width, for example. Core therefore discards its cached feature
+after every `SetFeature` write, successful or not, so a later read returns the
+stored value instead of the value the caller wrote. See
+`VectorLayerEditTest.ReadsBackTheStoredValueAfterTheDriverCoercesAWrite`.

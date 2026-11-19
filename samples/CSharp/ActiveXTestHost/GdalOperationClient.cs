@@ -29,7 +29,7 @@ internal interface IMapWinGISControlGdal
         [MarshalAs(UnmanagedType.BStr)] out string summary,
         [MarshalAs(UnmanagedType.BStr)] out string diagnostics,
         [MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_BSTR)]
-        out string[] warnings);
+        out string[]? warnings);
 }
 
 internal sealed record GdalOperationResult(
@@ -77,7 +77,6 @@ internal static class GdalOperationClient
             TaskCreationOptions.RunContinuationsAsynchronously);
         var progressEvents = new List<GdalProgressNotification>();
         long operationId = 0;
-        long completedOperationId = 0;
 
         GdalProgressEvent onProgress = (id, fraction, message) =>
         {
@@ -89,7 +88,8 @@ internal static class GdalOperationClient
         };
         GdalCompletedEvent onCompleted = id =>
         {
-            completedOperationId = id;
+            // Other operations on the same control also raise this event, so
+            // only the matching completion may resolve this call.
             if (id == operationId)
             {
                 completed.TrySetResult(id);
@@ -136,7 +136,7 @@ internal static class GdalOperationClient
                 control.CancelGdalOperation(operationId);
             }
 
-            await completed.Task.ConfigureAwait(true);
+            long completedOperationId = await completed.Task.ConfigureAwait(true);
             control.EndGdalOperation(
                 operationId,
                 out bool succeeded,
@@ -146,7 +146,7 @@ internal static class GdalOperationClient
                 out string callbackError,
                 out string summary,
                 out string diagnostics,
-                out string[] warnings);
+                out string[]? warnings);
 
             return new GdalOperationResult(
                 operationId,
@@ -159,7 +159,8 @@ internal static class GdalOperationClient
                 callbackError,
                 summary,
                 diagnostics,
-                warnings);
+                // The control returns a null array when there are no warnings.
+                warnings ?? []);
         }
         finally
         {

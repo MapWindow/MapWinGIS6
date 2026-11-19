@@ -212,6 +212,11 @@ namespace mwg
         {
             GdalEnvironment::ClearLastError();
             const OGRErr result = _layer->SetFeature(feature);
+            const GIntBig featureId = feature->GetFID();
+            // The driver may coerce written values (for example truncate a DBF string), so the
+            // in-memory feature no longer reflects storage even when the write succeeds.
+            _cachedFeature.reset();
+            _cachedIndex = -1;
             if (geometryChanged)
             {
                 _extent.reset();
@@ -219,9 +224,6 @@ namespace mwg
             }
             if (result != OGRERR_NONE)
             {
-                const GIntBig featureId = feature->GetFID();
-                _cachedFeature.reset();
-                _cachedIndex = -1;
                 _featureIds.clear();
                 _featureIdsValid = false;
                 _featureCount.reset();
@@ -250,6 +252,8 @@ namespace mwg
                 if (layerName == nullptr || layerName[0] == '\0')
                     throw CoreError("Cannot recompute stored extent for an unnamed layer");
 
+                // The Shapefile and GPKG drivers treat the remainder of this statement as the
+                // literal layer name, so it must not be quoted or escaped.
                 const std::string sql = "RECOMPUTE EXTENT ON " + std::string(layerName);
                 const auto releaseResult = [this](OGRLayer* result)
                 {

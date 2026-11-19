@@ -226,7 +226,8 @@ has no extent or transform of its own.
 
 - **Render scene.** `rendering::CreateMapRenderScene`
   (`mapwingis/rendering/MapRenderScene.h`) copies the polygon geometry of
-  every visible layer into an owned `MapRenderScene`, bottom layer first. Each
+  every visible layer into an immutable, shared per-layer scene in a
+  `MapRenderScene`, bottom layer first. Each
   layer is converted on its own: hidden layers, layers without polygon
   geometry, and layers that fail (for example, non-polygon layers) are listed
   in `skippedLayers` with a reason and do not stop the other layers.
@@ -241,8 +242,8 @@ has no extent or transform of its own.
   assembles it from cached layer scenes on the next call.
   The `AddLayer` overload that accepts a prepared
   vector scene transfers that geometry into the current scene without another
-  traversal. It copies the new geometry into its layer cache before adding
-  the layer. Existing scene storage stays unchanged when it is current.
+  traversal. Its layer cache and the assembled scene share that geometry
+  instead of copying it. Existing scene storage stays unchanged when it is current.
   It assembles a stale scene before adding the new layer.
   Every mutator returns whether the frame may
   have changed, and the host requests a redraw when it does. Edits to source
@@ -302,7 +303,9 @@ viewport. For windowless hosts, `SetObjectRects` supplies the live size.
 `OnDraw` uses a viewport copy sized to the drawing target. Printing, metafile
 output, and scaled draws do not change the live viewport or its pending fit,
 and use temporary frame/staging buffers rather than resizing the interactive
-screen buffers.
+screen buffers. When the target size differs from the live size, the copy is
+fitted to the live visible extent, so the target shows the same map area as
+the screen at the target's own scale.
 If no view exists yet, drawing fits only that copy to the visible map extent.
 Resizing updates the OpenGL viewport and staging buffers without changing
 ownership of map data. A left-button drag pans the shared `MapView` by the
@@ -462,8 +465,10 @@ the map snapshot without rereading visible layers, hidden layers are prepared
 when first shown, and removing or clearing layers drops only the corresponding
 cache entries. InvalidateLayerScene rebuilds one layer after source edits;
 InvalidateScene clears all layer caches. Adding a prepared layer seeds its
-cache directly. The public map scene remains an owning snapshot, so assembly
-copies cached geometry. The cache and snapshot each own coordinates and meshes.
+cache directly. Layer scenes are immutable and shared through
+`std::shared_ptr<const VectorRenderScene>`, so assembling the map snapshot
+shares cached coordinates and meshes instead of copying them; peak memory
+stays at one copy of each layer's geometry.
 When a driver cannot provide a fast extent, scene preparation computes bounds
 during the geometry traversal. It caches those bounds on the vector layer,
 so a later map fit does not scan the layer again.

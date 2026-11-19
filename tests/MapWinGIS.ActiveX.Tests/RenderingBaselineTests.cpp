@@ -400,7 +400,7 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     const std::optional<double> memoryAfterScene = PrivateMiB(memoryError);
     ASSERT_TRUE(memoryAfterScene.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     ASSERT_EQ(scene.layers.size(), 1U);
-    ASSERT_EQ(scene.layers.front().scene.polygons.size(), static_cast<std::size_t>(featureCount));
+    ASSERT_EQ(scene.layers.front().scene->polygons.size(), static_cast<std::size_t>(featureCount));
 
     DibSurface surface(kTargetWidth, kTargetHeight);
     ASSERT_TRUE(surface.IsValid());
@@ -489,9 +489,9 @@ TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)
     std::size_t meshIndexCount = 0;
     for (const rendering::LayerRenderScene& layer : scene.layers)
     {
-        ASSERT_EQ(layer.scene.fillMeshes.size(), layer.scene.polygons.size());
-        polygonCount += layer.scene.polygons.size();
-        for (const std::optional<rendering::TriangleMesh>& mesh : layer.scene.fillMeshes)
+        ASSERT_EQ(layer.scene->fillMeshes.size(), layer.scene->polygons.size());
+        polygonCount += layer.scene->polygons.size();
+        for (const std::optional<rendering::TriangleMesh>& mesh : layer.scene->fillMeshes)
         {
             ASSERT_TRUE(mesh.has_value())
                 << "Every complex baseline polygon must triangulate";

@@ -11,12 +11,14 @@
 #include "mapwingis/rendering/PolygonTriangulation.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
-#include <map>
 #include <memory>
 #include <new>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include <ogrsf_frmts.h>
@@ -89,6 +91,28 @@ namespace mwg::rendering
             return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
         }
 
+        // Exact coordinate equality: triangulation reuses input vertices bit for bit, and
+        // std::hash<double> hashes 0.0 and -0.0 alike, consistent with operator==.
+        struct PointHash
+        {
+            [[nodiscard]] std::size_t operator()(const Point& point) const noexcept
+            {
+                const std::size_t x = std::hash<double>{}(point.x);
+                const std::size_t y = std::hash<double>{}(point.y);
+                constexpr std::size_t mixingConstant =
+                    static_cast<std::size_t>(0x9e3779b97f4a7c15ULL);
+                return x ^ (y + mixingConstant + (x << 6) + (x >> 2));
+            }
+        };
+
+        struct PointEqual
+        {
+            [[nodiscard]] bool operator()(const Point& left, const Point& right) const noexcept
+            {
+                return left.x == right.x && left.y == right.y;
+            }
+        };
+
         /// Deduplicates vertices and assembles consistently wound triangles.
         class MeshBuilder
         {
@@ -115,8 +139,7 @@ namespace mwg::rendering
         private:
             [[nodiscard]] std::uint32_t AddVertex(const Point& point)
             {
-                const auto key = std::make_pair(point.x, point.y);
-                const auto found = _vertexLookup.find(key);
+                const auto found = _vertexLookup.find(point);
                 if (found != _vertexLookup.end())
                 {
                     return found->second;
@@ -130,12 +153,12 @@ namespace mwg::rendering
                 }
                 const auto index = static_cast<std::uint32_t>(_mesh.vertices.size());
                 _mesh.vertices.push_back(point);
-                _vertexLookup.emplace(key, index);
+                _vertexLookup.emplace(point, index);
                 return index;
             }
 
             TriangleMesh _mesh;
-            std::map<std::pair<double, double>, std::uint32_t> _vertexLookup;
+            std::unordered_map<Point, std::uint32_t, PointHash, PointEqual> _vertexLookup;
         };
 
         void AppendTriangle(const OGRPolygon& triangle, MeshBuilder& builder)

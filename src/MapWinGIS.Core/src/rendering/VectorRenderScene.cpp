@@ -6,6 +6,8 @@
  *
  * Reads vector geometries sequentially and copies supported polygon
  * coordinates into owned scene data before releasing each feature.
+ * Unsupported or degenerate parts are skipped and counted rather than
+ * failing the layer.
  */
 #include "mapwingis/rendering/VectorRenderScene.h"
 
@@ -124,6 +126,10 @@ namespace mwg::rendering
 
             void AppendGeometry(const OGRGeometry& geometry)
             {
+                if (geometry.IsEmpty())
+                {
+                    return;
+                }
                 switch (wkbFlatten(geometry.getGeometryType()))
                 {
                 case wkbPolygon:
@@ -156,38 +162,67 @@ namespace mwg::rendering
                     return;
                 }
 
+                case wkbGeometryCollection:
+                {
+                    const auto& collection = static_cast<const OGRGeometryCollection&>(geometry);
+                    for (int index = 0; index < collection.getNumGeometries(); ++index)
+                    {
+                        if (const OGRGeometry* member = collection.getGeometryRef(index))
+                        {
+                            AppendGeometry(*member);
+                        }
+                    }
+                    return;
+                }
+
                 default:
-                    throw CoreError("Vector rendering supports Polygon and MultiPolygon geometries only");
+                    // A polygon layer can still contain stray points or lines; drop them
+                    // rather than failing the whole layer.
+                    ++_scene.skippedGeometryCount;
+                    return;
                 }
             }
 
         private:
-            void AppendRing(const OGRLinearRing* source)
+            [[nodiscard]] static bool IsUsableRing(const OGRLinearRing* ring)
             {
-                if (source == nullptr || source->getNumPoints() < 3)
+                return ring != nullptr && ring->getNumPoints() >= 3;
+            }
+
+            void AppendRing(const OGRLinearRing& source)
+            {
+                for (int index = 0; index < source.getNumPoints(); ++index)
                 {
-                    return;
-                }
-                for (int index = 0; index < source->getNumPoints(); ++index)
-                {
-                    _coordinates.push_back({source->getX(index), source->getY(index)});
+                    _coordinates.push_back({source.getX(index), source.getY(index)});
                 }
                 _ringEnds.push_back(_coordinates.size());
             }
 
             void AppendPolygon(const OGRPolygon& source)
             {
+                if (source.IsEmpty())
+                {
+                    return;
+                }
+                // Without a usable exterior ring, a hole would otherwise become ring 0 and
+                // be filled as if it were the polygon's exterior.
+                const OGRLinearRing* exterior = source.getExteriorRing();
+                if (!IsUsableRing(exterior))
+                {
+                    ++_scene.skippedGeometryCount;
+                    return;
+                }
                 _coordinates.clear();
                 _ringEnds.clear();
-                AppendRing(source.getExteriorRing());
+                AppendRing(*exterior);
                 for (int index = 0; index < source.getNumInteriorRings(); ++index)
                 {
-                    AppendRing(source.getInteriorRing(index));
+                    if (const OGRLinearRing* ring = source.getInteriorRing(index); IsUsableRing(ring))
+                    {
+                        AppendRing(*ring);
+                    }
                 }
-                if (!_ringEnds.empty())
-                {
-                    _scene.polygons.AppendPolygon(_coordinates, _ringEnds);
-                }
+                _scene.polygons.AppendPolygon(_coordinates, _ringEnds);
             }
 
             VectorRenderScene& _scene;
