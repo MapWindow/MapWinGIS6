@@ -6,7 +6,8 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase c
 
 - [x] **Phase 1 – Establish a performance baseline** (PR 1)
   - Added opt-in, thread-safe timings and counters across Core and ActiveX, plus A-D benchmark configurations and Release results in `docs/TESTING.md`.
-  - Limitation: the referenced 10.3 MB shapefile is not stored in the repository; `MWG_RENDERING_BASELINE_DATASET` supports measuring that file when available.
+  - Measured the supplied 10.3 MB, 2,459-feature shapefile with all A-D configurations; results are recorded in the Phase 1 benchmark section below.
+  - Limitation: the measured shapefile is not stored in the repository; `MWG_RENDERING_BASELINE_DATASET` can rerun it when available.
   - Limitation: configuration C records the current OpenGL rejection because outline-only OpenGL rendering is a Phase 2 change.
 - [ ] **Phase 2 – Separate geometry loading from rendering preparation** (PR 2)
 - [ ] **Phase 3 – Implement lazy polygon triangulation** (PR 3)
@@ -112,6 +113,38 @@ Also measure subsequent zoom and pan operations.
 ### Deliverable
 
 A performance report identifying the dominant costs and providing a baseline for future comparisons.
+
+### Baseline results for the supplied 10.3 MB shapefile
+
+Release x64, 1,280 x 720 target, 2,459 source features, and 2,470 polygons:
+
+| Configuration | Open | Scene preparation | First frame | Steady frame | Pan | Zoom |
+|---|---:|---:|---:|---:|---:|---:|
+| A. GDI, triangulation disabled | 2.9 ms | 101.4 ms | 19.2 ms | 18.3 ms | 18.5 ms | 16.6 ms |
+| B. GDI, triangulation enabled | 0.4 ms | 1,948.8 ms | 19.4 ms | 17.7 ms | 18.0 ms | 15.5 ms |
+| C. OpenGL, triangulation disabled | 2.9 ms | 101.4 ms | Rejected | — | — | — |
+| D. OpenGL, triangulation enabled | 0.4 ms | 1,948.8 ms | 162.5 ms | 15.2 ms | 14.7 ms | 15.3 ms |
+
+Configuration C is rejected because the current OpenGL backend requires a
+triangle mesh for every polygon. This is expected to be addressed in Phase 2.
+
+Pipeline detail for triangulation-enabled scene construction:
+
+| Operation | Time |
+|---|---:|
+| OGR feature and geometry reads | 84.3 ms |
+| Internal geometry conversion | 7.3 ms |
+| GEOS geometry validation | 56.3 ms |
+| Polygon triangulation | 1,789.6 ms |
+
+The run generated 586,414 triangles. Geometry submission took 102.1 ms
+across eight OpenGL frames, and framebuffer readback took 3.8 ms across the
+same frames. Triangulation accounted for about 92% of scene preparation.
+The estimated open-to-first-display times were:
+
+- GDI without triangulation: 123.5 ms.
+- GDI with triangulation: 1,968.6 ms.
+- OpenGL with triangulation: 2,111.7 ms.
 
 Do not proceed by simply assuming that GEOS triangulation accounts for the entire delay.
 
