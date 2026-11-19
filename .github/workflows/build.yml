@@ -190,7 +190,7 @@ jobs:
 
   cmake-vs-release-win32:
     needs: vcpkg-deps-win32-release-full
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
     uses: ./.github/workflows/cmake-vs.yml
