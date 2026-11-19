@@ -174,8 +174,23 @@ TEST(PerformanceDiagnosticsDisabled, DoesNotRecordNewMeasurements)
         PerformanceDiagnostics::IncrementCounter(
             PerformanceCounter::FeaturesProcessed);
     }
+    PerformanceDiagnostics::RecordDuration(
+        PerformanceOperation::FrameRender,
+        std::chrono::milliseconds(1));
 
     const PerformanceSnapshot snapshot = PerformanceDiagnostics::Snapshot();
     EXPECT_EQ(snapshot.Timing(PerformanceOperation::SceneBuild).callCount, 0);
+    EXPECT_EQ(snapshot.Timing(PerformanceOperation::FrameRender).callCount, 0);
     EXPECT_EQ(snapshot.Counter(PerformanceCounter::FeaturesProcessed), 0);
+}
+
+TEST_F(PerformanceDiagnosticsTest, RecordsScopeThatStartsWhileEnabled)
+{
+    {
+        const PerformanceScope scope(PerformanceOperation::SceneBuild);
+        PerformanceDiagnostics::SetEnabled(false);
+    }
+
+    const PerformanceSnapshot snapshot = PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(snapshot.Timing(PerformanceOperation::SceneBuild).callCount, 1);
 }

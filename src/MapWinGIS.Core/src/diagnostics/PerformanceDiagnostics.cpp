@@ -41,6 +41,17 @@ namespace mwg::diagnostics
         {
             return static_cast<std::size_t>(counter);
         }
+
+        void RecordDurationUnconditionally(
+            const PerformanceOperation operation,
+            const std::chrono::nanoseconds duration) noexcept
+        {
+            AtomicPerformanceState& state = State();
+            state.callCounts[OperationIndex(operation)].fetch_add(
+                1, std::memory_order_relaxed);
+            state.durations[OperationIndex(operation)].fetch_add(
+                duration.count(), std::memory_order_relaxed);
+        }
     }
 
     double PerformanceTiming::DurationMilliseconds() const noexcept
@@ -120,11 +131,10 @@ namespace mwg::diagnostics
         const PerformanceOperation operation,
         const std::chrono::nanoseconds duration) noexcept
     {
-        AtomicPerformanceState& state = State();
-        state.callCounts[OperationIndex(operation)].fetch_add(
-            1, std::memory_order_relaxed);
-        state.durations[OperationIndex(operation)].fetch_add(
-            duration.count(), std::memory_order_relaxed);
+        if (IsEnabled())
+        {
+            RecordDurationUnconditionally(operation, duration);
+        }
     }
 
     PerformanceScope::PerformanceScope(
@@ -142,7 +152,7 @@ namespace mwg::diagnostics
     {
         if (_enabled)
         {
-            PerformanceDiagnostics::RecordDuration(
+            RecordDurationUnconditionally(
                 _operation,
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - _start));
