@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -27,6 +28,7 @@
 
 #include "mapwingis/core/Error.h"
 #include "mapwingis/diagnostics/PerformanceDiagnostics.h"
+#include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/rendering/PolygonTriangulation.h"
 
 namespace
@@ -240,6 +242,24 @@ namespace
         }
     };
 
+    class ThrowingLogHandlerScope final
+    {
+    public:
+        ThrowingLogHandlerScope()
+        {
+            mwg::GdalEnvironment::SetLogHandler(
+                [](const mwg::LogLevel, const std::string_view)
+                {
+                    throw std::runtime_error("Test GDAL logger failure");
+                });
+        }
+
+        ~ThrowingLogHandlerScope()
+        {
+            mwg::GdalEnvironment::SetLogHandler({});
+        }
+    };
+
     /// Checks the pixels of MakeTwoLayerScene drawn through viewport.
     void ExpectTwoLayerPixels(const HDC surface, const mwg::Viewport& viewport)
     {
@@ -274,14 +294,15 @@ TEST(VectorLayerRenderer, RecordsGdiFrameDurationWhenDiagnosticsAreEnabled)
     EXPECT_GE(frame.durationNanoseconds, 0);
 }
 
-TEST(VectorLayerRenderer, UsesOpenGlForConvexPolygonWhenAvailable)
+TEST(VectorLayerRenderer, UsesOpenGlForLazyConvexPolygonWhenAvailable)
 {
     BitmapSurface surface(120, 100);
     ASSERT_TRUE(surface.IsValid());
     ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
 
     const RECT bounds{0, 0, 120, 100};
-    const mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    Edit(scene.layers.front()).fillMeshes.clear();
     const mwg::Viewport viewport = FitViewport(bounds);
 
     // Only an unavailable OpenGL target may skip; drawing, readback or
@@ -293,6 +314,7 @@ TEST(VectorLayerRenderer, UsesOpenGlForConvexPolygonWhenAvailable)
         GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
     }
     ASSERT_EQ(openGlResult, S_OK);
+    EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), kFill);
     EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
 
@@ -382,6 +404,72 @@ TEST(VectorLayerRenderer, OpenGlRejectsPolygonWithoutFillMesh)
         renderer.GetLastFailureReason(),
         L"The OpenGL backend requires a triangulated fill mesh for "
         L"every polygon; this frame was rendered with GDI.");
+}
+
+TEST(VectorLayerRenderer, OpenGlLazilyTriangulatesAndReusesFillMeshes)
+{
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    Edit(scene.layers.front()).fillMeshes.clear();
+    PerformanceCapture diagnostics;
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    ASSERT_EQ(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::PrepareFillMeshes(
+            renderer,
+            scene),
+        S_OK);
+    ASSERT_EQ(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::PrepareFillMeshes(
+            renderer,
+            scene),
+        S_OK);
+
+    const mwg::diagnostics::PerformanceSnapshot snapshot =
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(
+        snapshot.Timing(
+            mwg::diagnostics::PerformanceOperation::PolygonTriangulation).callCount,
+        1);
+    EXPECT_EQ(
+        snapshot.Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        1);
+    EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+}
+
+TEST(VectorLayerRenderer, OpenGlLazyTriangulationFailurePreservesOutlines)
+{
+    mwg::rendering::MapRenderScene scene = MakeMapScene({{
+        mwg::Extent{-3.0, -3.0, 3.0, 3.0},
+        0,
+        0,
+        {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}}});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    PerformanceCapture diagnostics;
+    ThrowingLogHandlerScope throwingLogHandler;
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    ASSERT_EQ(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::PrepareFillMeshes(
+            renderer,
+            scene),
+        S_FALSE);
+    ASSERT_EQ(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::PrepareFillMeshes(
+            renderer,
+            scene),
+        S_FALSE);
+
+    EXPECT_TRUE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
+            scene,
+            mwg::activex::VectorRenderMode::Outline));
+    const mwg::diagnostics::PerformanceSnapshot snapshot =
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(
+        snapshot.Counter(
+            mwg::diagnostics::PerformanceCounter::TriangulationFailures),
+        1);
 }
 
 TEST(VectorLayerRenderer, OpenGlDrawsOutlinesWithoutFillMeshes)
@@ -676,10 +764,10 @@ TEST(VectorLayerRenderer, OpenGlFillSupportRequiresAMeshForEveryPolygon)
     EXPECT_TRUE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(scene));
 
-    // No meshes at all.
+    // No meshes at all; fill support can prepare them lazily.
     mwg::rendering::MapRenderScene withoutMeshes = MakeConvexPolygonScene();
     Edit(withoutMeshes.layers.front()).fillMeshes.clear();
-    EXPECT_FALSE(
+    EXPECT_TRUE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
             withoutMeshes));
     EXPECT_TRUE(

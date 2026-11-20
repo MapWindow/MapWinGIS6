@@ -13,7 +13,11 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase c
   - Normal scene construction now preserves source rings and bounds without triangulating polygons; fill meshes remain available through explicit preparation.
   - GDI fills directly from source rings, and OpenGL can draw mesh-free polygon outlines while fill requests retain the existing mesh requirement and GDI fallback.
   - Limitation: OpenGL fill meshes are prepared explicitly rather than generated lazily; lazy triangulation and cache reuse remain Phase 3 and Phase 4 work.
-- [ ] **Phase 3 – Implement lazy polygon triangulation** (PR 3)
+- [x] **Phase 3 – Implement lazy polygon triangulation** (PR 3)
+  - OpenGL fill draws now generate missing polygon meshes on demand and reuse them for later draws of the same immutable scene, including temporary scaled draws.
+  - Explicitly prepared meshes remain preferred; outline and GDI paths continue to use source rings without requiring fill meshes.
+  - Triangulation failures, including exceptions from GDAL logging callbacks, return to the coordinator for GDI fallback without preventing outline rendering.
+  - Limitation: triangulation remains synchronous, and broader cache ownership, memory limits, and invalidation rules remain Phase 4 work.
 - [ ] **Phase 4 – Add intelligent caching and invalidation** (PR 4)
 - [ ] **Phase 5 – Introduce viewport-aware geometry processing** (PR 5)
 - [ ] **Phase 6 – Optimize OpenGL rendering and data transfer** (PR 6)
@@ -524,6 +528,7 @@ Each PR must:
 5. Avoid unrelated refactoring.
 6. Be independently reviewable.
 7. Include a clear description of limitations and remaining work.
+8. The PR title should reflect the title of the plan combined with the title of the phase.
 
 Do not wait for all phases to be completed before creating PRs. Each phase should result in a separate PR against the `development` branch, following the repository's existing contribution workflow.
 

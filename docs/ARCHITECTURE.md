@@ -331,10 +331,12 @@ rings and has no mesh. `ViewTransform` captures the `Viewport` once
 per frame so both backends transform every vertex of every layer with the
 same arithmetic as `Viewport::MapToScreen`; GDI draws a screen position in
 the pixel that contains it (`ToPixel`). One backend draws the whole frame.
-The coordinator tries the OpenGL backend when every polygon of every layer
-has a triangulated fill mesh for a fill draw. OpenGL outline mode draws the
-source rings without requiring fill meshes. GDI checks each layer before
-drawing it; a layer with non-finite or out-of-range device coordinates is
+For an OpenGL fill draw, the backend accepts a mesh-free source scene and
+triangulates each polygon that has no prepared fill mesh.
+The generated meshes remain associated with that immutable scene and are
+reused by later draws; they do not mutate the Core scene. OpenGL outline
+mode draws the source rings without requiring fill meshes. GDI checks each
+layer before drawing it; a layer with non-finite or out-of-range device coordinates is
 skipped and reported (`GetFailedLayers`, `RenderingStatus`) while the other
 layers are still drawn.
 OpenGL uses a context created on a hidden, never-presented window, draws with
@@ -344,16 +346,18 @@ buffer before copying them to the host device context.
 BGRA stores blue, green, red, and alpha bytes in that order.
 The screen renderer retains its staging allocation and GPU framebuffer.
 Alternate-size draws use a temporary OpenGL renderer that releases both after
-the draw and leaves the screen resources unchanged.
+the draw and shares the screen renderer's lazy fill meshes, leaving the screen
+resources unchanged.
 A separate vertex buffer is reused across polygons within each layer.
 This avoids a fresh allocation for every polygon's transformed triangle vertices.
 Rendering into a framebuffer object avoids undefined pixels from window
 pixel-ownership rules. Presentation still copies pixels through GDI.
 Interior rings and concave boundaries draw identically in both backends
-because both consume the same scene. A fill request without a usable mesh,
-missing framebuffer-object support, initialization failures, and drawing
-failures use the GDI backend. GDI fills and outlines the original rings, so
-a self-intersecting ring that GEOS cannot triangulate can still be displayed.
+because both consume the same scene. A failed lazy triangulation, an unusable
+explicitly prepared mesh, missing framebuffer-object support, initialization
+failures, and drawing failures use the GDI backend. GDI fills and outlines
+the original rings, so a self-intersecting ring that GEOS cannot triangulate
+can still be displayed.
 The GDI backend draws the original rings of the whole supported polygon scene,
 including its interior rings and concave boundaries. Both backends draw source coordinates without reprojection,
 and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
@@ -487,14 +491,14 @@ and `Ring` types remain available for caller-created triangulation input.
 There is no tiling, paging, or clipping to the visible extent. GDI skips a
 layer whose device coordinates exceed its range. It clips drawing to the
 requested target rectangle and the host's existing clip region, then restores
-the device context. Fill triangulation runs only when scene preparation
-explicitly requests it; view changes (resize, zoom, pan) and redraws reuse
-the retained meshes. The opt-in
+the device context. Fill triangulation runs when scene preparation explicitly
+requests it or when OpenGL first needs a missing mesh. View changes (resize,
+zoom, pan) and redraws reuse the retained meshes. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation, mesh storage, and backend frame costs on both a
 convex grid and a complex mix of concave, holed multipart, and many-vertex
-polygons. OpenGL fills every polygon from its retained triangle mesh and
-copies each frame through CPU memory. Its reusable CPU
+polygons. OpenGL fills every polygon from a supplied or lazily generated
+triangle mesh and copies each frame through CPU memory. Its reusable CPU
 staging buffer is limited to 64 MiB per frame; target dimensions are also
 limited by the detected framebuffer and viewport capabilities. GDI is the supported
 Windows CPU fallback; Core has no independent platform-neutral renderer.
