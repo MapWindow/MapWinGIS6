@@ -213,7 +213,8 @@ namespace mwg::activex
         const RECT& bounds,
         const rendering::MapRenderScene& scene,
         const Viewport& viewport,
-        const bool) noexcept
+        const bool,
+        const VectorRenderMode renderMode) noexcept
     {
         const diagnostics::PerformanceScope scope(
             diagnostics::PerformanceOperation::FrameRender);
@@ -252,14 +253,18 @@ namespace mwg::activex
             return S_OK;
         }
 
-        const ScopedGdiObject brush(CreateSolidBrush(kFillColor));
+        const ScopedGdiObject fillBrush(
+            renderMode == VectorRenderMode::Fill ? CreateSolidBrush(kFillColor) : nullptr);
+        const HGDIOBJ brush = renderMode == VectorRenderMode::Fill
+            ? fillBrush.Get()
+            : GetStockObject(NULL_BRUSH);
         const ScopedGdiObject pen(CreatePen(PS_SOLID, 1, kOutlineColor));
-        if (brush.Get() == nullptr || pen.Get() == nullptr)
+        if (brush == nullptr || pen.Get() == nullptr)
         {
             return E_OUTOFMEMORY;
         }
 
-        const ScopedSelection selectedBrush(deviceContext, brush.Get());
+        const ScopedSelection selectedBrush(deviceContext, brush);
         const ScopedSelection selectedPen(deviceContext, pen.Get());
         if (!selectedBrush.IsValid() || !selectedPen.IsValid() ||
             SetPolyFillMode(deviceContext, ALTERNATE) == 0)

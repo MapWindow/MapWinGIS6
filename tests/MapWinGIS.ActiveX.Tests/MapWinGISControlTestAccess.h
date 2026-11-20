@@ -46,6 +46,21 @@ namespace mwg::activex::testing
             return control._renderer._openGlRenderer._pixelBuffer.capacity();
         }
 
+        static LayerId AddLayerWithFillMeshes(
+            CMapWinGISControl& control,
+            std::shared_ptr<VectorDataset> dataset)
+        {
+            auto scene = mwg::rendering::CreateVectorRenderScene(
+                *dataset,
+                mwg::rendering::VectorRenderSceneOptions{
+                    .prepareFillMeshes = true});
+            const auto featureCount = scene.sourceFeatureCount;
+            const auto id = control._view.AddLayer(std::move(dataset), std::move(scene));
+            control._featureCount += featureCount;
+            control._layerCacheValid = false;
+            return id;
+        }
+
         [[nodiscard]] static double Resolution(const CMapWinGISControl& control)
         {
             return control._view.GetViewport().Resolution().value();

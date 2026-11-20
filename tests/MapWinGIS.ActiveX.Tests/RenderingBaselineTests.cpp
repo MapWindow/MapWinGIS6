@@ -515,10 +515,19 @@ TEST_F(RenderingBaseline, MeasuresTriangulationDisabledCosts)
 
     activex::OpenGlVectorLayerRenderer openGl;
     start = Clock::now();
-    const HRESULT openGlResult = openGl.Draw(surface.Get(), bounds, scene, viewport);
+    const HRESULT openGlResult = openGl.Draw(
+        surface.Get(),
+        bounds,
+        scene,
+        viewport,
+        true,
+        activex::VectorRenderMode::Outline);
     const double openGlMs = ElapsedMilliseconds(start);
-    EXPECT_EQ(openGlResult, S_FALSE)
-        << "The current OpenGL backend must reject scenes without fill meshes.";
+    EXPECT_TRUE(openGlResult == S_OK || openGlResult == S_FALSE);
+    if (openGlResult == S_FALSE)
+    {
+        std::wcout << L"  OpenGL unavailable: " << openGl.GetLastFailureReason() << L'\n';
+    }
 
     std::cout << "Triangulation-disabled baseline: " << measuredFeatureCount
               << " source features (" << scene.layers.front().scene->polygons.size()
@@ -532,7 +541,7 @@ TEST_F(RenderingBaseline, MeasuresTriangulationDisabledCosts)
         "ms");
     Report("GDI pan frame", gdiPanMs, "ms");
     Report("GDI zoom frame", gdiZoomMs, "ms");
-    Report("OpenGL no-mesh rejection", openGlMs, "ms");
+    Report("OpenGL outline-only first frame", openGlMs, "ms");
     ReportPerformanceDiagnostics();
 }
 
@@ -559,7 +568,9 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     const double openMs = ElapsedMilliseconds(start);
 
     start = Clock::now();
-    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(map);
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(
+        map,
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
     const double sceneMs = ElapsedMilliseconds(start);
     const std::optional<double> memoryAfterScene = PrivateMiB(memoryError);
     ASSERT_TRUE(memoryAfterScene.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
@@ -678,7 +689,9 @@ TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)
     const double openMs = ElapsedMilliseconds(start);
 
     start = Clock::now();
-    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(map);
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(
+        map,
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
     const double sceneMs = ElapsedMilliseconds(start);
     const std::optional<double> memoryAfterScene = PrivateMiB(memoryError);
     ASSERT_TRUE(memoryAfterScene.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;

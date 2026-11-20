@@ -67,8 +67,10 @@ The control exposes a deliberately small v6 automation API. It does not expose
 the broad MapWinGIS 5 map, layer, shape, event, or editing surface. The current
 render scene is built in source coordinates, without reprojection; backend
 support differs: GDI draws the original rings with an alternate fill rule,
-while OpenGL fills the Core-prepared triangulated meshes and declines scenes
-whose polygons lack a usable mesh so the coordinator falls back to GDI.
+while OpenGL fill draws require explicitly prepared meshes. Normal Core scene
+creation is mesh-free; fill operations without usable meshes fall back to
+GDI, which fills the original rings. The OpenGL renderer also has an
+outline mode that draws those rings without triangulation.
 Consult the current implementation and architecture documentation before
 assuming a capability or compatibility guarantee.
 

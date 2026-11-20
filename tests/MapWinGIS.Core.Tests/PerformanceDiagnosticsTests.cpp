@@ -79,7 +79,7 @@ TEST_F(PerformanceDiagnosticsTest, AggregatesScopesAndCountersFromConcurrentThre
         kThreadCount * kIncrementsPerThread);
 }
 
-TEST_F(PerformanceDiagnosticsTest, RecordsDatasetAndScenePipelineStages)
+TEST_F(PerformanceDiagnosticsTest, RecordsRequestedFillPreparationStages)
 {
     TempDirectory directory;
     constexpr std::array<Extent, 1> rectangles{{{0, 0, 10, 10}}};
@@ -89,7 +89,9 @@ TEST_F(PerformanceDiagnosticsTest, RecordsDatasetAndScenePipelineStages)
     PerformanceDiagnostics::Reset();
     const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
     const rendering::VectorRenderScene scene =
-        rendering::CreateVectorRenderScene(*dataset);
+        rendering::CreateVectorRenderScene(
+            *dataset,
+            rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
 
     ASSERT_EQ(scene.polygons.size(), 1U);
     ASSERT_EQ(scene.fillMeshes.size(), 1U);
@@ -107,7 +109,7 @@ TEST_F(PerformanceDiagnosticsTest, RecordsDatasetAndScenePipelineStages)
     EXPECT_GT(snapshot.Counter(PerformanceCounter::TrianglesGenerated), 0);
 }
 
-TEST_F(PerformanceDiagnosticsTest, CanPrepareScenesWithoutFillMeshes)
+TEST_F(PerformanceDiagnosticsTest, DoesNotTriangulateScenesByDefault)
 {
     TempDirectory directory;
     constexpr std::array<Extent, 1> rectangles{{{0, 0, 10, 10}}};
@@ -117,9 +119,7 @@ TEST_F(PerformanceDiagnosticsTest, CanPrepareScenesWithoutFillMeshes)
 
     PerformanceDiagnostics::Reset();
     const rendering::VectorRenderScene scene =
-        rendering::CreateVectorRenderScene(
-            *dataset,
-            rendering::VectorRenderSceneOptions{.prepareFillMeshes = false});
+        rendering::CreateVectorRenderScene(*dataset);
 
     EXPECT_EQ(scene.polygons.size(), 1U);
     EXPECT_TRUE(scene.fillMeshes.empty());

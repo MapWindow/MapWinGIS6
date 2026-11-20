@@ -469,7 +469,9 @@ TEST(PolygonTriangulation, SceneMeshesAlignWithPolygons)
     const auto dataset =
         VectorDataset::Open(MakeRectanglesDataset(directory.Path(), "rects.gpkg", rectangles));
 
-    const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(dataset->Layer(0));
+    const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(
+        dataset->Layer(0),
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
 
     ASSERT_EQ(scene.polygons.size(), rectangles.size());
     ASSERT_EQ(scene.fillMeshes.size(), scene.polygons.size());
@@ -497,7 +499,9 @@ TEST(PolygonTriangulation, SceneTriangulatesMultipartGeometryWithHole)
         "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 0 0)), "
         "((10 10, 14 10, 14 14, 10 14, 10 10), (11 11, 12 11, 12 12, 11 12, 11 11)))"));
 
-    const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(dataset->Layer(0));
+    const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(
+        dataset->Layer(0),
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
 
     ASSERT_EQ(scene.polygons.size(), 2u);
     ASSERT_EQ(scene.fillMeshes.size(), 2u);
@@ -519,7 +523,9 @@ TEST(PolygonTriangulation, FailedTriangulationKeepsOriginalRings)
         wkbPolygon,
         "POLYGON ((0 0, 2 2, 2 0, 0 2, 0 0))"));
 
-    const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(dataset->Layer(0));
+    const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(
+        dataset->Layer(0),
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
 
     ASSERT_EQ(scene.polygons.size(), 1u);
     ASSERT_EQ(scene.fillMeshes.size(), 1u);

@@ -384,6 +384,94 @@ TEST(VectorLayerRenderer, OpenGlRejectsPolygonWithoutFillMesh)
         L"every polygon; this frame was rendered with GDI.");
 }
 
+TEST(VectorLayerRenderer, OpenGlDrawsOutlinesWithoutFillMeshes)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    Edit(scene.layers.front()).fillMeshes.clear();
+    const mwg::Viewport viewport = FitViewport(bounds);
+
+    EXPECT_TRUE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
+            scene,
+            mwg::activex::VectorRenderMode::Outline));
+
+    BitmapSurface probeSurface(120, 100);
+    ASSERT_TRUE(probeSurface.IsValid());
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult = availabilityProbe.Draw(
+        probeSurface.Get(),
+        bounds,
+        MakeConvexPolygonScene(),
+        viewport);
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT result = renderer.Draw(
+        surface.Get(),
+        bounds,
+        scene,
+        viewport,
+        true,
+        mwg::activex::VectorRenderMode::Outline);
+    ASSERT_EQ(result, S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 5.0, 5.0), GetSysColor(COLOR_WINDOW));
+
+    std::size_t outlinePixels = 0;
+    for (int y = 0; y < bounds.bottom; ++y)
+    {
+        for (int x = 0; x < bounds.right; ++x)
+        {
+            outlinePixels +=
+                GetPixel(surface.Get(), x, y) == RGB(24, 58, 82);
+        }
+    }
+    EXPECT_GT(outlinePixels, 0U);
+}
+
+TEST(VectorLayerRenderer, GdiDrawsOutlinesWithoutFillMeshes)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    Edit(scene.layers.front()).fillMeshes.clear();
+    const mwg::Viewport viewport = FitViewport(bounds);
+
+    mwg::activex::GdiVectorLayerRenderer renderer;
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            bounds,
+            scene,
+            viewport,
+            true,
+            mwg::activex::VectorRenderMode::Outline),
+        S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 5.0, 5.0), GetSysColor(COLOR_WINDOW));
+
+    std::size_t outlinePixels = 0;
+    for (int y = 0; y < bounds.bottom; ++y)
+    {
+        for (int x = 0; x < bounds.right; ++x)
+        {
+            outlinePixels +=
+                GetPixel(surface.Get(), x, y) == RGB(24, 58, 82);
+        }
+    }
+    EXPECT_GT(outlinePixels, 0U);
+}
+
 TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
 {
     BitmapSurface surface(120, 100);
@@ -582,7 +670,7 @@ TEST(VectorLayerRenderer, GdiFallbackRendersConcaveHoledPolygonFromRings)
     EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
 }
 
-TEST(VectorLayerRenderer, OpenGlSupportRequiresAMeshForEveryPolygon)
+TEST(VectorLayerRenderer, OpenGlFillSupportRequiresAMeshForEveryPolygon)
 {
     const mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
     EXPECT_TRUE(
@@ -594,12 +682,20 @@ TEST(VectorLayerRenderer, OpenGlSupportRequiresAMeshForEveryPolygon)
     EXPECT_FALSE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
             withoutMeshes));
+    EXPECT_TRUE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
+            withoutMeshes,
+            mwg::activex::VectorRenderMode::Outline));
 
     // A triangulation failure for one polygon rejects the whole frame.
     mwg::rendering::MapRenderScene nullMesh = MakeConvexPolygonScene();
     Edit(nullMesh.layers.front()).fillMeshes.front().reset();
     EXPECT_FALSE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(nullMesh));
+    EXPECT_TRUE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
+            nullMesh,
+            mwg::activex::VectorRenderMode::Outline));
 
     // Non-finite coordinates stay unsupported regardless of the mesh.
     mwg::rendering::MapRenderScene nonFinite = MakeConvexPolygonScene();
@@ -607,6 +703,10 @@ TEST(VectorLayerRenderer, OpenGlSupportRequiresAMeshForEveryPolygon)
         std::numeric_limits<double>::infinity();
     EXPECT_FALSE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(nonFinite));
+    EXPECT_FALSE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
+            nonFinite,
+            mwg::activex::VectorRenderMode::Outline));
 }
 
 TEST(VectorLayerRenderer, OpenGlSupportsConcaveMultipartAndHoledScenes)
@@ -633,6 +733,10 @@ TEST(VectorLayerRenderer, OpenGlSupportsConcaveMultipartAndHoledScenes)
     Edit(broken.layers.front()).fillMeshes.front()->indices.resize(4);
     EXPECT_FALSE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(broken));
+    EXPECT_TRUE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
+            broken,
+            mwg::activex::VectorRenderMode::Outline));
 }
 
 TEST(VectorLayerRenderer, OpenGlRendersLShapedPolygon)

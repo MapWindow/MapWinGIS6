@@ -2,16 +2,15 @@
 
 /**
  * @file OpenGlVectorLayerRenderer.cpp
- * @brief Renders triangulated polygon scenes with WGL and copies pixels to GDI.
+ * @brief Renders polygon fills or outlines with WGL and copies pixels to GDI.
  *
  * Owns one reusable OpenGL context and draws into a framebuffer object so
  * pixel readback is not subject to window pixel-ownership rules. Polygon
- * fills use the indexed triangle meshes prepared by the Core render scene;
- * outlines follow the original rings. Each polygon is filled and outlined
- * before the next one is drawn, matching the GDI backend's painter order.
- * Scenes with polygons that lack a
- * usable mesh, or systems without framebuffer objects, return S_FALSE so
- * the coordinator can use its GDI backend.
+ * fills use indexed triangle meshes prepared explicitly by Core; outlines
+ * follow the original rings and do not require meshes. Each polygon is drawn
+ * completely before the next one, matching the GDI backend's painter order.
+ * Fill scenes with polygons that lack a usable mesh, or systems without
+ * framebuffer objects, return S_FALSE so the coordinator can use GDI.
  */
 #include "OpenGlVectorLayerRenderer.h"
 
@@ -171,12 +170,11 @@ namespace mwg::activex
             return true;
         }
 
-        /// Returns true when every polygon of the scene has a usable
-        /// triangulated fill mesh and finite coordinates. Meshes are
-        /// prepared once when the Core scene is created; a polygon without
-        /// one cannot be filled correctly, so the whole frame is reported
-        /// as unsupported and the coordinator uses GDI.
-        [[nodiscard]] bool IsSupported(const rendering::MapRenderScene& scene) noexcept
+        /// Returns true when the scene has finite ring coordinates and, in
+        /// fill mode, one usable mesh per polygon.
+        [[nodiscard]] bool IsSupported(
+            const rendering::MapRenderScene& scene,
+            const VectorRenderMode renderMode) noexcept
         {
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
@@ -185,18 +183,24 @@ namespace mwg::activex
                     return false;
                 }
                 const rendering::VectorRenderScene& vectorScene = *layer.scene;
-                if (vectorScene.fillMeshes.size() != vectorScene.polygons.size())
+                if (renderMode == VectorRenderMode::Fill &&
+                    vectorScene.fillMeshes.size() != vectorScene.polygons.size())
                 {
                     return false;
                 }
 
-                for (std::size_t index = 0; index < vectorScene.polygons.size(); ++index)
+                if (renderMode == VectorRenderMode::Fill)
                 {
-                    const std::optional<rendering::TriangleMesh>& mesh =
-                        vectorScene.fillMeshes[index];
-                    if (!mesh.has_value() || !IsMeshUsable(*mesh))
+                    for (std::size_t index = 0;
+                         index < vectorScene.polygons.size();
+                         ++index)
                     {
-                        return false;
+                        const std::optional<rendering::TriangleMesh>& mesh =
+                            vectorScene.fillMeshes[index];
+                        if (!mesh.has_value() || !IsMeshUsable(*mesh))
+                        {
+                            return false;
+                        }
                     }
                 }
                 for (const rendering::Point& point : vectorScene.polygons.Coordinates())
@@ -285,33 +289,42 @@ namespace mwg::activex
             }
         }
 
-        /// Draws one layer polygon by polygon, filling each polygon from its
-        /// triangulated mesh and outlining its rings before advancing to the
-        /// next one, so overlapping polygons keep the same painter order as
-        /// the GDI backend.
+        /// Draws one layer polygon by polygon. Fill mode uses prepared meshes;
+        /// both modes outline the original rings. Overlapping polygons retain
+        /// the same painter order as the GDI backend.
         [[nodiscard]] HRESULT DrawLayer(
             const rendering::VectorRenderScene& scene,
-            const ViewTransform& transform) noexcept
+            const ViewTransform& transform,
+            const VectorRenderMode renderMode) noexcept
         {
             const diagnostics::PerformanceScope submissionScope(
                 diagnostics::PerformanceOperation::OpenGlGeometrySubmission);
-            glEnableClientState(GL_VERTEX_ARRAY);
+            if (renderMode == VectorRenderMode::Fill)
+            {
+                glEnableClientState(GL_VERTEX_ARRAY);
+            }
             std::vector<GLdouble> deviceVertices;
             for (std::size_t index = 0; index < scene.polygons.size(); ++index)
             {
-                glColor3ub(61, 122, 169);
-                const HRESULT fillResult =
-                    DrawPolygonFill(*scene.fillMeshes[index], transform, deviceVertices);
-                if (FAILED(fillResult))
+                if (renderMode == VectorRenderMode::Fill)
                 {
-                    glDisableClientState(GL_VERTEX_ARRAY);
-                    return fillResult;
+                    glColor3ub(61, 122, 169);
+                    const HRESULT fillResult =
+                        DrawPolygonFill(*scene.fillMeshes[index], transform, deviceVertices);
+                    if (FAILED(fillResult))
+                    {
+                        glDisableClientState(GL_VERTEX_ARRAY);
+                        return fillResult;
+                    }
                 }
 
                 glColor3ub(24, 58, 82);
                 DrawPolygonOutlines(scene.polygons[index], transform);
             }
-            glDisableClientState(GL_VERTEX_ARRAY);
+            if (renderMode == VectorRenderMode::Fill)
+            {
+                glDisableClientState(GL_VERTEX_ARRAY);
+            }
             return S_OK;
         }
 
@@ -329,9 +342,10 @@ namespace mwg::activex
     OpenGlVectorLayerRenderer::OpenGlVectorLayerRenderer() noexcept = default;
 
     bool OpenGlVectorLayerRenderer::IsSceneSupported(
-        const rendering::MapRenderScene& scene) noexcept
+        const rendering::MapRenderScene& scene,
+        const VectorRenderMode renderMode) noexcept
     {
-        return IsSupported(scene);
+        return IsSupported(scene, renderMode);
     }
 
     OpenGlVectorLayerRenderer::~OpenGlVectorLayerRenderer()
@@ -587,7 +601,8 @@ namespace mwg::activex
         const HDC deviceContext,
         const RECT& bounds,
         const rendering::MapRenderScene& scene,
-        const Viewport& viewport) noexcept
+        const Viewport& viewport,
+        const VectorRenderMode renderMode) noexcept
     {
         if (deviceContext == nullptr)
         {
@@ -602,11 +617,13 @@ namespace mwg::activex
             return {E_INVALIDARG, std::nullopt};
         }
 
-        if (!IsSupported(scene))
+        if (!IsSupported(scene, renderMode))
         {
-            _lastFailureReason =
-                L"The OpenGL backend requires a triangulated fill mesh for "
-                L"every polygon; this frame was rendered with GDI.";
+            _lastFailureReason = renderMode == VectorRenderMode::Fill
+                ? L"The OpenGL backend requires a triangulated fill mesh for "
+                  L"every polygon; this frame was rendered with GDI."
+                : L"The OpenGL backend requires finite polygon coordinates for "
+                  L"outline rendering; this frame was rendered with GDI.";
             return {S_FALSE, std::nullopt};
         }
 
@@ -664,7 +681,8 @@ namespace mwg::activex
     HRESULT OpenGlVectorLayerRenderer::RenderScene(
         const rendering::MapRenderScene& scene,
         const Viewport& viewport,
-        const Target& target) noexcept
+        const Target& target,
+        const VectorRenderMode renderMode) noexcept
     {
         const auto transform = ViewTransform::Create(viewport);
         if (!transform.has_value())
@@ -722,7 +740,8 @@ namespace mwg::activex
         for (const rendering::LayerRenderScene& layer : scene.layers)
         {
             // IsSupported above rejected null layer scenes.
-            const HRESULT layerResult = DrawLayer(*layer.scene, *transform);
+            const HRESULT layerResult =
+                DrawLayer(*layer.scene, *transform, renderMode);
             if (FAILED(layerResult))
             {
                 _lastFailureReason = L"OpenGL could not allocate its vertex buffers.";
@@ -830,7 +849,8 @@ namespace mwg::activex
         const RECT& bounds,
         const rendering::MapRenderScene& scene,
         const Viewport& viewport,
-        const bool retainStagingBuffer) noexcept
+        const bool retainStagingBuffer,
+        const VectorRenderMode renderMode) noexcept
     {
         if (!retainStagingBuffer)
         {
@@ -844,7 +864,13 @@ namespace mwg::activex
             temporaryRenderer._retryTargetHeight = _retryTargetHeight;
             temporaryRenderer._initializationRetryDrawsRemaining =
                 _initializationRetryDrawsRemaining;
-            const HRESULT result = temporaryRenderer.Draw(deviceContext, bounds, scene, viewport);
+            const HRESULT result = temporaryRenderer.Draw(
+                deviceContext,
+                bounds,
+                scene,
+                viewport,
+                true,
+                renderMode);
             _lastFailureReason = temporaryRenderer.GetLastFailureReason();
             _initializationFailed = temporaryRenderer._initializationFailed;
             _initializationFailureReason = temporaryRenderer._initializationFailureReason;
@@ -858,7 +884,7 @@ namespace mwg::activex
             diagnostics::PerformanceOperation::FrameRender);
         _lastFailureReason = L"OpenGL did not render this frame.";
         const TargetValidation validation =
-            ValidateTarget(deviceContext, bounds, scene, viewport);
+            ValidateTarget(deviceContext, bounds, scene, viewport, renderMode);
         if (!validation.target.has_value())
         {
             return validation.result;
@@ -921,7 +947,8 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        const HRESULT renderResult = RenderScene(scene, viewport, target);
+        const HRESULT renderResult =
+            RenderScene(scene, viewport, target, renderMode);
         if (FAILED(renderResult) || renderResult == S_FALSE)
         {
             return renderResult;

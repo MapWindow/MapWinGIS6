@@ -2,7 +2,7 @@
 
 /**
  * @file OpenGlVectorLayerRenderer.h
- * @brief Declares the WGL-backed polygon scene renderer.
+ * @brief Declares the WGL-backed polygon fill and outline renderer.
  *
  * The backend owns a reusable OpenGL context, created on a hidden window that
  * is never presented, and renders into a framebuffer object before copying
@@ -52,14 +52,15 @@ namespace mwg::activex
             int maximumHeight) noexcept;
 
         /**
-         * @brief Draws a scene of triangulated polygons.
+         * @brief Draws polygon fills or outlines through OpenGL.
          *
-         * Fills every polygon from the Core-prepared triangle mesh and draws
-         * its outlines from the original rings before advancing to the next
-         * polygon, matching the GDI backend's painter order within a layer.
+         * Fill mode uses a Core-prepared triangle mesh for each polygon and
+         * draws boundaries from the original rings. Outline mode draws the
+         * original rings without requiring fill meshes. Polygons retain the
+         * GDI backend's painter order within a layer.
          * Draws all layers into one frame, bottom first. Returns S_FALSE
-         * without drawing when any polygon lacks a usable fill mesh or when
-         * no OpenGL context with framebuffer-object support is available, so
+         * without drawing when fill mode lacks a usable mesh or when no
+         * OpenGL context with framebuffer-object support is available, so
          * callers can fall back to another backend for the whole frame.
          * When retainStagingBuffer is false, a temporary renderer owns the
          * draw's CPU and GPU buffers, leaving the screen resources unchanged.
@@ -69,7 +70,8 @@ namespace mwg::activex
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
-            bool retainStagingBuffer = true) noexcept override;
+            bool retainStagingBuffer = true,
+            VectorRenderMode renderMode = VectorRenderMode::Fill) noexcept override;
 
         [[nodiscard]] std::wstring_view GetLastFailureReason() const noexcept
         {
@@ -80,11 +82,12 @@ namespace mwg::activex
         friend class testing::OpenGlVectorLayerRendererTestAccess;
         friend class testing::MapWinGISControlTestAccess;
 
-        /// True when every polygon of the scene has a usable triangulated
-        /// fill mesh and finite coordinates. Exposed for tests so geometry
-        /// support decisions can be checked without an OpenGL context.
+        /// True when the scene can be drawn in the requested mode. Outline
+        /// mode needs finite ring coordinates; fill mode additionally needs
+        /// a usable mesh for every polygon. Exposed for tests.
         [[nodiscard]] static bool IsSceneSupported(
-            const rendering::MapRenderScene& scene) noexcept;
+            const rendering::MapRenderScene& scene,
+            VectorRenderMode renderMode) noexcept;
 
         void SimulateContextLoss() noexcept;
 
@@ -110,12 +113,14 @@ namespace mwg::activex
             HDC deviceContext,
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
-            const Viewport& viewport) noexcept;
+            const Viewport& viewport,
+            VectorRenderMode renderMode) noexcept;
         [[nodiscard]] bool EnsureStaging(std::size_t stagingBytes) noexcept;
         [[nodiscard]] HRESULT RenderScene(
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
-            const Target& target) noexcept;
+            const Target& target,
+            VectorRenderMode renderMode) noexcept;
         [[nodiscard]] HRESULT CopyToDeviceContext(
             HDC deviceContext,
             const RECT& bounds,
