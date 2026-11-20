@@ -46,6 +46,12 @@ namespace mwg::activex::testing
             return control._renderer._openGlRenderer._pixelBuffer.capacity();
         }
 
+        [[nodiscard]] static std::size_t FillMeshCacheSize(
+            const CMapWinGISControl& control) noexcept
+        {
+            return control._renderer._openGlRenderer.FillMeshCacheSize();
+        }
+
         static LayerId AddLayerWithFillMeshes(
             CMapWinGISControl& control,
             std::shared_ptr<VectorDataset> dataset)

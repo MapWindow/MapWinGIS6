@@ -242,19 +242,15 @@ namespace
         }
     };
 
-    class ThrowingLogHandlerScope final
+    class LogHandlerScope final
     {
     public:
-        ThrowingLogHandlerScope()
+        explicit LogHandlerScope(mwg::LogHandler handler)
         {
-            mwg::GdalEnvironment::SetLogHandler(
-                [](const mwg::LogLevel, const std::string_view)
-                {
-                    throw std::runtime_error("Test GDAL logger failure");
-                });
+            mwg::GdalEnvironment::SetLogHandler(std::move(handler));
         }
 
-        ~ThrowingLogHandlerScope()
+        ~LogHandlerScope()
         {
             mwg::GdalEnvironment::SetLogHandler({});
         }
@@ -269,6 +265,22 @@ namespace
         EXPECT_EQ(MapPixel(surface, viewport, 5.0, 2.5), background) << "gap";
         EXPECT_EQ(MapPixel(surface, viewport, 1.0, 4.0), background) << "above first layer";
         EXPECT_EQ(MapPixel(surface, viewport, 9.0, 1.0), background) << "below second layer";
+    }
+
+    [[nodiscard]] std::size_t CountPixels(
+        const HDC surface,
+        const RECT& bounds,
+        const COLORREF color)
+    {
+        std::size_t count = 0;
+        for (int y = bounds.top; y < bounds.bottom; ++y)
+        {
+            for (int x = bounds.left; x < bounds.right; ++x)
+            {
+                count += GetPixel(surface, x, y) == color;
+            }
+        }
+        return count;
     }
 }
 
@@ -305,14 +317,23 @@ TEST(VectorLayerRenderer, UsesOpenGlForLazyConvexPolygonWhenAvailable)
     Edit(scene.layers.front()).fillMeshes.clear();
     const mwg::Viewport viewport = FitViewport(bounds);
 
-    // Only an unavailable OpenGL target may skip; drawing, readback or
-    // presentation failures in the backend must fail the test.
-    mwg::activex::OpenGlVectorLayerRenderer openGlRenderer;
-    const HRESULT openGlResult = openGlRenderer.Draw(surface.Get(), bounds, scene, viewport);
-    if (openGlResult == S_FALSE)
+    BitmapSurface probeSurface(120, 100);
+    ASSERT_TRUE(probeSurface.IsValid());
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult =
+        availabilityProbe.Draw(
+            probeSurface.Get(),
+            bounds,
+            MakeConvexPolygonScene(),
+            viewport);
+    if (probeResult == S_FALSE)
     {
         GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
     }
+    ASSERT_EQ(probeResult, S_OK);
+
+    mwg::activex::OpenGlVectorLayerRenderer openGlRenderer;
+    const HRESULT openGlResult = openGlRenderer.Draw(surface.Get(), bounds, scene, viewport);
     ASSERT_EQ(openGlResult, S_OK);
     EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), kFill);
@@ -437,39 +458,212 @@ TEST(VectorLayerRenderer, OpenGlLazilyTriangulatesAndReusesFillMeshes)
     EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
 }
 
-TEST(VectorLayerRenderer, OpenGlLazyTriangulationFailurePreservesOutlines)
+TEST(VectorLayerRenderer, OpenGlSharesLazyMeshesWithTemporaryRenderers)
 {
+    BitmapSurface surface(240, 201);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT screenBounds{0, 0, 120, 100};
+    const RECT scaledBounds{0, 0, 240, 201};
+    const auto screenViewport = FitViewport(screenBounds);
+    const auto scaledViewport = FitViewport(scaledBounds);
+
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const auto probeScene = MakeConvexPolygonScene();
+    const HRESULT probeResult = availabilityProbe.Draw(
+        surface.Get(),
+        screenBounds,
+        probeScene,
+        screenViewport);
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
+    auto normalFirstScene = MakeConvexPolygonScene();
+    Edit(normalFirstScene.layers.front()).fillMeshes.clear();
+    auto temporaryFirstScene = MakeConvexPolygonScene();
+    Edit(temporaryFirstScene.layers.front()).fillMeshes.clear();
+    PerformanceCapture diagnostics;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            screenBounds,
+            normalFirstScene,
+            screenViewport),
+        S_OK);
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            scaledBounds,
+            normalFirstScene,
+            scaledViewport,
+            false),
+        S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), scaledViewport, 5.0, 5.0), kFill);
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            screenBounds,
+            normalFirstScene,
+            screenViewport),
+        S_OK);
+
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            scaledBounds,
+            temporaryFirstScene,
+            scaledViewport,
+            false),
+        S_OK);
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            screenBounds,
+            temporaryFirstScene,
+            screenViewport),
+        S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), screenViewport, 5.0, 5.0), kFill);
+
+    const auto snapshot = mwg::diagnostics::PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(
+        snapshot.Timing(
+            mwg::diagnostics::PerformanceOperation::PolygonTriangulation).callCount,
+        2);
+}
+
+TEST(VectorLayerRenderer, OpenGlLazyTriangulationFailureFallsBackAndPreservesOutlines)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+
     mwg::rendering::MapRenderScene scene = MakeMapScene({{
         mwg::Extent{-3.0, -3.0, 3.0, 3.0},
         0,
         0,
         {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}}});
     Edit(scene.layers.front()).fillMeshes.clear();
+    const auto viewport = FitViewport(bounds, {-3.0, -3.0, 3.0, 3.0});
     PerformanceCapture diagnostics;
-    ThrowingLogHandlerScope throwingLogHandler;
+    LogHandlerScope throwingLogHandler(
+        [](const mwg::LogLevel, const std::string_view)
+        {
+            throw std::runtime_error("Test GDAL logger failure");
+        });
 
-    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::activex::OpenGlVectorLayerRenderer cacheProbe;
     ASSERT_EQ(
-        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::PrepareFillMeshes(
-            renderer,
-            scene),
+        Access::PrepareFillMeshes(cacheProbe, scene),
         S_FALSE);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(cacheProbe), 0U);
     ASSERT_EQ(
-        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::PrepareFillMeshes(
-            renderer,
-            scene),
+        Access::PrepareFillMeshes(cacheProbe, scene),
         S_FALSE);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(cacheProbe), 0U);
 
     EXPECT_TRUE(
-        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::IsSceneSupported(
+        Access::IsSceneSupported(
             scene,
             mwg::activex::VectorRenderMode::Outline));
+
+    BitmapSurface probeSurface(120, 100);
+    ASSERT_TRUE(probeSurface.IsValid());
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult = availabilityProbe.Draw(
+        probeSurface.Get(),
+        bounds,
+        MakeConvexPolygonScene(),
+        FitViewport(bounds));
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(
+        renderer.GetActiveBackend(),
+        mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_GT(CountPixels(surface.Get(), bounds, kFill), 0U);
+
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            bounds,
+            scene,
+            viewport,
+            true,
+            mwg::activex::VectorRenderMode::Outline),
+        S_OK);
+    EXPECT_EQ(
+        renderer.GetActiveBackend(),
+        mwg::activex::VectorRenderBackendKind::OpenGL);
+    EXPECT_GT(CountPixels(surface.Get(), bounds, RGB(24, 58, 82)), 0U);
+
     const mwg::diagnostics::PerformanceSnapshot snapshot =
         mwg::diagnostics::PerformanceDiagnostics::Snapshot();
     EXPECT_EQ(
         snapshot.Counter(
             mwg::diagnostics::PerformanceCounter::TriangulationFailures),
-        1);
+        2);
+}
+
+TEST(VectorLayerRenderer, SnapshotsSceneAcrossReentrantTriangulationCallback)
+{
+    BitmapSurface probeSurface(120, 100);
+    ASSERT_TRUE(probeSurface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    const auto viewport = FitViewport(bounds, {-3.0, -3.0, 3.0, 3.0});
+
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult = availabilityProbe.Draw(
+        probeSurface.Get(),
+        bounds,
+        MakeConvexPolygonScene(),
+        FitViewport(bounds));
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
+    mwg::rendering::MapRenderScene scene = MakeMapScene({{
+        mwg::Extent{-3.0, -3.0, 3.0, 3.0},
+        0,
+        0,
+        {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}}});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    bool callbackRan = false;
+    mwg::activex::VectorLayerRenderer renderer;
+    LogHandlerScope reentrantHandler(
+        [&scene, &callbackRan, &renderer](
+            const mwg::LogLevel,
+            const std::string_view)
+        {
+            if (!callbackRan)
+            {
+                callbackRan = true;
+                scene.layers.clear();
+                renderer.InvalidateSceneCache();
+            }
+        });
+
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_TRUE(callbackRan);
+    EXPECT_TRUE(scene.layers.empty());
+    EXPECT_EQ(
+        renderer.GetActiveBackend(),
+        mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_GT(CountPixels(surface.Get(), bounds, kFill), 0U);
 }
 
 TEST(VectorLayerRenderer, OpenGlDrawsOutlinesWithoutFillMeshes)

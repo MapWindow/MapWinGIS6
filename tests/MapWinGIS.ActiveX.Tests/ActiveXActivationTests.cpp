@@ -2334,6 +2334,29 @@ TEST_F(ActiveXMapTest, ScaledDrawsKeepScreenBuffersAtTheClientSize)
     EXPECT_EQ(Access::StagingCapacity(control), capacity);
 }
 
+TEST_F(ActiveXMapTest, ClearLayersReleasesLazyFillMeshes)
+{
+    using Access = mwg::activex::testing::MapWinGISControlTestAccess;
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    ASSERT_EQ(_control->put_RenderingBackendPreference(ATL::CComBSTR(L"OpenGL")), S_OK);
+
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    ATL::CComBSTR backend;
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    if (backend == nullptr || std::wcscmp(backend, L"OpenGL") != 0)
+    {
+        GTEST_SKIP() << "The control selected GDI for the OpenGL preference.";
+    }
+
+    const auto& control = Access::Control(_control.Get());
+    EXPECT_GT(Access::FillMeshCacheSize(control), 0U);
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    EXPECT_EQ(Access::FillMeshCacheSize(control), 0U);
+}
+
 TEST_F(ActiveXMapTest, DragDrawBlitsWholePixelShiftsAndRendersFractionalOrHugeShifts)
 {
     using Access = mwg::activex::testing::MapWinGISControlTestAccess;

@@ -69,6 +69,11 @@ namespace mwg::activex
             return _diagnostic;
         }
 
+        void InvalidateSceneCache() noexcept
+        {
+            _openGlRenderer.ClearFillMeshCache();
+        }
+
     private:
         friend class testing::MapWinGISControlTestAccess;
 

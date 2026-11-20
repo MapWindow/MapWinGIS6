@@ -62,5 +62,17 @@ namespace mwg::activex::testing
         {
             return renderer.PrepareFillMeshes(scene);
         }
+
+        [[nodiscard]] static std::size_t FillMeshCacheSize(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.FillMeshCacheSize();
+        }
+
+        [[nodiscard]] static std::size_t CachedGeneratedMeshStorage(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.CachedGeneratedMeshStorage();
+        }
     };
 }

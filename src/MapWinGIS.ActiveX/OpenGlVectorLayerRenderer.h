@@ -28,6 +28,7 @@ namespace mwg::activex
         class OpenGlVectorLayerRendererTestAccess;
         class MapWinGISControlTestAccess;
     }
+    class VectorLayerRenderer;
 
     class OpenGlVectorLayerRenderer final : public IVectorRenderBackend
     {
@@ -84,6 +85,7 @@ namespace mwg::activex
     private:
         friend class testing::OpenGlVectorLayerRendererTestAccess;
         friend class testing::MapWinGISControlTestAccess;
+        friend class VectorLayerRenderer;
 
         /// True when the scene can be drawn in the requested mode. Outline
         /// mode needs finite ring coordinates; fill mode may lazily prepare
@@ -123,7 +125,12 @@ namespace mwg::activex
         [[nodiscard]] HRESULT PrepareFillMeshes(
             const rendering::MapRenderScene& scene) noexcept;
         [[nodiscard]] std::span<const std::optional<rendering::TriangleMesh>>
-            GetFillMeshes(std::size_t layerIndex) const noexcept;
+            GetFillMeshes(
+                std::size_t layerIndex,
+                const rendering::VectorRenderScene& scene) const noexcept;
+        void ClearFillMeshCache() noexcept;
+        [[nodiscard]] std::size_t FillMeshCacheSize() const noexcept;
+        [[nodiscard]] std::size_t CachedGeneratedMeshStorage() const noexcept;
         [[nodiscard]] HRESULT RenderScene(
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
