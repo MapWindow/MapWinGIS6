@@ -400,6 +400,20 @@ TEST(VectorLayerRenderer, OpenGlDrawsOutlinesWithoutFillMeshes)
             scene,
             mwg::activex::VectorRenderMode::Outline));
 
+    BitmapSurface probeSurface(120, 100);
+    ASSERT_TRUE(probeSurface.IsValid());
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult = availabilityProbe.Draw(
+        probeSurface.Get(),
+        bounds,
+        MakeConvexPolygonScene(),
+        viewport);
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
     mwg::activex::OpenGlVectorLayerRenderer renderer;
     const HRESULT result = renderer.Draw(
         surface.Get(),
@@ -408,10 +422,6 @@ TEST(VectorLayerRenderer, OpenGlDrawsOutlinesWithoutFillMeshes)
         viewport,
         true,
         mwg::activex::VectorRenderMode::Outline);
-    if (result == S_FALSE)
-    {
-        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
-    }
     ASSERT_EQ(result, S_OK);
     EXPECT_EQ(MapPixel(surface.Get(), viewport, 5.0, 5.0), GetSysColor(COLOR_WINDOW));
 

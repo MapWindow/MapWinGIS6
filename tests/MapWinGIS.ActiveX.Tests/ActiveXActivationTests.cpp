@@ -1255,6 +1255,16 @@ namespace
             return _control->LoadVectorDataset(ATL::CComBSTR(path.c_str()));
         }
 
+        void LoadRectanglesWithFillMeshes(const std::vector<mwg::Extent>& rectangles)
+        {
+            const auto path = mwg::test::MakeRectanglesDataset(
+                _directory.Path(), "layer-" + std::to_string(_datasetCount++) + ".gpkg", rectangles);
+            auto dataset = mwg::VectorDataset::Open(path);
+            mwg::activex::testing::MapWinGISControlTestAccess::AddLayerWithFillMeshes(
+                mwg::activex::testing::MapWinGISControlTestAccess::Control(_control.Get()),
+                std::move(dataset));
+        }
+
         HRESULT LoadLine()
         {
             const auto path = _directory.Path() / "line.geojson";
@@ -2293,15 +2303,22 @@ TEST_F(ActiveXMapTest, ScaledDrawsKeepScreenBuffersAtTheClientSize)
 {
     using Access = mwg::activex::testing::MapWinGISControlTestAccess;
     ASSERT_EQ(Resize(120, 100), S_OK);
-    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    LoadRectanglesWithFillMeshes({{0, 0, 10, 5}});
     ASSERT_EQ(_control->put_RenderingBackendPreference(ATL::CComBSTR(L"OpenGL")), S_OK);
     BitmapSurface surface(480, 401);
     ASSERT_TRUE(surface.IsValid());
     ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    ATL::CComBSTR backend;
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    if (backend == nullptr || std::wcscmp(backend, L"OpenGL") != 0)
+    {
+        GTEST_SKIP() << "The control selected GDI for the OpenGL preference.";
+    }
     const auto& control = Access::Control(_control.Get());
     const auto frameDc = Access::Frame(control).Get();
     const auto cacheDc = Access::LayerCache(control).Get();
     const auto capacity = Access::StagingCapacity(control);
+    ASSERT_GT(capacity, 0U);
     ASSERT_TRUE(Access::CacheValid(control));
     ASSERT_EQ(Draw(surface.Get(), 480, 401), S_OK);
     EXPECT_EQ(Access::Frame(control).Width(), 120);
