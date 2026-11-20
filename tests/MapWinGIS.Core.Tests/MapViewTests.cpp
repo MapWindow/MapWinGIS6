@@ -548,7 +548,12 @@ TEST_F(MapViewTest, AllocationFailurePreservesThePublishedSceneAndAllowsRetry)
 
 TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
 {
-    _view.AddLayer(OpenComplexPolygons());
+    const std::shared_ptr<VectorDataset> dataset = OpenComplexPolygons();
+    _view.AddLayer(
+        dataset,
+        rendering::CreateVectorRenderScene(
+            *dataset,
+            rendering::VectorRenderSceneOptions{.prepareFillMeshes = true}));
     ASSERT_TRUE(_view.Resize(300, 200));
 
     const rendering::MapRenderScene& scene = _view.Scene();

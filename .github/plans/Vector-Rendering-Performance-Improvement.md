@@ -9,7 +9,10 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase c
   - Measured the supplied 10.3 MB, 2,459-feature shapefile with all A-D configurations; results are recorded in the Phase 1 benchmark section below.
   - Limitation: the measured shapefile is not stored in the repository; `MWG_RENDERING_BASELINE_DATASET` can rerun it when available.
   - Limitation: configuration C records the current OpenGL rejection because outline-only OpenGL rendering is a Phase 2 change.
-- [ ] **Phase 2 – Separate geometry loading from rendering preparation** (PR 2)
+- [x] **Phase 2 – Separate geometry loading from rendering preparation** (PR 2)
+  - Normal scene construction now preserves source rings and bounds without triangulating polygons; fill meshes remain available through explicit preparation.
+  - GDI fills directly from source rings, and OpenGL can draw mesh-free polygon outlines while fill requests retain the existing mesh requirement and GDI fallback.
+  - Limitation: OpenGL fill meshes are prepared explicitly rather than generated lazily; lazy triangulation and cache reuse remain Phase 3 and Phase 4 work.
 - [ ] **Phase 3 – Implement lazy polygon triangulation** (PR 3)
 - [ ] **Phase 4 – Add intelligent caching and invalidation** (PR 4)
 - [ ] **Phase 5 – Introduce viewport-aware geometry processing** (PR 5)

@@ -204,10 +204,11 @@ The `RenderingBaseline` tests are opt-in. They use either a generated
 GeoPackage grid of convex 32-vertex polygons or the dataset named by
 `MWG_RENDERING_BASELINE_DATASET`. `MeasuresTriangulationDisabledCosts` builds a
 mesh-free scene (configuration A for GDI, which still fills the original rings,
-and configuration C for OpenGL, which rejects it).
-`MeasuresCoreSceneAndBackendCosts` uses the default fill-mesh preparation
+and configuration C for OpenGL outline-only rendering).
+`MeasuresCoreSceneAndBackendCosts` explicitly requests fill-mesh preparation
 (configurations B and D). Successful backends report first and steady frame
-times, plus pan and zoom frames, for a 1280x720 off-screen target.
+times, plus pan and zoom frames, for a 1280x720 off-screen target. Normal scene
+creation does not perform triangulation.
 
 Performance diagnostics are disabled by default and aggregate process-wide
 timings with `std::chrono::steady_clock`. The collector records dataset
@@ -223,8 +224,8 @@ GPU buffer-upload stage to measure yet.
 concave L-shaped polygons, holed rectangles where every feature is a
 two-component multipolygon, and concave 32-vertex star polygons across three
 layers — and additionally reports the number of triangulated polygons and the
-mesh storage (vertices plus indices). Scene preparation in both tests
-includes the one-time constrained Delaunay triangulation of every polygon.
+mesh storage (vertices plus indices). Its scene preparation explicitly
+requests the one-time constrained Delaunay triangulation of every polygon.
 Results are recorded as GoogleTest properties; the tests fail only when a
 stage fails. Use a Release build for meaningful numbers:
 
@@ -263,12 +264,11 @@ submission took 5.3 ms. These measurements show scene triangulation is the
 dominant opening cost on the generated grid, without assuming it is the only
 cost for other datasets.
 
-Configuration C is intentionally reported as a rejection rather than a
-successful outline render: the current OpenGL backend requires a triangle
-mesh for every polygon. Measuring successful triangulation-free OpenGL
-outlines is a Phase 2 deliverable. Viewport culling and its skipped-feature
-counter remain zero because scene construction currently processes all
-features.
+Configuration C records the Phase 1 rejection because that baseline predates
+the mesh-free OpenGL outline mode. The baseline test now exercises that
+outline mode directly when OpenGL is available. Viewport culling and its
+skipped-feature counter remain zero because scene construction currently
+processes all features.
 
 Previous measurements on one developer workstation, with triangulation
 included in scene preparation, remain useful as history:

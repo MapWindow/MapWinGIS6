@@ -16,14 +16,21 @@ namespace mwg::activex
         const RECT& bounds,
         const rendering::MapRenderScene& scene,
         const Viewport& viewport,
-        const bool retainStagingBuffer) noexcept
+        const bool retainStagingBuffer,
+        const VectorRenderMode renderMode) noexcept
     {
         _activeBackend.reset();
 
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
             const HRESULT openGlResult =
-                _openGlRenderer.Draw(deviceContext, bounds, scene, viewport, retainStagingBuffer);
+                _openGlRenderer.Draw(
+                    deviceContext,
+                    bounds,
+                    scene,
+                    viewport,
+                    retainStagingBuffer,
+                    renderMode);
             if (openGlResult == S_OK)
             {
                 _activeBackend = VectorRenderBackendKind::OpenGL;
@@ -43,7 +50,8 @@ namespace mwg::activex
             _diagnostic = L"GDI was selected by the rendering preference.";
         }
 
-        const HRESULT gdiResult = _gdiRenderer.Draw(deviceContext, bounds, scene, viewport);
+        const HRESULT gdiResult =
+            _gdiRenderer.Draw(deviceContext, bounds, scene, viewport, true, renderMode);
         if (SUCCEEDED(gdiResult))
         {
             _activeBackend = VectorRenderBackendKind::Gdi;

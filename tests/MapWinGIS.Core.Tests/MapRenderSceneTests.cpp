@@ -167,6 +167,10 @@ TEST_F(MapRenderSceneTest, ContainsEveryVisibleLayerInDrawingOrder)
     EXPECT_EQ(scene.layers[0].scene->polygons.size(), 1U);
     EXPECT_EQ(scene.layers[1].scene->polygons.size(), 2U);
     EXPECT_EQ(scene.layers[1].scene->sourceFeatureCount, 2);
+    for (const rendering::LayerRenderScene& layer : scene.layers)
+    {
+        EXPECT_TRUE(layer.scene->fillMeshes.empty());
+    }
 }
 
 TEST_F(MapRenderSceneTest, KeepsEachLayersOwnExtentAndCoordinates)

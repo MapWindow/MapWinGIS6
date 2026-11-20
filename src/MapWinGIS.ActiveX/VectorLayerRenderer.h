@@ -45,7 +45,8 @@ namespace mwg::activex
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
-            bool retainStagingBuffer = true) noexcept;
+            bool retainStagingBuffer = true,
+            VectorRenderMode renderMode = VectorRenderMode::Fill) noexcept;
 
         /// Layers skipped by the last Draw call; empty when every layer was
         /// drawn.

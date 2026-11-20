@@ -319,6 +319,7 @@ TEST_P(VectorRenderSceneTest, CopiesPolygonCoordinatesAndExtent)
     const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(*_layer);
 
     ASSERT_EQ(scene.polygons.size(), static_cast<std::size_t>(Provinces::kFeatureCount));
+    EXPECT_TRUE(scene.fillMeshes.empty());
     EXPECT_EQ(scene.sourceFeatureCount, _layer->FeatureCount());
     ASSERT_EQ(scene.polygons.front().size(), 1u);
     ASSERT_EQ(scene.polygons.front().front().size(), 5u);

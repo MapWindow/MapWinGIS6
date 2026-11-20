@@ -84,8 +84,8 @@ namespace mwg::rendering
     /// Creates a map scene with explicit fill-preparation behavior.
     ///
     /// Hidden, empty, and failed layers retain the same handling as the
-    /// default overload. When prepareFillMeshes is false, every drawable
-    /// scene contains rings but no fill meshes.
+    /// default overload. Fill preparation is disabled by default, so drawable
+    /// layer scenes contain source rings without triangulating polygons.
     [[nodiscard]] MWG_CORE_API MapRenderScene CreateMapRenderScene(
         const Map& map,
         const VectorRenderSceneOptions& options);

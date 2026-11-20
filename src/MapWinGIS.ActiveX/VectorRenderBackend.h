@@ -30,6 +30,14 @@ namespace mwg::activex
         Gdi
     };
 
+    enum class VectorRenderMode : int
+    {
+        /// Draw polygon fills and outlines.
+        Fill,
+        /// Draw only boundaries from the source polygon rings.
+        Outline
+    };
+
     class IVectorRenderBackend
     {
     public:
@@ -46,7 +54,8 @@ namespace mwg::activex
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
-            bool retainStagingBuffer = true) noexcept = 0;
+            bool retainStagingBuffer = true,
+            VectorRenderMode renderMode = VectorRenderMode::Fill) noexcept = 0;
     };
 
     /// True when bounds has the viewport's size and the viewport is valid.

@@ -28,7 +28,8 @@ namespace mwg::activex
             const RECT& bounds,
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
-            bool retainStagingBuffer = true) noexcept override;
+            bool retainStagingBuffer = true,
+            VectorRenderMode renderMode = VectorRenderMode::Fill) noexcept override;
 
         /// Layers skipped by the last Draw call, in drawing order.
         [[nodiscard]] const std::vector<LayerId>& GetFailedLayers() const noexcept

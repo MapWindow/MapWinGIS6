@@ -323,19 +323,20 @@ Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. For each
 visible map layer, Core sequentially reads Polygon, MultiPolygon,
 CurvePolygon, and MultiSurface features into an owned vector scene,
-linearizing curved geometries. Scene creation also triangulates every polygon
-into an indexed, backend-neutral triangle mesh with the constrained Delaunay
-triangulation of GDAL/OGR and GEOS, retained per polygon so a backend never
-triangulates per frame; a polygon that cannot be triangulated keeps its rings
-and has no mesh. `ViewTransform` captures the `Viewport` once
+linearizing curved geometries. Scene creation preserves source rings and
+rendering metadata without triangulating polygons. A caller can explicitly
+request fill-mesh preparation when a fill operation needs indexed,
+backend-neutral triangles; a polygon that cannot be triangulated keeps its
+rings and has no mesh. `ViewTransform` captures the `Viewport` once
 per frame so both backends transform every vertex of every layer with the
 same arithmetic as `Viewport::MapToScreen`; GDI draws a screen position in
 the pixel that contains it (`ToPixel`). One backend draws the whole frame.
 The coordinator tries the OpenGL backend when every polygon of every layer
-has a triangulated fill mesh. GDI checks each layer before drawing it; a
-layer with non-finite or out-of-range device coordinates is skipped and
-reported (`GetFailedLayers`, `RenderingStatus`) while the other layers are
-still drawn.
+has a triangulated fill mesh for a fill draw. OpenGL outline mode draws the
+source rings without requiring fill meshes. GDI checks each layer before
+drawing it; a layer with non-finite or out-of-range device coordinates is
+skipped and reported (`GetFailedLayers`, `RenderingStatus`) while the other
+layers are still drawn.
 OpenGL uses a context created on a hidden, never-presented window, draws with
 fixed-function calls into a framebuffer object (OpenGL 3.0 or
 `GL_EXT_framebuffer_object`), and reads pixels back in BGRA order into a CPU
@@ -349,10 +350,10 @@ This avoids a fresh allocation for every polygon's transformed triangle vertices
 Rendering into a framebuffer object avoids undefined pixels from window
 pixel-ownership rules. Presentation still copies pixels through GDI.
 Interior rings and concave boundaries draw identically in both backends
-because both consume the same scene; a polygon without a fill mesh (for
-example a self-intersecting ring that GEOS cannot triangulate), missing
-framebuffer-object support, initialization failures, and drawing failures use
-the GDI backend, which draws the original rings.
+because both consume the same scene. A fill request without a usable mesh,
+missing framebuffer-object support, initialization failures, and drawing
+failures use the GDI backend. GDI fills and outlines the original rings, so
+a self-intersecting ring that GEOS cannot triangulate can still be displayed.
 The GDI backend draws the original rings of the whole supported polygon scene,
 including its interior rings and concave boundaries. Both backends draw source coordinates without reprojection,
 and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
@@ -486,9 +487,9 @@ and `Ring` types remain available for caller-created triangulation input.
 There is no tiling, paging, or clipping to the visible extent. GDI skips a
 layer whose device coordinates exceed its range. It clips drawing to the
 requested target rectangle and the host's existing clip region, then restores
-the device context. Triangulation runs once per polygon when the scene is
-prepared; view changes (resize, zoom, pan) and redraws reuse the retained
-meshes. The opt-in
+the device context. Fill triangulation runs only when scene preparation
+explicitly requests it; view changes (resize, zoom, pan) and redraws reuse
+the retained meshes. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation, mesh storage, and backend frame costs on both a
 convex grid and a complex mix of concave, holed multipart, and many-vertex

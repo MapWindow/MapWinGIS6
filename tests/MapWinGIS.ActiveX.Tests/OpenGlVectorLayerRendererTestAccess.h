@@ -50,9 +50,10 @@ namespace mwg::activex::testing
 
         /// Checks scene support without activating an OpenGL context.
         [[nodiscard]] static bool IsSceneSupported(
-            const rendering::MapRenderScene& scene) noexcept
+            const rendering::MapRenderScene& scene,
+            const VectorRenderMode renderMode = VectorRenderMode::Fill) noexcept
         {
-            return OpenGlVectorLayerRenderer::IsSceneSupported(scene);
+            return OpenGlVectorLayerRenderer::IsSceneSupported(scene, renderMode);
         }
     };
 }

@@ -2,12 +2,13 @@
 
 /**
  * @file VectorRenderScene.cpp
- * @brief Builds owned polygon scene data from vector layers.
+ * @brief Builds owned polygon source geometry and optional fill meshes.
  *
  * Reads vector geometries sequentially and copies supported polygon
  * coordinates into owned scene data before releasing each feature.
- * Unsupported or degenerate parts are skipped and counted rather than
- * failing the layer.
+ * Triangulation is a separate, opt-in preparation step after source
+ * geometry conversion. Unsupported or degenerate parts are skipped and
+ * counted rather than failing the layer.
  */
 #include "mapwingis/rendering/VectorRenderScene.h"
 

@@ -2,10 +2,11 @@
 
 /**
  * @file VectorRenderScene.h
- * @brief Declares backend-neutral polygon scene data for vector rendering.
+ * @brief Declares source polygon geometry and optional fill data for rendering.
  *
  * Stores scene coordinates and polygon/ring ranges in flat buffers. Borrowed
  * polygon views let renderers read them without per-polygon allocations.
+ * Fill meshes are prepared only when explicitly requested.
  */
 #pragma once
 
@@ -131,9 +132,9 @@ namespace mwg
         struct VectorRenderSceneOptions
         {
             /// When false, preserves polygon rings and leaves fillMeshes empty.
-            /// This is useful for baseline measurements and outline-only
-            /// backends; OpenGL currently requires fill meshes.
-            bool prepareFillMeshes = true;
+            /// Enable this only for a rendering operation that needs triangle
+            /// meshes. Source geometry and bounds are prepared either way.
+            bool prepareFillMeshes = false;
         };
 
         /// Owned polygon geometry and its source-coordinate bounds.
@@ -147,8 +148,8 @@ namespace mwg
             /// exterior ring of at least three points.
             std::int64_t skippedGeometryCount = 0;
             PolygonBuffer polygons;
-            /// Fill meshes prepared once when the scene is created. This is
-            /// empty when scene options disable fill preparation; otherwise
+            /// Optional fill meshes prepared when the scene is created. This
+            /// is empty when scene options omit fill preparation; otherwise
             /// fillMeshes[i] belongs to polygons[i]. An entry is std::nullopt
             /// when that polygon could not be triangulated; its rings remain
             /// available for outline drawing and for backends such as GDI.
@@ -172,8 +173,9 @@ namespace mwg
 
         /// Creates a scene with explicit fill-preparation behavior.
         ///
-        /// Disabling fill meshes measures and renders only original polygon
-        /// geometry; the default overload remains unchanged.
+        /// The default is source geometry only. Set prepareFillMeshes to true
+        /// when the requested fill rendering operation needs triangle meshes.
+        /// The default overload never invokes polygon triangulation.
         [[nodiscard]] MWG_CORE_API VectorRenderScene CreateVectorRenderScene(
             const VectorLayer& layer,
             const VectorRenderSceneOptions& options);
