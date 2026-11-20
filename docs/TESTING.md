@@ -208,7 +208,9 @@ and configuration C for OpenGL outline-only rendering).
 `MeasuresCoreSceneAndBackendCosts` explicitly requests fill-mesh preparation
 (configurations B and D). Successful backends report first and steady frame
 times, plus pan and zoom frames, for a 1280x720 off-screen target. Normal scene
-creation does not perform triangulation.
+creation does not perform triangulation. OpenGL fill rendering lazily
+triangulates source-only scenes on their first fill draw and reuses those
+backend-owned meshes on later draws.
 
 Performance diagnostics are disabled by default and aggregate process-wide
 timings with `std::chrono::steady_clock`. The collector records dataset

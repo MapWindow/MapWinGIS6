@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -27,6 +28,7 @@ namespace mwg::activex
         class OpenGlVectorLayerRendererTestAccess;
         class MapWinGISControlTestAccess;
     }
+    class VectorLayerRenderer;
 
     class OpenGlVectorLayerRenderer final : public IVectorRenderBackend
     {
@@ -54,14 +56,16 @@ namespace mwg::activex
         /**
          * @brief Draws polygon fills or outlines through OpenGL.
          *
-         * Fill mode uses a Core-prepared triangle mesh for each polygon and
-         * draws boundaries from the original rings. Outline mode draws the
-         * original rings without requiring fill meshes. Polygons retain the
-         * GDI backend's painter order within a layer.
+         * Fill mode uses a Core-prepared triangle mesh when one is present,
+         * otherwise triangulating the polygon on demand and reusing the
+         * generated mesh for later draws of the same scene. It draws
+         * boundaries from the original rings. Outline mode draws the original
+         * rings without requiring fill meshes. Polygons retain the GDI
+         * backend's painter order within a layer.
          * Draws all layers into one frame, bottom first. Returns S_FALSE
-         * without drawing when fill mode lacks a usable mesh or when no
-         * OpenGL context with framebuffer-object support is available, so
-         * callers can fall back to another backend for the whole frame.
+         * without drawing when fill-mesh preparation fails or when no OpenGL
+         * context with framebuffer-object support is available, so callers
+         * can fall back to another backend for the whole frame.
          * When retainStagingBuffer is false, a temporary renderer owns the
          * draw's CPU and GPU buffers, leaving the screen resources unchanged.
          */
@@ -81,10 +85,12 @@ namespace mwg::activex
     private:
         friend class testing::OpenGlVectorLayerRendererTestAccess;
         friend class testing::MapWinGISControlTestAccess;
+        friend class VectorLayerRenderer;
 
         /// True when the scene can be drawn in the requested mode. Outline
-        /// mode needs finite ring coordinates; fill mode additionally needs
-        /// a usable mesh for every polygon. Exposed for tests.
+        /// mode needs finite ring coordinates; fill mode may lazily prepare
+        /// missing meshes but rejects unusable explicitly prepared meshes.
+        /// Exposed for tests.
         [[nodiscard]] static bool IsSceneSupported(
             const rendering::MapRenderScene& scene,
             VectorRenderMode renderMode) noexcept;
@@ -116,6 +122,15 @@ namespace mwg::activex
             const Viewport& viewport,
             VectorRenderMode renderMode) noexcept;
         [[nodiscard]] bool EnsureStaging(std::size_t stagingBytes) noexcept;
+        [[nodiscard]] HRESULT PrepareFillMeshes(
+            const rendering::MapRenderScene& scene) noexcept;
+        [[nodiscard]] std::span<const std::optional<rendering::TriangleMesh>>
+            GetFillMeshes(
+                std::size_t layerIndex,
+                const rendering::VectorRenderScene& scene) const noexcept;
+        void ClearFillMeshCache() noexcept;
+        [[nodiscard]] std::size_t FillMeshCacheSize() const noexcept;
+        [[nodiscard]] std::size_t CachedGeneratedMeshStorage() const noexcept;
         [[nodiscard]] HRESULT RenderScene(
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
@@ -142,6 +157,8 @@ namespace mwg::activex
             L"OpenGL was not selected for this frame.";
         std::wstring_view _initializationFailureReason;
         std::vector<unsigned char> _pixelBuffer;
+        struct FillMeshCache;
+        std::shared_ptr<FillMeshCache> _fillMeshCache;
         int _retryTargetWidth = 0;
         int _retryTargetHeight = 0;
         unsigned int _initializationRetryDrawsRemaining = 0;

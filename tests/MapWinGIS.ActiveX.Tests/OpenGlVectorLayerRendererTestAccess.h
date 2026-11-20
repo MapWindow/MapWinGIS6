@@ -55,5 +55,24 @@ namespace mwg::activex::testing
         {
             return OpenGlVectorLayerRenderer::IsSceneSupported(scene, renderMode);
         }
+
+        [[nodiscard]] static HRESULT PrepareFillMeshes(
+            OpenGlVectorLayerRenderer& renderer,
+            const rendering::MapRenderScene& scene) noexcept
+        {
+            return renderer.PrepareFillMeshes(scene);
+        }
+
+        [[nodiscard]] static std::size_t FillMeshCacheSize(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.FillMeshCacheSize();
+        }
+
+        [[nodiscard]] static std::size_t CachedGeneratedMeshStorage(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.CachedGeneratedMeshStorage();
+        }
     };
 }

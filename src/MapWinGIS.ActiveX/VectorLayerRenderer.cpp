@@ -9,6 +9,9 @@
  */
 #include "VectorLayerRenderer.h"
 
+#include <new>
+#include <stdexcept>
+
 namespace mwg::activex
 {
     HRESULT VectorLayerRenderer::Draw(
@@ -21,13 +24,29 @@ namespace mwg::activex
     {
         _activeBackend.reset();
 
+        rendering::MapRenderScene stableScene;
+        try
+        {
+            stableScene = scene;
+        }
+        catch (const std::bad_alloc&)
+        {
+            _diagnostic = L"The renderer could not snapshot the render scene.";
+            return E_OUTOFMEMORY;
+        }
+        catch (const std::length_error&)
+        {
+            _diagnostic = L"The renderer could not represent its render-scene snapshot.";
+            return S_FALSE;
+        }
+
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
             const HRESULT openGlResult =
                 _openGlRenderer.Draw(
                     deviceContext,
                     bounds,
-                    scene,
+                    stableScene,
                     viewport,
                     retainStagingBuffer,
                     renderMode);
@@ -51,7 +70,13 @@ namespace mwg::activex
         }
 
         const HRESULT gdiResult =
-            _gdiRenderer.Draw(deviceContext, bounds, scene, viewport, true, renderMode);
+            _gdiRenderer.Draw(
+                deviceContext,
+                bounds,
+                stableScene,
+                viewport,
+                true,
+                renderMode);
         if (SUCCEEDED(gdiResult))
         {
             _activeBackend = VectorRenderBackendKind::Gdi;

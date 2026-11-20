@@ -1117,6 +1117,7 @@ STDMETHODIMP CMapWinGISControl::ClearLayers()
         InvalidateLayerCache();
         FireViewChange();
     }
+    _renderer.InvalidateSceneCache();
     return S_OK;
 }
 
