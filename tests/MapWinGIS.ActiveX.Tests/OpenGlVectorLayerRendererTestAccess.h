@@ -110,5 +110,12 @@ namespace mwg::activex::testing
         {
             renderer.ClearFillMeshCache();
         }
+
+        [[nodiscard]] static bool PruneCaches(
+            OpenGlVectorLayerRenderer& renderer,
+            const rendering::MapRenderScene& scene) noexcept
+        {
+            return renderer.PruneFillMeshCache(scene);
+        }
     };
 }

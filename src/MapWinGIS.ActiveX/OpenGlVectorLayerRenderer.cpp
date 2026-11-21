@@ -448,6 +448,7 @@ namespace mwg::activex
 
         struct Polygon final
         {
+            rendering::Point origin;
             GLsizei indexCount = 0;
             std::size_t indexOffset = 0;
             std::vector<Ring> rings;
@@ -456,7 +457,6 @@ namespace mwg::activex
         struct Layer final
         {
             std::weak_ptr<const rendering::VectorRenderScene> scene;
-            rendering::Point origin;
             GLuint vertexBuffer = 0;
             GLuint indexBuffer = 0;
             bool hasFill = false;
@@ -812,36 +812,8 @@ namespace mwg::activex
 
             if (cached == _gpuBufferCache->layers.end())
             {
-                rendering::Point origin{};
-                bool originSet = false;
-                for (std::size_t polygonIndex = 0;
-                     polygonIndex < scene->polygons.size();
-                     ++polygonIndex)
-                {
-                    const rendering::PolygonView polygon =
-                        scene->polygons[polygonIndex];
-                    for (std::size_t ringIndex = 0;
-                         ringIndex < polygon.size();
-                         ++ringIndex)
-                    {
-                        const std::span<const rendering::Point> ring =
-                            polygon[ringIndex];
-                        if (!ring.empty())
-                        {
-                            origin = ring.front();
-                            originSet = true;
-                            break;
-                        }
-                    }
-                    if (originSet)
-                    {
-                        break;
-                    }
-                }
-
                 GpuBufferCache::Layer prepared;
                 prepared.scene = scene;
-                prepared.origin = origin;
                 prepared.hasFill = needFill;
 
                 std::vector<GLdouble> vertices;
@@ -854,6 +826,20 @@ namespace mwg::activex
                 {
                     GpuBufferCache::Polygon polygon;
                     const std::size_t meshVertexOffset = vertexCount;
+                    const rendering::PolygonView rings =
+                        scene->polygons[polygonIndex];
+                    for (std::size_t ringIndex = 0;
+                         ringIndex < rings.size();
+                         ++ringIndex)
+                    {
+                        const std::span<const rendering::Point> ring =
+                            rings[ringIndex];
+                        if (!ring.empty())
+                        {
+                            polygon.origin = ring.front();
+                            break;
+                        }
+                    }
                     if (needFill)
                     {
                         const rendering::TriangleMesh& mesh =
@@ -874,8 +860,8 @@ namespace mwg::activex
                         polygon.indexCount = static_cast<GLsizei>(mesh.indices.size());
                         for (const rendering::Point& point : mesh.vertices)
                         {
-                            vertices.push_back(point.x - origin.x);
-                            vertices.push_back(point.y - origin.y);
+                            vertices.push_back(point.x - polygon.origin.x);
+                            vertices.push_back(point.y - polygon.origin.y);
                         }
                         for (const std::uint32_t index : mesh.indices)
                         {
@@ -885,7 +871,6 @@ namespace mwg::activex
                         vertexCount += mesh.vertices.size();
                     }
 
-                    const rendering::PolygonView rings = scene->polygons[polygonIndex];
                     polygon.rings.reserve(rings.size());
                     for (std::size_t ringIndex = 0;
                          ringIndex < rings.size();
@@ -915,8 +900,10 @@ namespace mwg::activex
                         }
                         for (std::size_t index = 0; index < count; ++index)
                         {
-                            vertices.push_back(ring[index].x - origin.x);
-                            vertices.push_back(ring[index].y - origin.y);
+                            vertices.push_back(
+                                ring[index].x - polygon.origin.x);
+                            vertices.push_back(
+                                ring[index].y - polygon.origin.y);
                         }
                         polygon.rings.push_back({
                             static_cast<GLint>(vertexCount),
@@ -987,16 +974,6 @@ namespace mwg::activex
                 diagnostics::PerformanceOperation::OpenGlGeometrySubmission);
             const GpuBufferCache::Layer& layer = cached->second;
             const double inverseResolution = 1.0 / transform.resolution;
-            const double translateX =
-                transform.halfWidth +
-                (layer.origin.x - transform.centerX) * inverseResolution;
-            const double translateY =
-                transform.halfHeight -
-                (layer.origin.y - transform.centerY) * inverseResolution;
-            glMatrixMode(GL_MODELVIEW);
-            glLoadIdentity();
-            glTranslated(translateX, translateY, 0.0);
-            glScaled(inverseResolution, -inverseResolution, 1.0);
 
             glEnableClientState(GL_VERTEX_ARRAY);
             _bufferFunctions->bindBuffer(kArrayBuffer, layer.vertexBuffer);
@@ -1009,6 +986,17 @@ namespace mwg::activex
             }
             for (const GpuBufferCache::Polygon& polygon : layer.polygons)
             {
+                const double translateX =
+                    transform.halfWidth +
+                    (polygon.origin.x - transform.centerX) * inverseResolution;
+                const double translateY =
+                    transform.halfHeight -
+                    (polygon.origin.y - transform.centerY) * inverseResolution;
+                glMatrixMode(GL_MODELVIEW);
+                glLoadIdentity();
+                glTranslated(translateX, translateY, 0.0);
+                glScaled(inverseResolution, -inverseResolution, 1.0);
+
                 if (needFill)
                 {
                     glColor3ub(61, 122, 169);
@@ -1046,48 +1034,68 @@ namespace mwg::activex
     bool OpenGlVectorLayerRenderer::PruneGpuBufferCache(
         const rendering::MapRenderScene& scene) noexcept
     {
-        if (_gpuBufferCache == nullptr)
+        const bool contextWasInvalid = _contextInvalid;
+        try
         {
-            return !_contextInvalid;
-        }
+            if (_gpuBufferCache == nullptr)
+            {
+                return true;
+            }
 
-        for (auto cached = _gpuBufferCache->layers.begin();
-             cached != _gpuBufferCache->layers.end();)
-        {
-            bool retain = false;
+            std::map<
+                LayerId,
+                std::shared_ptr<const rendering::VectorRenderScene>> drawableLayers;
+            std::set<LayerId> hiddenLayers;
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
-                if (layer.layerId == cached->first)
-                {
-                    retain = !cached->second.scene.expired() &&
-                        cached->second.scene.lock() == layer.scene;
-                    break;
-                }
+                drawableLayers.insert_or_assign(layer.layerId, layer.scene);
             }
-            if (!retain)
+            for (const rendering::SkippedLayer& layer : scene.skippedLayers)
             {
-                for (const rendering::SkippedLayer& layer : scene.skippedLayers)
+                if (layer.reason == rendering::LayerSkipReason::Hidden)
                 {
-                    if (layer.layerId == cached->first &&
-                        layer.reason == rendering::LayerSkipReason::Hidden &&
-                        !cached->second.scene.expired())
-                    {
-                        retain = true;
-                        break;
-                    }
+                    hiddenLayers.insert(layer.layerId);
                 }
-            }
-            if (retain)
-            {
-                ++cached;
-                continue;
             }
 
-            QueueDeletedGpuBuffer(cached->second.vertexBuffer);
-            QueueDeletedGpuBuffer(cached->second.indexBuffer);
-            cached = _gpuBufferCache->layers.erase(cached);
+            for (auto cached = _gpuBufferCache->layers.begin();
+                 cached != _gpuBufferCache->layers.end();)
+            {
+                const auto drawable = drawableLayers.find(cached->first);
+                if (drawable != drawableLayers.end())
+                {
+                    if (!cached->second.scene.expired() &&
+                        cached->second.scene.lock() == drawable->second)
+                    {
+                        ++cached;
+                        continue;
+                    }
+                }
+                else if (hiddenLayers.contains(cached->first) &&
+                         !cached->second.scene.expired())
+                {
+                    ++cached;
+                    continue;
+                }
+
+                QueueDeletedGpuBuffer(cached->second.vertexBuffer);
+                QueueDeletedGpuBuffer(cached->second.indexBuffer);
+                cached = _gpuBufferCache->layers.erase(cached);
+            }
         }
-        return !_contextInvalid;
+        catch (const std::bad_alloc&)
+        {
+            _lastFailureReason =
+                L"The OpenGL backend could not allocate its GPU-cache index.";
+            return false;
+        }
+        catch (const std::length_error&)
+        {
+            _lastFailureReason =
+                L"The OpenGL backend could not represent its GPU-cache index.";
+            return false;
+        }
+        return contextWasInvalid || !_contextInvalid;
     }
 
     void OpenGlVectorLayerRenderer::ClearGpuBufferCache() noexcept
@@ -1103,6 +1111,12 @@ namespace mwg::activex
             QueueDeletedGpuBuffer(layer.indexBuffer);
         }
         _gpuBufferCache->layers.clear();
+        const ScopedCurrentContext currentContext(
+            _deviceContext, _renderingContext);
+        if (currentContext.IsValid())
+        {
+            FlushDeletedGpuBuffers();
+        }
     }
 
     void OpenGlVectorLayerRenderer::ClearLayerGpuBufferCache(
@@ -1120,6 +1134,12 @@ namespace mwg::activex
         QueueDeletedGpuBuffer(cached->second.vertexBuffer);
         QueueDeletedGpuBuffer(cached->second.indexBuffer);
         (void)_gpuBufferCache->layers.erase(cached);
+        const ScopedCurrentContext currentContext(
+            _deviceContext, _renderingContext);
+        if (currentContext.IsValid())
+        {
+            FlushDeletedGpuBuffers();
+        }
     }
 
     bool OpenGlVectorLayerRenderer::HasGpuBufferCache() const noexcept
@@ -1389,6 +1409,24 @@ namespace mwg::activex
     bool OpenGlVectorLayerRenderer::PruneFillMeshCache(
         const rendering::MapRenderScene& scene) noexcept
     {
+        if (_gpuBufferCache != nullptr)
+        {
+            const ScopedCurrentContext currentContext(
+                _deviceContext, _renderingContext);
+            if (currentContext.IsValid())
+            {
+                FlushDeletedGpuBuffers();
+            }
+            if (!PruneGpuBufferCache(scene))
+            {
+                return false;
+            }
+            if (currentContext.IsValid())
+            {
+                FlushDeletedGpuBuffers();
+            }
+        }
+
         if (_fillMeshCache == nullptr)
         {
             return true;
@@ -1552,14 +1590,6 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        FlushDeletedGpuBuffers();
-        if (!PruneGpuBufferCache(scene))
-        {
-            _lastFailureReason =
-                L"OpenGL could not retain its geometry-buffer invalidation state.";
-            return E_FAIL;
-        }
-        FlushDeletedGpuBuffers();
         if (_contextInvalid)
         {
             _lastFailureReason =

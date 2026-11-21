@@ -1841,6 +1841,15 @@ TEST(VectorLayerRenderer, OpenGlReusesGpuBuffersAcrossViewportAndModeChanges)
     const std::size_t uploads = Access::GpuBufferUploadCount(renderer);
     ASSERT_EQ(uploads, 2U);
 
+    ASSERT_TRUE(viewport.ZoomOut(2.0));
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads);
+    ExpectTwoLayerPixels(surface.Get(), viewport);
+    ASSERT_TRUE(viewport.Zoom(2.0));
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads);
+    ExpectTwoLayerPixels(surface.Get(), viewport);
+
     ASSERT_TRUE(viewport.Pan(0.5, -0.25));
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     ASSERT_EQ(
@@ -1874,6 +1883,10 @@ TEST(VectorLayerRenderer, OpenGlReusesGpuBuffersAcrossViewportAndModeChanges)
     EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
     EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads + 4);
     ExpectTwoLayerPixels(surface.Get(), viewport);
+
+    scene.layers.pop_back();
+    ASSERT_TRUE(Access::PruneCaches(renderer, scene));
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 1U);
 }
 
 TEST(VectorLayerRenderer, OpenGlReuploadsEveryLayerForFillModeUpgrade)
@@ -1910,6 +1923,54 @@ TEST(VectorLayerRenderer, OpenGlReuploadsEveryLayerForFillModeUpgrade)
     EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
     EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads + 2);
     ExpectTwoLayerPixels(surface.Get(), viewport);
+}
+
+TEST(VectorLayerRenderer, OpenGlPreservesPolygonPrecisionFarFromLayerOrigin)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {-2e-5, -2e-5, 1e12 + 2.0, 1e12 + 2.0};
+    layer.sourceFeatureCount = 2;
+    layer.polygons = {
+        {{{1e12, 1e12},
+          {1e12 + 2.0, 1e12},
+          {1e12 + 2.0, 1e12 + 2.0},
+          {1e12, 1e12 + 2.0},
+          {1e12, 1e12}}},
+        {{{-2e-5, -2e-5},
+          {2e-5, -2e-5},
+          {2e-5, 2e-5},
+          {-2e-5, 2e-5},
+          {-2e-5, -2e-5}}}};
+    const auto scene = MakeMapScene({std::move(layer)});
+    const RECT bounds{0, 0, 120, 100};
+    const mwg::Extent visibleExtent{-4e-5, -4e-5, 4e-5, 4e-5};
+    const auto viewport = FitViewport(bounds, visibleExtent);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    const HRESULT outline = renderer.Draw(
+        surface.Get(),
+        bounds,
+        scene,
+        viewport,
+        true,
+        mwg::activex::VectorRenderMode::Outline);
+    if (outline == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(outline, S_OK);
+    if (!Access::HasGpuBufferCache(renderer))
+    {
+        GTEST_SKIP() << "OpenGL buffer objects are unavailable.";
+    }
+    constexpr COLORREF kOutline = RGB(24, 58, 82);
+    EXPECT_GT(CountPixels(surface.Get(), bounds, kOutline), 20U);
+
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 0.0, 0.0), kFill);
 }
 
 TEST(VectorLayerRenderer, FailedContextRecoveryBacksOffAndRetriesAfterTheDelayOrResize)
