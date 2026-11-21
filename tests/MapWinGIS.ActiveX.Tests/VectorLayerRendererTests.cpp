@@ -1129,6 +1129,89 @@ TEST(VectorLayerRenderer, OpenGlSupportsConcaveMultipartAndHoledScenes)
             mwg::activex::VectorRenderMode::Outline));
 }
 
+TEST(VectorLayerRenderer, OpenGlLazyComplexMeshesSurviveModesNavigationAndRemoval)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(240, 180);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 240, 180};
+
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {0.0, 0.0, 22.0, 10.0};
+    layer.sourceFeatureCount = 2;
+    layer.polygons = {
+        {{{0.0, 0.0}, {10.0, 0.0}, {10.0, 4.0}, {4.0, 4.0},
+          {4.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}}},
+        {{{12.0, 0.0}, {22.0, 0.0}, {22.0, 10.0}, {12.0, 10.0},
+          {12.0, 0.0}},
+         {{15.0, 3.0}, {15.0, 7.0}, {19.0, 7.0}, {19.0, 3.0},
+          {15.0, 3.0}}}};
+    mwg::rendering::MapRenderScene scene;
+    scene.layers.push_back({mwg::LayerId{1}, Share(std::move(layer))});
+    mwg::Viewport viewport = FitViewport(bounds, {0.0, 0.0, 22.0, 10.0});
+    PerformanceCapture diagnostics;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    const HRESULT first =
+        renderer.Draw(surface.Get(), bounds, scene, viewport);
+    if (first == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(first, S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 2.0, 2.0), kFill);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 7.0), GetSysColor(COLOR_WINDOW));
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 13.0, 2.0), kFill);
+    EXPECT_EQ(
+        MapPixel(surface.Get(), viewport, 17.0, 5.0),
+        GetSysColor(COLOR_WINDOW));
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 1U);
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        2);
+    EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    ASSERT_TRUE(viewport.Pan(0.5, 0.25));
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            bounds,
+            scene,
+            viewport,
+            true,
+            mwg::activex::VectorRenderMode::Outline),
+        S_OK);
+    EXPECT_EQ(
+        MapPixel(surface.Get(), viewport, 2.0, 2.0),
+        GetSysColor(COLOR_WINDOW));
+    EXPECT_GT(CountPixels(surface.Get(), bounds, RGB(24, 58, 82)), 0U);
+
+    ASSERT_TRUE(viewport.Zoom(2.0));
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 8.0, 2.0), kFill);
+    EXPECT_EQ(
+        MapPixel(surface.Get(), viewport, 17.0, 5.0),
+        GetSysColor(COLOR_WINDOW));
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        2);
+
+    Access::InvalidateLayerSceneCache(renderer, scene.layers.front().layerId);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        4);
+
+    scene.layers.clear();
+    ASSERT_TRUE(Access::PruneCaches(renderer, scene));
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 0U);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 0U);
+}
+
 TEST(VectorLayerRenderer, OpenGlRendersLShapedPolygon)
 {
     BitmapSurface surface(120, 100);

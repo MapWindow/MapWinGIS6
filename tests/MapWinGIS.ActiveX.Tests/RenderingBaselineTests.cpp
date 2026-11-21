@@ -663,6 +663,104 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     ReportPerformanceDiagnostics();
 }
 
+TEST_F(RenderingBaseline, MeasuresLazyOpenGlFillCosts)
+{
+    const char* enabled = std::getenv("MWG_RUN_RENDERING_BASELINE");
+    if (enabled == nullptr || std::string(enabled) != "1")
+    {
+        GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
+    }
+
+    DiagnosticCapture diagnostics;
+    const int featureCount = FeatureCountFromEnvironment();
+    TempDirectory directory;
+    const std::filesystem::path path =
+        BaselineDatasetPath(directory.Path(), featureCount);
+
+    Clock::time_point start = Clock::now();
+    Map map;
+    map.AddLayer(VectorDataset::Open(path));
+    const double openMs = ElapsedMilliseconds(start);
+
+    start = Clock::now();
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(map);
+    const double sceneMs = ElapsedMilliseconds(start);
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+    const std::size_t polygonCount = scene.layers.front().scene->polygons.size();
+    ASSERT_GT(polygonCount, 0U);
+    const diagnostics::PerformanceSnapshot beforeDraw =
+        diagnostics::PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(
+        beforeDraw.Counter(
+            diagnostics::PerformanceCounter::PolygonsTriangulated),
+        0);
+
+    DibSurface surface(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, kTargetWidth, kTargetHeight};
+    Viewport viewport(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(viewport.FitExtent(map.GetExtent(), 12.0));
+
+    activex::OpenGlVectorLayerRenderer openGl;
+    start = Clock::now();
+    const HRESULT firstFrame =
+        openGl.Draw(surface.Get(), bounds, scene, viewport);
+    const double firstOpenGlMs = ElapsedMilliseconds(start);
+    if (firstFrame == S_FALSE)
+    {
+        std::wcout << L"  OpenGL lazy fill unavailable: "
+                   << openGl.GetLastFailureReason() << L'\n';
+        ReportPerformanceDiagnostics();
+        return;
+    }
+    ASSERT_EQ(firstFrame, S_OK);
+    const diagnostics::PerformanceSnapshot afterFirstDraw =
+        diagnostics::PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(
+        afterFirstDraw.Counter(
+            diagnostics::PerformanceCounter::PolygonsTriangulated),
+        static_cast<std::int64_t>(polygonCount));
+
+    std::vector<double> steadyFrames;
+    for (int frame = 0; frame < kSteadyFrames; ++frame)
+    {
+        start = Clock::now();
+        ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+        steadyFrames.push_back(ElapsedMilliseconds(start));
+    }
+
+    Viewport panned = viewport;
+    ASSERT_TRUE(panned.Pan(1.0, 1.0));
+    start = Clock::now();
+    ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, panned), S_OK);
+    const double panMs = ElapsedMilliseconds(start);
+
+    Viewport zoomed = viewport;
+    ASSERT_TRUE(zoomed.Zoom(2.0));
+    start = Clock::now();
+    ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, zoomed), S_OK);
+    const double zoomMs = ElapsedMilliseconds(start);
+
+    EXPECT_EQ(
+        diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            diagnostics::PerformanceCounter::PolygonsTriangulated),
+        static_cast<std::int64_t>(polygonCount));
+    EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+
+    std::cout << "Lazy OpenGL fill baseline: "
+              << scene.layers.front().scene->sourceFeatureCount
+              << " source features (" << polygonCount << " lazily triangulated), "
+              << kTargetWidth << 'x' << kTargetHeight << " target\n";
+    Report("Core open dataset", openMs, "ms");
+    Report("Core prepare source-only scene", sceneMs, "ms");
+    Report("OpenGL lazy-fill first frame", firstOpenGlMs, "ms");
+    Report("OpenGL lazy-fill frame median", Median(steadyFrames), "ms");
+    Report("OpenGL lazy-fill pan frame", panMs, "ms");
+    Report("OpenGL lazy-fill zoom frame", zoomMs, "ms");
+    ReportPerformanceDiagnostics();
+}
+
 TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)
 {
     const char* enabled = std::getenv("MWG_RUN_RENDERING_BASELINE");

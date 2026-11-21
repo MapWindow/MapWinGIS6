@@ -28,7 +28,10 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase c
   - Viewport navigation reuses uploaded coordinates through a matrix transform; direct bottom-up DIB presentation removes the CPU row reversal, while the required `glReadPixels` transfer remains.
   - On the generated 2,459-feature Release grid, steady, pan, and zoom frames measured 2.5 / 2.3 / 2.3 ms versus 2.7 / 2.6 / 2.6 ms before; eight readbacks measured 13.5 ms versus 18.3 ms. First-frame buffer and context setup remains noise-sensitive and did not improve.
   - Limitation: the FBO-to-CPU readback remains required by the GDI presentation path, and temporary renderers own separate GPU buffers because OpenGL buffer names are context-local.
-- [ ] **Phase 7 – Testing and regression prevention** (PR 7)
+- [x] **Phase 7 – Testing and regression prevention** (PR 7)
+  - Added an integrated OpenGL regression for lazy concave and holed geometry across fill, outline, pan, zoom, explicit invalidation, and layer removal.
+  - Added explicit point and line dataset coverage for the current polygon-only renderer, plus a repeatable benchmark of source-only scene creation followed by lazy OpenGL fill.
+  - Limitation: the original 2,459-feature dataset remains external; performance checks report timings and structural cache/triangulation counters without environment-sensitive CI thresholds.
 
 **Target branch:** `development`
 
@@ -528,6 +531,25 @@ Targets:
 - Zoom and pan performance must remain at least as good as the current implementation.
 
 Do not introduce arbitrary timing thresholds into CI unless the test environment is sufficiently stable. Record benchmark results and compare them against the established baseline.
+
+### Phase 7 implementation and limitations
+
+- The regular test suites verify generated polygon, concave, holed, multipart,
+  invalid, degenerate, empty, point, and line scenarios. Renderer pixel checks
+  cover GDI and OpenGL paths where the OpenGL context is available.
+- The lazy OpenGL lifecycle test confirms that fill meshes are generated once,
+  reused through render-mode and viewport changes, rebuilt after explicit
+  invalidation, and pruned after scene removal.
+- The opt-in baseline now measures normal source-only scene preparation followed
+  by lazy OpenGL fill, including first, steady, pan, and zoom draws. It records
+  counters to prove that the later draws do not repeat triangulation.
+- A Release x64 run with the generated 2,459-feature grid prepared the
+  source-only scene in 3.0 ms instead of 225.7 ms with explicit meshes. Lazy
+  steady, pan, and zoom frames were 3.3 / 3.2 / 3.1 ms versus 3.1 / 3.3 / 3.0
+  ms with explicit meshes, and all 2,459 polygons triangulated exactly once.
+- Timing remains opt-in and threshold-free because the test environment does not
+  provide stable CI performance measurements. The original large shapefile is
+  supplied only through `MWG_RENDERING_BASELINE_DATASET`, not committed.
 
 ---
 
