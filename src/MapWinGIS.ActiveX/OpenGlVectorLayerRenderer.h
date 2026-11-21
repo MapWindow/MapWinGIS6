@@ -5,8 +5,9 @@
  * @brief Declares the WGL-backed polygon fill and outline renderer.
  *
  * The backend owns a reusable OpenGL context, created on a hidden window that
- * is never presented, and renders into a framebuffer object before copying
- * the pixels into the host device context.
+ * is never presented. Immutable scene geometry is cached in GPU buffers, then
+ * rendered into a framebuffer object before the required pixels are copied to
+ * the host device context.
  */
 #pragma once
 
@@ -28,6 +29,7 @@ namespace mwg::activex
         class OpenGlVectorLayerRendererTestAccess;
         class MapWinGISControlTestAccess;
     }
+    struct ViewTransform;
     class VectorLayerRenderer;
 
     class OpenGlVectorLayerRenderer final : public IVectorRenderBackend
@@ -115,6 +117,21 @@ namespace mwg::activex
         [[nodiscard]] bool InitializeFramebuffer() noexcept;
         [[nodiscard]] bool ResizeFramebuffer(int width, int height) noexcept;
         void Release() noexcept;
+        void QueueDeletedGpuBuffer(unsigned int buffer) noexcept;
+        void FlushDeletedGpuBuffers() noexcept;
+        [[nodiscard]] HRESULT DrawLayerWithGpuBuffers(
+            LayerId layerId,
+            const std::shared_ptr<const rendering::VectorRenderScene>& scene,
+            std::span<const std::optional<rendering::TriangleMesh>> fillMeshes,
+            const ViewTransform& transform,
+            VectorRenderMode renderMode) noexcept;
+        [[nodiscard]] bool PruneGpuBufferCache(
+            const rendering::MapRenderScene& scene) noexcept;
+        void ClearGpuBufferCache() noexcept;
+        void ClearLayerGpuBufferCache(LayerId layerId) noexcept;
+        [[nodiscard]] bool HasGpuBufferCache() const noexcept;
+        [[nodiscard]] std::size_t GpuBufferCacheSize() const noexcept;
+        [[nodiscard]] std::size_t GpuBufferUploadCount() const noexcept;
         [[nodiscard]] TargetValidation ValidateTarget(
             HDC deviceContext,
             const RECT& bounds,
@@ -150,6 +167,8 @@ namespace mwg::activex
         HDC _deviceContext{};
         HGLRC _renderingContext{};
         std::unique_ptr<FramebufferFunctions> _framebufferFunctions;
+        struct BufferFunctions;
+        std::unique_ptr<BufferFunctions> _bufferFunctions;
         unsigned int _framebuffer{};
         unsigned int _renderbuffer{};
         int _framebufferWidth{};
@@ -164,6 +183,9 @@ namespace mwg::activex
         std::vector<unsigned char> _pixelBuffer;
         struct FillMeshCache;
         std::shared_ptr<FillMeshCache> _fillMeshCache;
+        struct GpuBufferCache;
+        std::unique_ptr<GpuBufferCache> _gpuBufferCache;
+        std::size_t _gpuBufferUploadCount = 0;
         int _retryTargetWidth = 0;
         int _retryTargetHeight = 0;
         unsigned int _initializationRetryDrawsRemaining = 0;

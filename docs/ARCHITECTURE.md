@@ -351,19 +351,26 @@ mode draws the source rings without requiring fill meshes. GDI checks each
 layer before drawing it; a layer with non-finite or out-of-range device coordinates is
 skipped and reported (`GetFailedLayers`, `RenderingStatus`) while the other
 layers are still drawn.
-OpenGL uses a context created on a hidden, never-presented window, draws with
-fixed-function calls into a framebuffer object (OpenGL 3.0 or
-`GL_EXT_framebuffer_object`), and reads pixels back in BGRA order into a CPU
-buffer before copying them to the host device context.
+OpenGL uses a context created on a hidden, never-presented window. When OpenGL
+buffer objects are available (OpenGL 1.5 or `GL_ARB_vertex_buffer_object`), it
+uploads each layer's immutable, scene-localized fill and outline coordinates
+once to a reusable vertex buffer and indices to an element buffer. Pan and zoom
+change the fixed-function model-view transform without rebuilding the source
+coordinates. The client-side transformed-array path remains as a compatibility
+fallback. Drawing uses a framebuffer object (OpenGL 3.0 or
+`GL_EXT_framebuffer_object`) and reads pixels back in bottom-up BGRA order into
+a CPU buffer before copying them to the host device context.
 BGRA stores blue, green, red, and alpha bytes in that order.
 The screen renderer retains its staging allocation and GPU framebuffer.
 Alternate-size draws use a temporary OpenGL renderer that releases both after
 the draw and shares the screen renderer's lazy fill meshes, leaving the screen
-resources unchanged.
-A separate vertex buffer is reused across polygons within each layer.
-This avoids a fresh allocation for every polygon's transformed triangle vertices.
+CPU, framebuffer, and geometry-buffer resources unchanged. Temporary renderers
+use their own context-local GPU geometry buffers because OpenGL buffer names are
+not portable between contexts.
 Rendering into a framebuffer object avoids undefined pixels from window
-pixel-ownership rules. Presentation still copies pixels through GDI.
+pixel-ownership rules. `SetDIBitsToDevice` consumes the bottom-up OpenGL scanlines
+without a second CPU row-swap pass, so presentation still requires one readback
+but not an additional full-frame copy.
 Interior rings and concave boundaries draw identically in both backends
 because both consume the same scene. A failed lazy triangulation, an unusable
 explicitly prepared mesh, missing framebuffer-object support, initialization
@@ -498,7 +505,10 @@ OpenGL's lazily generated fill meshes have a second, backend-owned cache keyed
 by stable `LayerId` and the immutable scene identity. Reordering, hiding,
 redrawing, viewport changes, and backend selection retain valid entries.
 Replacing one layer scene invalidates only that layer's entry; removed layers
-and explicit invalidation release their generated mesh storage.
+and explicit invalidation release their generated mesh storage. A parallel
+context-owned GPU buffer cache uses the same layer and scene identity. Scene
+replacement, context recreation, and coordinator invalidation release or queue
+the affected vertex and index buffers; viewport changes do not.
 When a driver cannot provide a fast extent, scene preparation computes bounds
 during the geometry traversal. It caches those bounds on the vector layer,
 so a later map fit does not scan the layer again.
@@ -524,7 +534,8 @@ rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation, mesh storage, and backend frame costs on both a
 convex grid and a complex mix of concave, holed multipart, and many-vertex
 polygons. OpenGL fills every polygon from a supplied or lazily generated
-triangle mesh and copies each frame through CPU memory. Its reusable CPU
+triangle mesh and copies each frame through CPU memory because the ActiveX
+offscreen-DIB composition contract still presents through GDI. Its reusable CPU
 staging buffer is limited to 64 MiB per frame; target dimensions are also
 limited by the detected framebuffer and viewport capabilities. GDI is the supported
 Windows CPU fallback; Core has no independent platform-neutral renderer.

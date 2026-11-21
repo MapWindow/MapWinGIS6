@@ -130,7 +130,8 @@ They cover whole-pixel cached pan draws, fractional and oversized offsets,
 failed-resize cache invalidation and redraw notifications, and screen-buffer
 preservation across scaled draws.
 Renderer tests cover BGRA color and row order, temporary staging buffers,
-and context-initialization retry delays and resize-triggered retries.
+reused GPU geometry buffers across pan, zoom, and render-mode changes, and
+context-initialization retry delays and resize-triggered retries.
 Diagnostic conversion tests verify that malformed UTF-8 and embedded NULs
 are replaced instead of rejecting a completed operation's result.
 Its registered-control host test also sends a wheel zoom and captured drag to
@@ -218,9 +219,10 @@ opening, layer metadata, OGR feature reads, internal geometry conversion,
 scene construction, GEOS validation, triangulation, OpenGL geometry
 submission, complete backend rendering, and `glReadPixels`. It also records
 feature/geometry counts, triangles, invalid and failed triangulations,
-viewport skips, and scene-cache hits and misses. OpenGL currently submits
-client-side transformed arrays with `glDrawElements`; there is no persistent
-GPU buffer-upload stage to measure yet.
+viewport skips, and scene-cache hits and misses. OpenGL records GPU-buffer
+preparation and draw submission in the geometry-submission scope. On systems
+with OpenGL 1.5 or the ARB buffer-object extension, unchanged source geometry
+is uploaded once; other systems retain the client-array fallback.
 
 `RenderingBaseline.MeasuresComplexPolygonCosts` generates a second dataset —
 concave L-shaped polygons, holed rectangles where every feature is a
@@ -308,6 +310,25 @@ The pre-triangulation measurements are retained for comparison:
 | OpenGL first frame | 157 ms | 350 ms | 233.7 ms |
 | OpenGL frame (median) | 10.0 ms | 82.3 ms | 80.5 ms |
 | Private memory, total | 91.7 MiB | 167.4 MiB | 167.2 MiB |
+
+Phase 6 was measured again on the same developer workstation against the
+`development` commit immediately before this phase, using a Release build and
+the generated 2,459-feature grid:
+
+| OpenGL measurement | Before | Phase 6 |
+|---|---:|---:|
+| First frame (context + draw) | 158.8 ms | 161.3 ms |
+| Steady frame (median) | 2.7 ms | 2.5 ms |
+| Pan | 2.6 ms | 2.3 ms |
+| Zoom | 2.6 ms | 2.3 ms |
+| Eight framebuffer readbacks | 18.3 ms | 13.5 ms |
+
+The first-frame timings are noise-sensitive and include one-time context and
+buffer setup. The Phase 6 geometry-submission scope covers the initial GPU
+upload plus eight draws, so it is not directly comparable with the old
+per-frame transformed client-array submission total. The frame still requires
+`glReadPixels` because the control presents through GDI; this phase removes the
+extra CPU scanline reversal, not the required GPU-to-CPU transfer.
 
 Scene preparation reads geometries sequentially through OGR and copies
 their coordinates directly, avoiding indexed lookups, WKT serialization, and
