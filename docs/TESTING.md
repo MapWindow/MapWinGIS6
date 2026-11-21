@@ -217,7 +217,10 @@ meshes and later steady, pan, and zoom draws do not triangulate again. The
 renderer regression suite also checks lazy triangulation of concave and holed
 polygons across outline/fill changes, viewport changes, cache invalidation, and
 scene removal. Point and line datasets are explicitly covered as unsupported
-by the polygon-only renderer rather than being silently accepted.
+by the polygon-only renderer rather than being silently accepted. OpenGL pixel
+and buffer-lifecycle tests that require a framebuffer-capable context are
+conditional on that capability. GitHub-hosted Windows CI can skip those tests,
+so run them locally on an FBO-capable OpenGL driver to verify that coverage.
 
 Performance diagnostics are disabled by default and aggregate process-wide
 timings with `std::chrono::steady_clock`. The collector records dataset

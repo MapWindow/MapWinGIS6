@@ -712,7 +712,7 @@ TEST_F(RenderingBaseline, MeasuresLazyOpenGlFillCosts)
         std::wcout << L"  OpenGL lazy fill unavailable: "
                    << openGl.GetLastFailureReason() << L'\n';
         ReportPerformanceDiagnostics();
-        return;
+        GTEST_SKIP() << "OpenGL lazy fill unavailable; no baseline measured.";
     }
     ASSERT_EQ(firstFrame, S_OK);
     const diagnostics::PerformanceSnapshot afterFirstDraw =
