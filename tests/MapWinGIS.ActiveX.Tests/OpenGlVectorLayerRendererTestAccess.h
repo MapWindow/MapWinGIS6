@@ -104,5 +104,11 @@ namespace mwg::activex::testing
         {
             renderer.ClearLayerFillMeshCache(layerId);
         }
+
+        static void InvalidateSceneCache(
+            OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            renderer.ClearFillMeshCache();
+        }
     };
 }

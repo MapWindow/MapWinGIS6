@@ -790,8 +790,6 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        const diagnostics::PerformanceScope submissionScope(
-            diagnostics::PerformanceOperation::OpenGlGeometrySubmission);
         try
         {
             if (_gpuBufferCache == nullptr)
@@ -807,7 +805,8 @@ namespace mwg::activex
             {
                 QueueDeletedGpuBuffer(cached->second.vertexBuffer);
                 QueueDeletedGpuBuffer(cached->second.indexBuffer);
-                cached = _gpuBufferCache->layers.erase(cached);
+                (void)_gpuBufferCache->layers.erase(cached);
+                cached = _gpuBufferCache->layers.end();
                 FlushDeletedGpuBuffers();
             }
 
@@ -984,6 +983,8 @@ namespace mwg::activex
                 ++_gpuBufferUploadCount;
             }
 
+            const diagnostics::PerformanceScope submissionScope(
+                diagnostics::PerformanceOperation::OpenGlGeometrySubmission);
             const GpuBufferCache::Layer& layer = cached->second;
             const double inverseResolution = 1.0 / transform.resolution;
             const double translateX =
@@ -1047,7 +1048,7 @@ namespace mwg::activex
     {
         if (_gpuBufferCache == nullptr)
         {
-            return true;
+            return !_contextInvalid;
         }
 
         for (auto cached = _gpuBufferCache->layers.begin();
@@ -1086,7 +1087,7 @@ namespace mwg::activex
             QueueDeletedGpuBuffer(cached->second.indexBuffer);
             cached = _gpuBufferCache->layers.erase(cached);
         }
-        return true;
+        return !_contextInvalid;
     }
 
     void OpenGlVectorLayerRenderer::ClearGpuBufferCache() noexcept
@@ -1123,7 +1124,7 @@ namespace mwg::activex
 
     bool OpenGlVectorLayerRenderer::HasGpuBufferCache() const noexcept
     {
-        return _bufferFunctions != nullptr;
+        return _gpuBufferCache != nullptr;
     }
 
     std::size_t OpenGlVectorLayerRenderer::GpuBufferCacheSize() const noexcept
@@ -1554,7 +1555,9 @@ namespace mwg::activex
         FlushDeletedGpuBuffers();
         if (!PruneGpuBufferCache(scene))
         {
-            return S_FALSE;
+            _lastFailureReason =
+                L"OpenGL could not retain its geometry-buffer invalidation state.";
+            return E_FAIL;
         }
         FlushDeletedGpuBuffers();
         if (_contextInvalid)

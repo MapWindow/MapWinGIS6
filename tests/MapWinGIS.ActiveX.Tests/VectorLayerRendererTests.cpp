@@ -1822,9 +1822,9 @@ TEST(VectorLayerRenderer, OpenGlReusesGpuBuffersAcrossViewportAndModeChanges)
     using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
     BitmapSurface surface(120, 100);
     ASSERT_TRUE(surface.IsValid());
-    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    mwg::rendering::MapRenderScene scene = MakeTwoLayerScene();
     const RECT bounds{0, 0, 120, 100};
-    mwg::Viewport viewport = FitViewport(bounds);
+    mwg::Viewport viewport = FitViewport(bounds, kTwoLayerExtent);
     mwg::activex::OpenGlVectorLayerRenderer renderer;
 
     const HRESULT first = renderer.Draw(surface.Get(), bounds, scene, viewport);
@@ -1837,9 +1837,9 @@ TEST(VectorLayerRenderer, OpenGlReusesGpuBuffersAcrossViewportAndModeChanges)
     {
         GTEST_SKIP() << "OpenGL buffer objects are unavailable.";
     }
-    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 1U);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
     const std::size_t uploads = Access::GpuBufferUploadCount(renderer);
-    ASSERT_GT(uploads, 0U);
+    ASSERT_EQ(uploads, 2U);
 
     ASSERT_TRUE(viewport.Pan(0.5, -0.25));
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
@@ -1852,13 +1852,64 @@ TEST(VectorLayerRenderer, OpenGlReusesGpuBuffersAcrossViewportAndModeChanges)
             true,
             mwg::activex::VectorRenderMode::Outline),
         S_OK);
-    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 1U);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
     EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads);
 
     (void)Edit(scene.layers.front());
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
-    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 1U);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
     EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads + 1);
+    ExpectTwoLayerPixels(surface.Get(), viewport);
+
+    Access::InvalidateLayerSceneCache(renderer, scene.layers.front().layerId);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 1U);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
+    EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads + 2);
+    ExpectTwoLayerPixels(surface.Get(), viewport);
+
+    Access::InvalidateSceneCache(renderer);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 0U);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
+    EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads + 4);
+    ExpectTwoLayerPixels(surface.Get(), viewport);
+}
+
+TEST(VectorLayerRenderer, OpenGlReuploadsEveryLayerForFillModeUpgrade)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const auto scene = MakeTwoLayerScene();
+    const RECT bounds{0, 0, 120, 100};
+    const auto viewport = FitViewport(bounds, kTwoLayerExtent);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    const HRESULT outline = renderer.Draw(
+        surface.Get(),
+        bounds,
+        scene,
+        viewport,
+        true,
+        mwg::activex::VectorRenderMode::Outline);
+    if (outline == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(outline, S_OK);
+    if (!Access::HasGpuBufferCache(renderer))
+    {
+        GTEST_SKIP() << "OpenGL buffer objects are unavailable.";
+    }
+    const std::size_t uploads = Access::GpuBufferUploadCount(renderer);
+    ASSERT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
+    ASSERT_EQ(uploads, 2U);
+
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 2U);
+    EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads + 2);
+    ExpectTwoLayerPixels(surface.Get(), viewport);
 }
 
 TEST(VectorLayerRenderer, FailedContextRecoveryBacksOffAndRetriesAfterTheDelayOrResize)
