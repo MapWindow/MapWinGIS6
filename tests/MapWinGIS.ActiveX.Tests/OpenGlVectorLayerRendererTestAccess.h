@@ -48,6 +48,24 @@ namespace mwg::activex::testing
             renderer.SimulateContextLoss();
         }
 
+        [[nodiscard]] static bool HasGpuBufferCache(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.HasGpuBufferCache();
+        }
+
+        [[nodiscard]] static std::size_t GpuBufferCacheSize(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.GpuBufferCacheSize();
+        }
+
+        [[nodiscard]] static std::size_t GpuBufferUploadCount(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.GpuBufferUploadCount();
+        }
+
         /// Checks scene support without activating an OpenGL context.
         [[nodiscard]] static bool IsSceneSupported(
             const rendering::MapRenderScene& scene,

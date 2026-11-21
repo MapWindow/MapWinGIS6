@@ -1817,6 +1817,50 @@ TEST(VectorLayerRenderer, AlternateSizeDrawPreservesScreenStaging)
     ExpectTwoLayerPixels(surface.Get(), screenViewport);
 }
 
+TEST(VectorLayerRenderer, OpenGlReusesGpuBuffersAcrossViewportAndModeChanges)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    const RECT bounds{0, 0, 120, 100};
+    mwg::Viewport viewport = FitViewport(bounds);
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    const HRESULT first = renderer.Draw(surface.Get(), bounds, scene, viewport);
+    if (first == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(first, S_OK);
+    if (!Access::HasGpuBufferCache(renderer))
+    {
+        GTEST_SKIP() << "OpenGL buffer objects are unavailable.";
+    }
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 1U);
+    const std::size_t uploads = Access::GpuBufferUploadCount(renderer);
+    ASSERT_GT(uploads, 0U);
+
+    ASSERT_TRUE(viewport.Pan(0.5, -0.25));
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            bounds,
+            scene,
+            viewport,
+            true,
+            mwg::activex::VectorRenderMode::Outline),
+        S_OK);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 1U);
+    EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads);
+
+    (void)Edit(scene.layers.front());
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 1U);
+    EXPECT_EQ(Access::GpuBufferUploadCount(renderer), uploads + 1);
+}
+
 TEST(VectorLayerRenderer, FailedContextRecoveryBacksOffAndRetriesAfterTheDelayOrResize)
 {
     using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;

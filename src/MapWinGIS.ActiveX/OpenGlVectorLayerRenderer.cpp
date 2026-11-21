@@ -11,7 +11,9 @@
  * rings and do not require meshes. Each polygon is drawn completely before
  * the next one, matching the GDI backend's painter order. Fill scenes whose
  * mesh preparation fails, or systems without framebuffer objects, return
- * S_FALSE so the coordinator can use GDI.
+ * S_FALSE so the coordinator can use GDI. On systems that expose buffer
+ * objects, immutable source geometry is uploaded once and reused across
+ * viewport changes.
  */
 #include "OpenGlVectorLayerRenderer.h"
 
@@ -50,6 +52,9 @@ namespace mwg::activex
         constexpr std::size_t kMaxStagingBufferBytes = 64U * 1024U * 1024U;
         constexpr std::size_t kBytesPerPixel = 4;
         constexpr GLenum kBgra = 0x80E1;
+        constexpr GLenum kArrayBuffer = 0x8892;
+        constexpr GLenum kElementArrayBuffer = 0x8893;
+        constexpr GLenum kStaticDraw = 0x88E4;
         constexpr unsigned int kInitializationRetryDraws = 60;
     }
 
@@ -112,6 +117,60 @@ namespace mwg::activex
                 LoadFunction(renderbufferStorage, "glRenderbufferStorage", suffix) &&
                 LoadFunction(framebufferRenderbuffer, "glFramebufferRenderbuffer", suffix) &&
                 LoadFunction(checkFramebufferStatus, "glCheckFramebufferStatus", suffix);
+        }
+    };
+
+    struct OpenGlVectorLayerRenderer::BufferFunctions final
+    {
+        using GenBuffers = void(APIENTRY*)(GLsizei, GLuint*);
+        using DeleteBuffers = void(APIENTRY*)(GLsizei, const GLuint*);
+        using BindBuffer = void(APIENTRY*)(GLenum, GLuint);
+        using BufferData =
+            void(APIENTRY*)(GLenum, std::ptrdiff_t, const void*, GLenum);
+
+        GenBuffers genBuffers{};
+        DeleteBuffers deleteBuffers{};
+        BindBuffer bindBuffer{};
+        BufferData bufferData{};
+
+        [[nodiscard]] bool Load() noexcept
+        {
+            return LoadSet("") || LoadSet("ARB");
+        }
+
+    private:
+        template <typename Function>
+        [[nodiscard]] static bool LoadFunction(
+            Function& function,
+            const char* name,
+            const char* suffix) noexcept
+        {
+            char fullName[64]{};
+            const int written =
+                std::snprintf(fullName, sizeof(fullName), "%s%s", name, suffix);
+            if (written <= 0 || static_cast<std::size_t>(written) >= sizeof(fullName))
+            {
+                return false;
+            }
+
+            const PROC address = wglGetProcAddress(fullName);
+            const auto value = reinterpret_cast<std::intptr_t>(address);
+            if (value == 0 || value == 1 || value == 2 || value == 3 || value == -1)
+            {
+                function = nullptr;
+                return false;
+            }
+
+            function = reinterpret_cast<Function>(address);
+            return true;
+        }
+
+        [[nodiscard]] bool LoadSet(const char* suffix) noexcept
+        {
+            return LoadFunction(genBuffers, "glGenBuffers", suffix) &&
+                LoadFunction(deleteBuffers, "glDeleteBuffers", suffix) &&
+                LoadFunction(bindBuffer, "glBindBuffer", suffix) &&
+                LoadFunction(bufferData, "glBufferData", suffix);
         }
     };
 
@@ -379,6 +438,35 @@ namespace mwg::activex
         std::uint64_t nextPreparationToken = 0;
     };
 
+    struct OpenGlVectorLayerRenderer::GpuBufferCache final
+    {
+        struct Ring final
+        {
+            GLint first = 0;
+            GLsizei count = 0;
+        };
+
+        struct Polygon final
+        {
+            GLsizei indexCount = 0;
+            std::size_t indexOffset = 0;
+            std::vector<Ring> rings;
+        };
+
+        struct Layer final
+        {
+            std::weak_ptr<const rendering::VectorRenderScene> scene;
+            rendering::Point origin;
+            GLuint vertexBuffer = 0;
+            GLuint indexBuffer = 0;
+            bool hasFill = false;
+            std::vector<Polygon> polygons;
+        };
+
+        std::map<LayerId, Layer> layers;
+        std::vector<GLuint> deletedBuffers;
+    };
+
     bool OpenGlVectorLayerRenderer::IsSceneSupported(
         const rendering::MapRenderScene& scene,
         const VectorRenderMode renderMode) noexcept
@@ -544,6 +632,19 @@ namespace mwg::activex
             return false;
         }
 
+        try
+        {
+            _bufferFunctions = std::make_unique<BufferFunctions>();
+            if (!_bufferFunctions->Load())
+            {
+                _bufferFunctions.reset();
+            }
+        }
+        catch (const std::bad_alloc&)
+        {
+            _bufferFunctions.reset();
+        }
+
         while (glGetError() != GL_NO_ERROR)
         {
         }
@@ -601,8 +702,10 @@ namespace mwg::activex
 
     void OpenGlVectorLayerRenderer::Release() noexcept
     {
-        // The context is not shared, so deleting it also frees the
-        // framebuffer and renderbuffer objects.
+        // The context is not shared, so deleting it also frees all framebuffer
+        // and geometry buffer objects.
+        _gpuBufferCache.reset();
+        _bufferFunctions.reset();
         _framebufferFunctions.reset();
         _framebuffer = 0;
         _renderbuffer = 0;
@@ -632,6 +735,405 @@ namespace mwg::activex
             DestroyWindow(_window);
             _window = nullptr;
         }
+    }
+
+    void OpenGlVectorLayerRenderer::FlushDeletedGpuBuffers() noexcept
+    {
+        if (_gpuBufferCache == nullptr || _bufferFunctions == nullptr ||
+            _gpuBufferCache->deletedBuffers.empty())
+        {
+            return;
+        }
+
+        std::vector<GLuint>& buffers = _gpuBufferCache->deletedBuffers;
+        std::size_t offset = 0;
+        while (offset < buffers.size())
+        {
+            const std::size_t count =
+                std::min<std::size_t>(
+                    buffers.size() - offset,
+                    static_cast<std::size_t>(std::numeric_limits<GLsizei>::max()));
+            _bufferFunctions->deleteBuffers(
+                static_cast<GLsizei>(count),
+                buffers.data() + offset);
+            offset += count;
+        }
+        buffers.clear();
+    }
+
+    void OpenGlVectorLayerRenderer::QueueDeletedGpuBuffer(
+        const unsigned int buffer) noexcept
+    {
+        if (buffer == 0 || _gpuBufferCache == nullptr)
+        {
+            return;
+        }
+        try
+        {
+            _gpuBufferCache->deletedBuffers.push_back(buffer);
+        }
+        catch (const std::bad_alloc&)
+        {
+            _contextInvalid = true;
+        }
+    }
+
+    HRESULT OpenGlVectorLayerRenderer::DrawLayerWithGpuBuffers(
+        const LayerId layerId,
+        const std::shared_ptr<const rendering::VectorRenderScene>& scene,
+        const std::span<const std::optional<rendering::TriangleMesh>> fillMeshes,
+        const ViewTransform& transform,
+        const VectorRenderMode renderMode) noexcept
+    {
+        if (_bufferFunctions == nullptr)
+        {
+            return S_FALSE;
+        }
+
+        const diagnostics::PerformanceScope submissionScope(
+            diagnostics::PerformanceOperation::OpenGlGeometrySubmission);
+        try
+        {
+            if (_gpuBufferCache == nullptr)
+            {
+                _gpuBufferCache = std::make_unique<GpuBufferCache>();
+            }
+
+            auto cached = _gpuBufferCache->layers.find(layerId);
+            const bool needFill = renderMode == VectorRenderMode::Fill;
+            if (cached != _gpuBufferCache->layers.end() &&
+                (cached->second.scene.lock() != scene ||
+                 (needFill && !cached->second.hasFill)))
+            {
+                QueueDeletedGpuBuffer(cached->second.vertexBuffer);
+                QueueDeletedGpuBuffer(cached->second.indexBuffer);
+                cached = _gpuBufferCache->layers.erase(cached);
+                FlushDeletedGpuBuffers();
+            }
+
+            if (cached == _gpuBufferCache->layers.end())
+            {
+                rendering::Point origin{};
+                bool originSet = false;
+                for (std::size_t polygonIndex = 0;
+                     polygonIndex < scene->polygons.size();
+                     ++polygonIndex)
+                {
+                    const rendering::PolygonView polygon =
+                        scene->polygons[polygonIndex];
+                    for (std::size_t ringIndex = 0;
+                         ringIndex < polygon.size();
+                         ++ringIndex)
+                    {
+                        const std::span<const rendering::Point> ring =
+                            polygon[ringIndex];
+                        if (!ring.empty())
+                        {
+                            origin = ring.front();
+                            originSet = true;
+                            break;
+                        }
+                    }
+                    if (originSet)
+                    {
+                        break;
+                    }
+                }
+
+                GpuBufferCache::Layer prepared;
+                prepared.scene = scene;
+                prepared.origin = origin;
+                prepared.hasFill = needFill;
+
+                std::vector<GLdouble> vertices;
+                std::vector<std::uint32_t> indices;
+                std::size_t vertexCount = 0;
+                prepared.polygons.reserve(scene->polygons.size());
+                for (std::size_t polygonIndex = 0;
+                     polygonIndex < scene->polygons.size();
+                     ++polygonIndex)
+                {
+                    GpuBufferCache::Polygon polygon;
+                    const std::size_t meshVertexOffset = vertexCount;
+                    if (needFill)
+                    {
+                        const rendering::TriangleMesh& mesh =
+                            *fillMeshes[polygonIndex];
+                        if (mesh.vertices.size() >
+                                static_cast<std::size_t>(
+                                    std::numeric_limits<GLint>::max()) -
+                                    vertexCount)
+                        {
+                            return E_OUTOFMEMORY;
+                        }
+                        if (mesh.indices.size() >
+                            static_cast<std::size_t>(std::numeric_limits<GLsizei>::max()))
+                        {
+                            return E_OUTOFMEMORY;
+                        }
+                        polygon.indexOffset = indices.size();
+                        polygon.indexCount = static_cast<GLsizei>(mesh.indices.size());
+                        for (const rendering::Point& point : mesh.vertices)
+                        {
+                            vertices.push_back(point.x - origin.x);
+                            vertices.push_back(point.y - origin.y);
+                        }
+                        for (const std::uint32_t index : mesh.indices)
+                        {
+                            indices.push_back(
+                                static_cast<std::uint32_t>(meshVertexOffset) + index);
+                        }
+                        vertexCount += mesh.vertices.size();
+                    }
+
+                    const rendering::PolygonView rings = scene->polygons[polygonIndex];
+                    polygon.rings.reserve(rings.size());
+                    for (std::size_t ringIndex = 0;
+                         ringIndex < rings.size();
+                         ++ringIndex)
+                    {
+                        const std::span<const rendering::Point> ring = rings[ringIndex];
+                        std::size_t count = ring.size();
+                        if (count > 1 &&
+                            ring.front().x == ring.back().x &&
+                            ring.front().y == ring.back().y)
+                        {
+                            --count;
+                        }
+                        if (count < 3)
+                        {
+                            continue;
+                        }
+                        if (count >
+                                static_cast<std::size_t>(
+                                    std::numeric_limits<GLint>::max()) -
+                                    vertexCount ||
+                            count >
+                                static_cast<std::size_t>(
+                                    std::numeric_limits<GLsizei>::max()))
+                        {
+                            return E_OUTOFMEMORY;
+                        }
+                        for (std::size_t index = 0; index < count; ++index)
+                        {
+                            vertices.push_back(ring[index].x - origin.x);
+                            vertices.push_back(ring[index].y - origin.y);
+                        }
+                        polygon.rings.push_back({
+                            static_cast<GLint>(vertexCount),
+                            static_cast<GLsizei>(count)});
+                        vertexCount += count;
+                    }
+                    prepared.polygons.push_back(std::move(polygon));
+                }
+
+                const std::size_t vertexBytes =
+                    vertices.size() * sizeof(GLdouble);
+                const std::size_t indexBytes =
+                    indices.size() * sizeof(std::uint32_t);
+                if (vertexBytes >
+                        static_cast<std::size_t>(
+                            std::numeric_limits<std::ptrdiff_t>::max()) ||
+                    indexBytes >
+                        static_cast<std::size_t>(
+                            std::numeric_limits<std::ptrdiff_t>::max()))
+                {
+                    return E_OUTOFMEMORY;
+                }
+
+                while (glGetError() != GL_NO_ERROR)
+                {
+                }
+                _bufferFunctions->genBuffers(1, &prepared.vertexBuffer);
+                _bufferFunctions->bindBuffer(kArrayBuffer, prepared.vertexBuffer);
+                _bufferFunctions->bufferData(
+                    kArrayBuffer,
+                    static_cast<std::ptrdiff_t>(vertexBytes),
+                    vertices.data(),
+                    kStaticDraw);
+                if (needFill)
+                {
+                    _bufferFunctions->genBuffers(1, &prepared.indexBuffer);
+                    _bufferFunctions->bindBuffer(
+                        kElementArrayBuffer,
+                        prepared.indexBuffer);
+                    _bufferFunctions->bufferData(
+                        kElementArrayBuffer,
+                        static_cast<std::ptrdiff_t>(indexBytes),
+                        indices.data(),
+                        kStaticDraw);
+                }
+                const bool uploadFailed = glGetError() != GL_NO_ERROR ||
+                    prepared.vertexBuffer == 0 ||
+                    (needFill && prepared.indexBuffer == 0);
+                while (glGetError() != GL_NO_ERROR)
+                {
+                }
+                if (uploadFailed)
+                {
+                    QueueDeletedGpuBuffer(prepared.vertexBuffer);
+                    QueueDeletedGpuBuffer(prepared.indexBuffer);
+                    FlushDeletedGpuBuffers();
+                    _bufferFunctions->bindBuffer(kArrayBuffer, 0);
+                    _bufferFunctions->bindBuffer(kElementArrayBuffer, 0);
+                    return S_FALSE;
+                }
+
+                cached = _gpuBufferCache->layers.emplace(
+                    layerId, std::move(prepared)).first;
+                ++_gpuBufferUploadCount;
+            }
+
+            const GpuBufferCache::Layer& layer = cached->second;
+            const double inverseResolution = 1.0 / transform.resolution;
+            const double translateX =
+                transform.halfWidth +
+                (layer.origin.x - transform.centerX) * inverseResolution;
+            const double translateY =
+                transform.halfHeight -
+                (layer.origin.y - transform.centerY) * inverseResolution;
+            glMatrixMode(GL_MODELVIEW);
+            glLoadIdentity();
+            glTranslated(translateX, translateY, 0.0);
+            glScaled(inverseResolution, -inverseResolution, 1.0);
+
+            glEnableClientState(GL_VERTEX_ARRAY);
+            _bufferFunctions->bindBuffer(kArrayBuffer, layer.vertexBuffer);
+            glVertexPointer(2, GL_DOUBLE, 0, nullptr);
+            if (needFill)
+            {
+                _bufferFunctions->bindBuffer(
+                    kElementArrayBuffer,
+                    layer.indexBuffer);
+            }
+            for (const GpuBufferCache::Polygon& polygon : layer.polygons)
+            {
+                if (needFill)
+                {
+                    glColor3ub(61, 122, 169);
+                    glDrawElements(
+                        GL_TRIANGLES,
+                        polygon.indexCount,
+                        GL_UNSIGNED_INT,
+                        reinterpret_cast<const void*>(
+                            static_cast<std::uintptr_t>(
+                                polygon.indexOffset * sizeof(std::uint32_t))));
+                }
+                glColor3ub(24, 58, 82);
+                for (const GpuBufferCache::Ring& ring : polygon.rings)
+                {
+                    glDrawArrays(GL_LINE_LOOP, ring.first, ring.count);
+                }
+            }
+            glDisableClientState(GL_VERTEX_ARRAY);
+            _bufferFunctions->bindBuffer(kArrayBuffer, 0);
+            _bufferFunctions->bindBuffer(kElementArrayBuffer, 0);
+        }
+        catch (const std::bad_alloc&)
+        {
+            _contextInvalid = true;
+            return E_OUTOFMEMORY;
+        }
+        catch (const std::length_error&)
+        {
+            _contextInvalid = true;
+            return E_OUTOFMEMORY;
+        }
+        return S_OK;
+    }
+
+    bool OpenGlVectorLayerRenderer::PruneGpuBufferCache(
+        const rendering::MapRenderScene& scene) noexcept
+    {
+        if (_gpuBufferCache == nullptr)
+        {
+            return true;
+        }
+
+        for (auto cached = _gpuBufferCache->layers.begin();
+             cached != _gpuBufferCache->layers.end();)
+        {
+            bool retain = false;
+            for (const rendering::LayerRenderScene& layer : scene.layers)
+            {
+                if (layer.layerId == cached->first)
+                {
+                    retain = !cached->second.scene.expired() &&
+                        cached->second.scene.lock() == layer.scene;
+                    break;
+                }
+            }
+            if (!retain)
+            {
+                for (const rendering::SkippedLayer& layer : scene.skippedLayers)
+                {
+                    if (layer.layerId == cached->first &&
+                        layer.reason == rendering::LayerSkipReason::Hidden &&
+                        !cached->second.scene.expired())
+                    {
+                        retain = true;
+                        break;
+                    }
+                }
+            }
+            if (retain)
+            {
+                ++cached;
+                continue;
+            }
+
+            QueueDeletedGpuBuffer(cached->second.vertexBuffer);
+            QueueDeletedGpuBuffer(cached->second.indexBuffer);
+            cached = _gpuBufferCache->layers.erase(cached);
+        }
+        return true;
+    }
+
+    void OpenGlVectorLayerRenderer::ClearGpuBufferCache() noexcept
+    {
+        if (_gpuBufferCache == nullptr)
+        {
+            return;
+        }
+        for (const auto& [layerId, layer] : _gpuBufferCache->layers)
+        {
+            (void)layerId;
+            QueueDeletedGpuBuffer(layer.vertexBuffer);
+            QueueDeletedGpuBuffer(layer.indexBuffer);
+        }
+        _gpuBufferCache->layers.clear();
+    }
+
+    void OpenGlVectorLayerRenderer::ClearLayerGpuBufferCache(
+        const LayerId layerId) noexcept
+    {
+        if (_gpuBufferCache == nullptr)
+        {
+            return;
+        }
+        const auto cached = _gpuBufferCache->layers.find(layerId);
+        if (cached == _gpuBufferCache->layers.end())
+        {
+            return;
+        }
+        QueueDeletedGpuBuffer(cached->second.vertexBuffer);
+        QueueDeletedGpuBuffer(cached->second.indexBuffer);
+        (void)_gpuBufferCache->layers.erase(cached);
+    }
+
+    bool OpenGlVectorLayerRenderer::HasGpuBufferCache() const noexcept
+    {
+        return _bufferFunctions != nullptr;
+    }
+
+    std::size_t OpenGlVectorLayerRenderer::GpuBufferCacheSize() const noexcept
+    {
+        return _gpuBufferCache == nullptr ? 0U : _gpuBufferCache->layers.size();
+    }
+
+    std::size_t OpenGlVectorLayerRenderer::GpuBufferUploadCount() const noexcept
+    {
+        return _gpuBufferUploadCount;
     }
 
     OpenGlVectorLayerRenderer::TargetValidation
@@ -953,10 +1455,12 @@ namespace mwg::activex
     {
         if (_fillMeshCache == nullptr)
         {
+            ClearGpuBufferCache();
             return;
         }
         _fillMeshCache->layers.clear();
         ++_fillMeshCache->generation;
+        ClearGpuBufferCache();
     }
 
     void OpenGlVectorLayerRenderer::ClearLayerFillMeshCache(
@@ -964,9 +1468,11 @@ namespace mwg::activex
     {
         if (_fillMeshCache == nullptr)
         {
+            ClearLayerGpuBufferCache(layerId);
             return;
         }
         (void)_fillMeshCache->layers.erase(layerId);
+        ClearLayerGpuBufferCache(layerId);
     }
 
     std::size_t OpenGlVectorLayerRenderer::FillMeshCacheSize() const noexcept
@@ -1045,6 +1551,19 @@ namespace mwg::activex
             return S_FALSE;
         }
 
+        FlushDeletedGpuBuffers();
+        if (!PruneGpuBufferCache(scene))
+        {
+            return S_FALSE;
+        }
+        FlushDeletedGpuBuffers();
+        if (_contextInvalid)
+        {
+            _lastFailureReason =
+                L"OpenGL could not retain its geometry-buffer invalidation state.";
+            return E_FAIL;
+        }
+
         while (glGetError() != GL_NO_ERROR)
         {
         }
@@ -1090,12 +1609,27 @@ namespace mwg::activex
                     L"this frame was rendered with GDI.";
                 return S_FALSE;
             }
-            const HRESULT layerResult =
-                DrawLayer(
-                    *layer.scene,
+            HRESULT layerResult = S_FALSE;
+            if (_bufferFunctions != nullptr)
+            {
+                layerResult = DrawLayerWithGpuBuffers(
+                    layer.layerId,
+                    layer.scene,
                     fillMeshes,
                     *transform,
                     renderMode);
+            }
+            if (layerResult == S_FALSE)
+            {
+                glMatrixMode(GL_MODELVIEW);
+                glLoadIdentity();
+                layerResult =
+                    DrawLayer(
+                        *layer.scene,
+                        fillMeshes,
+                        *transform,
+                        renderMode);
+            }
             if (FAILED(layerResult))
             {
                 _lastFailureReason = L"OpenGL could not allocate its vertex buffers.";
@@ -1103,7 +1637,6 @@ namespace mwg::activex
             }
         }
 
-        glFlush();
         glReadBuffer(kColorAttachment0);
         {
             const diagnostics::PerformanceScope readbackScope(
@@ -1134,31 +1667,14 @@ namespace mwg::activex
         const RECT& bounds,
         const Target& target) noexcept
     {
-        for (std::size_t row = 0; row < target.pixelHeight / 2; ++row)
-        {
-            for (std::size_t column = 0; column < target.pixelWidth; ++column)
-            {
-                const std::size_t topPixel =
-                    (row * target.pixelWidth + column) * kBytesPerPixel;
-                const std::size_t bottomPixel =
-                    ((target.pixelHeight - row - 1) * target.pixelWidth + column) *
-                    kBytesPerPixel;
-                for (std::size_t channel = 0; channel < kBytesPerPixel; ++channel)
-                {
-                    std::swap(
-                        _pixelBuffer[topPixel + channel],
-                        _pixelBuffer[bottomPixel + channel]);
-                }
-            }
-        }
-
-        // GL_BGRA matches the little-endian 32-bit BI_RGB DIB byte
-        // order; only the OpenGL bottom-up row order needs reversing.
+        // GL_BGRA matches the little-endian 32-bit BI_RGB DIB byte order.
+        // Positive BI_RGB height tells GDI that the first scanline is the
+        // bottom row, matching glReadPixels without a CPU row-copy pass.
 
         BITMAPINFO bitmapInfo{};
         bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
         bitmapInfo.bmiHeader.biWidth = target.width;
-        bitmapInfo.bmiHeader.biHeight = -target.height;
+        bitmapInfo.bmiHeader.biHeight = target.height;
         bitmapInfo.bmiHeader.biPlanes = 1;
         bitmapInfo.bmiHeader.biBitCount = 32;
         bitmapInfo.bmiHeader.biCompression = BI_RGB;

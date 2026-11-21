@@ -48,6 +48,18 @@ while a changed scene for one layer invalidates only that entry. The coordinator
 prunes removed IDs before every backend choice, and explicit layer or scene
 invalidation releases the retained CPU mesh storage.
 
+The screen OpenGL renderer also caches context-local vertex and index buffers
+for immutable layer geometry when OpenGL 1.5 or
+`GL_ARB_vertex_buffer_object` is available. Stored vertices are localized to
+one origin for the layer, so pan and zoom change a model-view transform without
+reuploading coordinates. Scene changes and explicit invalidation release the
+affected buffers; the client-array path remains the fallback. Temporary
+renderers share CPU fill meshes but own separate GPU buffers because buffer
+names belong to their OpenGL contexts. A framebuffer readback remains required
+for GDI presentation, but the bottom-up BGRA buffer can be passed to a
+bottom-up DIB without a CPU row reversal. See
+`OpenGlVectorLayerRenderer.cpp`.
+
 Core objects are not thread-safe by default. The control serializes their use.
 ActiveX-specific implementation units are also compiled into
 `MapWinGIS.ActiveX.Impl.lib`, allowing native tests to exercise them without

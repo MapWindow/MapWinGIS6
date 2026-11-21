@@ -44,6 +44,9 @@ datasets or triangulating polygons again. OpenGL generates missing fill
 meshes on the first fill draw and caches them per stable map layer. Viewport
 changes, backend selection, layer reordering, and temporary draws reuse valid
 entries; changed or removed layers release or replace only their own meshes.
+The screen OpenGL renderer uploads immutable fill and outline geometry to
+reusable GPU buffers, then changes only its viewport transform on pan and zoom.
+Systems without buffer-object support keep the client-array fallback.
 
 ## Build and test
 

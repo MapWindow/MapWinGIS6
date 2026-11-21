@@ -22,8 +22,12 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase c
   - OpenGL lazy fill meshes are cached per stable layer ID and immutable scene identity, surviving viewport changes, layer reordering, temporary draws, visibility changes, and backend selection.
   - Scene replacement, explicit per-layer invalidation, removed-layer pruning, and clear-all invalidation release only the affected generated mesh storage; retained mesh bytes are tracked for tests.
   - Limitation: no cache-size limit or eviction policy was added because measurements did not establish that the additional complexity is justified.
-- [ ] **Phase 5 – Introduce viewport-aware geometry processing** (PR 5)
-- [ ] **Phase 6 – Optimize OpenGL rendering and data transfer** (PR 6)
+- [x] **Phase 5 – Introduce viewport-aware geometry processing** (PR 5)
+- [x] **Phase 6 – Optimize OpenGL rendering and data transfer** (PR 6)
+  - The screen OpenGL renderer caches immutable fill and outline geometry in vertex and index buffers per stable layer and scene, retaining a client-array fallback for systems without buffer objects.
+  - Viewport navigation reuses uploaded coordinates through a matrix transform; direct bottom-up DIB presentation removes the CPU row reversal, while the required `glReadPixels` transfer remains.
+  - On the generated 2,459-feature Release grid, steady, pan, and zoom frames measured 2.5 / 2.3 / 2.3 ms versus 2.7 / 2.6 / 2.6 ms before; eight readbacks measured 13.5 ms versus 18.3 ms. First-frame buffer and context setup remains noise-sensitive and did not improve.
+  - Limitation: the FBO-to-CPU readback remains required by the GDI presentation path, and temporary renderers own separate GPU buffers because OpenGL buffer names are context-local.
 - [ ] **Phase 7 – Testing and regression prevention** (PR 7)
 
 **Target branch:** `development`
