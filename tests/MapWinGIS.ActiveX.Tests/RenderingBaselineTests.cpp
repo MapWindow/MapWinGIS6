@@ -44,6 +44,7 @@
 #include "mapwingis/map/Map.h"
 #include "mapwingis/map/Viewport.h"
 #include "mapwingis/rendering/MapRenderScene.h"
+#include "mapwingis/rendering/PolygonTriangulation.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 using namespace mwg;
@@ -660,6 +661,126 @@ TEST_F(RenderingBaseline, MeasuresCoreSceneAndBackendCosts)
     const std::optional<double> memoryAfterOpenGl = PrivateMiB(memoryError);
     ASSERT_TRUE(memoryAfterOpenGl.has_value()) << "GetProcessMemoryInfo failed: " << memoryError;
     Report("Private memory increase total", *memoryAfterOpenGl - *memoryBefore, "MiB");
+    ReportPerformanceDiagnostics();
+}
+
+TEST_F(RenderingBaseline, MeasuresLazyOpenGlFillCosts)
+{
+    const char* enabled = std::getenv("MWG_RUN_RENDERING_BASELINE");
+    if (enabled == nullptr || std::string(enabled) != "1")
+    {
+        GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
+    }
+
+    rendering::VectorRenderScene probeLayer;
+    probeLayer.extent = {0.0, 0.0, 1.0, 1.0};
+    probeLayer.sourceFeatureCount = 1;
+    probeLayer.polygons = {
+        {{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}, {0.0, 0.0}}}};
+    probeLayer.fillMeshes.push_back(
+        rendering::TriangulatePolygon(probeLayer.polygons.front()));
+    rendering::MapRenderScene probeScene;
+    probeScene.layers.push_back({
+        mwg::LayerId{1},
+        std::make_shared<const rendering::VectorRenderScene>(std::move(probeLayer))});
+    DibSurface probeSurface(64, 64);
+    ASSERT_TRUE(probeSurface.IsValid());
+    const RECT probeBounds{0, 0, 64, 64};
+    Viewport probeViewport(64, 64);
+    ASSERT_TRUE(probeViewport.FitExtent(probeScene.layers.front().scene->extent, 4.0));
+    activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult =
+        availabilityProbe.Draw(
+            probeSurface.Get(),
+            probeBounds,
+            probeScene,
+            probeViewport);
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "OpenGL is unavailable; no baseline can be measured.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
+    DiagnosticCapture diagnostics;
+    const int featureCount = FeatureCountFromEnvironment();
+    TempDirectory directory;
+    const std::filesystem::path path =
+        BaselineDatasetPath(directory.Path(), featureCount);
+
+    Clock::time_point start = Clock::now();
+    Map map;
+    map.AddLayer(VectorDataset::Open(path));
+    const double openMs = ElapsedMilliseconds(start);
+
+    start = Clock::now();
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(map);
+    const double sceneMs = ElapsedMilliseconds(start);
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+    const std::size_t polygonCount = scene.layers.front().scene->polygons.size();
+    ASSERT_GT(polygonCount, 0U);
+    const diagnostics::PerformanceSnapshot beforeDraw =
+        diagnostics::PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(
+        beforeDraw.Counter(
+            diagnostics::PerformanceCounter::PolygonsTriangulated),
+        0);
+
+    DibSurface surface(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, kTargetWidth, kTargetHeight};
+    Viewport viewport(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(viewport.FitExtent(map.GetExtent(), 12.0));
+
+    activex::OpenGlVectorLayerRenderer openGl;
+    start = Clock::now();
+    const HRESULT firstFrame =
+        openGl.Draw(surface.Get(), bounds, scene, viewport);
+    const double firstOpenGlMs = ElapsedMilliseconds(start);
+    ASSERT_EQ(firstFrame, S_OK);
+    const diagnostics::PerformanceSnapshot afterFirstDraw =
+        diagnostics::PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(
+        afterFirstDraw.Counter(
+            diagnostics::PerformanceCounter::PolygonsTriangulated),
+        static_cast<std::int64_t>(polygonCount));
+
+    std::vector<double> steadyFrames;
+    for (int frame = 0; frame < kSteadyFrames; ++frame)
+    {
+        start = Clock::now();
+        ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+        steadyFrames.push_back(ElapsedMilliseconds(start));
+    }
+
+    Viewport panned = viewport;
+    ASSERT_TRUE(panned.Pan(1.0, 1.0));
+    start = Clock::now();
+    ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, panned), S_OK);
+    const double panMs = ElapsedMilliseconds(start);
+
+    Viewport zoomed = viewport;
+    ASSERT_TRUE(zoomed.Zoom(2.0));
+    start = Clock::now();
+    ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, zoomed), S_OK);
+    const double zoomMs = ElapsedMilliseconds(start);
+
+    EXPECT_EQ(
+        diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            diagnostics::PerformanceCounter::PolygonsTriangulated),
+        static_cast<std::int64_t>(polygonCount));
+    EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+
+    std::cout << "Lazy OpenGL fill baseline: "
+              << scene.layers.front().scene->sourceFeatureCount
+              << " source features (" << polygonCount << " lazily triangulated), "
+              << kTargetWidth << 'x' << kTargetHeight << " target\n";
+    Report("Core open dataset", openMs, "ms");
+    Report("Core prepare source-only scene", sceneMs, "ms");
+    Report("OpenGL lazy-fill first frame", firstOpenGlMs, "ms");
+    Report("OpenGL lazy-fill frame median", Median(steadyFrames), "ms");
+    Report("OpenGL lazy-fill pan frame", panMs, "ms");
+    Report("OpenGL lazy-fill zoom frame", zoomMs, "ms");
     ReportPerformanceDiagnostics();
 }
 

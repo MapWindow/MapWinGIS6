@@ -211,7 +211,16 @@ and configuration C for OpenGL outline-only rendering).
 times, plus pan and zoom frames, for a 1280x720 off-screen target. Normal scene
 creation does not perform triangulation. OpenGL fill rendering lazily
 triangulates source-only scenes on their first fill draw and reuses those
-backend-owned meshes on later draws.
+backend-owned meshes on later draws. `MeasuresLazyOpenGlFillCosts` measures
+that production path separately and verifies that scene preparation creates no
+meshes and later steady, pan, and zoom draws do not triangulate again. The
+renderer regression suite also checks lazy triangulation of concave and holed
+polygons across outline/fill changes, viewport changes, cache invalidation, and
+scene removal. Point and line datasets are explicitly covered as unsupported
+by the polygon-only renderer rather than being silently accepted. OpenGL pixel
+and buffer-lifecycle tests that require a framebuffer-capable context are
+conditional on that capability. GitHub-hosted Windows CI can skip those tests,
+so run them locally on an FBO-capable OpenGL driver to verify that coverage.
 
 Performance diagnostics are disabled by default and aggregate process-wide
 timings with `std::chrono::steady_clock`. The collector records dataset
@@ -329,6 +338,15 @@ upload plus eight draws, so it is not directly comparable with the old
 per-frame transformed client-array submission total. The frame still requires
 `glReadPixels` because the control presents through GDI; this phase removes the
 extra CPU scanline reversal, not the required GPU-to-CPU transfer.
+
+Phase 7 validated the production lazy-fill path on one Release x64 run with the
+same generated 2,459-feature grid. Source-only scene preparation took 3.0 ms
+instead of 225.7 ms for explicit fill-mesh preparation. The lazy OpenGL first
+fill took 367.5 ms, and steady, pan, and zoom frames took 3.3, 3.2, and 3.1 ms.
+The explicit-mesh run measured 3.1, 3.3, and 3.0 ms for those repeated
+operations, so the retained lazy meshes remained within normal run-to-run
+variation while 2,459 polygons triangulated exactly once. This measurement is
+diagnostic rather than a CI timing threshold.
 
 Scene preparation reads geometries sequentially through OGR and copies
 their coordinates directly, avoiding indexed lookups, WKT serialization, and

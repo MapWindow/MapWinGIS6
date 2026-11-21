@@ -101,6 +101,7 @@ namespace
 
     constexpr double kPadding = 12.0;
     constexpr COLORREF kFill = RGB(61, 122, 169);
+    constexpr COLORREF kOutline = RGB(24, 58, 82);
 
     /// One polygon layer: a closed axis-aligned rectangle.
     [[nodiscard]] mwg::rendering::VectorRenderScene MakeRectangleLayer(const mwg::Extent& rectangle)
@@ -713,7 +714,7 @@ TEST(VectorLayerRenderer, OpenGlLazyTriangulationFailureFallsBackAndPreservesOut
     EXPECT_EQ(
         renderer.GetActiveBackend(),
         mwg::activex::VectorRenderBackendKind::OpenGL);
-    EXPECT_GT(CountPixels(surface.Get(), bounds, RGB(24, 58, 82)), 0U);
+    EXPECT_GT(CountPixels(surface.Get(), bounds, kOutline), 0U);
 
     const mwg::diagnostics::PerformanceSnapshot snapshot =
         mwg::diagnostics::PerformanceDiagnostics::Snapshot();
@@ -821,7 +822,7 @@ TEST(VectorLayerRenderer, OpenGlDrawsOutlinesWithoutFillMeshes)
         for (int x = 0; x < bounds.right; ++x)
         {
             outlinePixels +=
-                GetPixel(surface.Get(), x, y) == RGB(24, 58, 82);
+                GetPixel(surface.Get(), x, y) == kOutline;
         }
     }
     EXPECT_GT(outlinePixels, 0U);
@@ -856,7 +857,7 @@ TEST(VectorLayerRenderer, GdiDrawsOutlinesWithoutFillMeshes)
         for (int x = 0; x < bounds.right; ++x)
         {
             outlinePixels +=
-                GetPixel(surface.Get(), x, y) == RGB(24, 58, 82);
+                GetPixel(surface.Get(), x, y) == kOutline;
         }
     }
     EXPECT_GT(outlinePixels, 0U);
@@ -1129,6 +1130,98 @@ TEST(VectorLayerRenderer, OpenGlSupportsConcaveMultipartAndHoledScenes)
             mwg::activex::VectorRenderMode::Outline));
 }
 
+TEST(VectorLayerRenderer, OpenGlLazyComplexMeshesSurviveModesNavigationAndRemoval)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    BitmapSurface surface(240, 180);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 240, 180};
+
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {0.0, 0.0, 22.0, 10.0};
+    layer.sourceFeatureCount = 2;
+    layer.polygons = {
+        {{{0.0, 0.0}, {10.0, 0.0}, {10.0, 4.0}, {4.0, 4.0},
+          {4.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}}},
+        {{{12.0, 0.0}, {22.0, 0.0}, {22.0, 10.0}, {12.0, 10.0},
+          {12.0, 0.0}},
+         {{15.0, 3.0}, {15.0, 7.0}, {19.0, 7.0}, {19.0, 3.0},
+          {15.0, 3.0}}}};
+    mwg::rendering::MapRenderScene scene;
+    scene.layers.push_back({mwg::LayerId{1}, Share(std::move(layer))});
+    mwg::Viewport viewport = FitViewport(bounds, {0.0, 0.0, 22.0, 10.0});
+
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult = availabilityProbe.Draw(
+        surface.Get(),
+        bounds,
+        MakeConvexPolygonScene(),
+        FitViewport(bounds));
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
+    PerformanceCapture diagnostics;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    const HRESULT first =
+        renderer.Draw(surface.Get(), bounds, scene, viewport);
+    ASSERT_EQ(first, S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 2.0, 2.0), kFill);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 7.0), GetSysColor(COLOR_WINDOW));
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 13.0, 2.0), kFill);
+    EXPECT_EQ(
+        MapPixel(surface.Get(), viewport, 17.0, 5.0),
+        GetSysColor(COLOR_WINDOW));
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 1U);
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        2);
+    EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    ASSERT_TRUE(viewport.Pan(0.5, 0.25));
+    ASSERT_EQ(
+        renderer.Draw(
+            surface.Get(),
+            bounds,
+            scene,
+            viewport,
+            true,
+            mwg::activex::VectorRenderMode::Outline),
+        S_OK);
+    EXPECT_EQ(
+        MapPixel(surface.Get(), viewport, 2.0, 2.0),
+        GetSysColor(COLOR_WINDOW));
+    EXPECT_GT(CountPixels(surface.Get(), bounds, kOutline), 0U);
+
+    ASSERT_TRUE(viewport.Zoom(2.0));
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 8.0, 2.0), kFill);
+    EXPECT_EQ(
+        MapPixel(surface.Get(), viewport, 17.0, 5.0),
+        GetSysColor(COLOR_WINDOW));
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        2);
+
+    Access::InvalidateLayerSceneCache(renderer, scene.layers.front().layerId);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        4);
+
+    scene.layers.clear();
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 0U);
+    EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 0U);
+}
+
 TEST(VectorLayerRenderer, OpenGlRendersLShapedPolygon)
 {
     BitmapSurface surface(120, 100);
@@ -1234,7 +1327,6 @@ TEST(VectorLayerRenderer, OpenGlDoesNotDrawInternalTriangleEdges)
     // A convex quad triangulates into two triangles whose diagonal crosses
     // the polygon interior. Only the original ring may be outlined, so no
     // interior pixel may have the outline color.
-    constexpr COLORREF kOutline = RGB(24, 58, 82);
     for (double t = 0.15; t < 0.9; t += 0.1)
     {
         for (const mwg::rendering::Point diagonal :
@@ -1665,7 +1757,7 @@ TEST(VectorLayerRenderer, OverlappingLayersDrawBottomFirst)
     EXPECT_EQ(GetPixel(surface.Get(), 40, 50), kFill);
     std::swap(scene.layers[0], scene.layers[1]);
     ASSERT_EQ(gdi.Draw(surface.Get(), bounds, scene, viewport), S_OK);
-    EXPECT_EQ(GetPixel(surface.Get(), 40, 50), RGB(24, 58, 82));
+    EXPECT_EQ(GetPixel(surface.Get(), 40, 50), kOutline);
 
     mwg::activex::OpenGlVectorLayerRenderer openGl;
     const HRESULT result = openGl.Draw(surface.Get(), bounds, scene, viewport);
@@ -1674,7 +1766,7 @@ TEST(VectorLayerRenderer, OverlappingLayersDrawBottomFirst)
         GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
     }
     ASSERT_EQ(result, S_OK);
-    EXPECT_EQ(GetPixel(surface.Get(), 40, 50), RGB(24, 58, 82));
+    EXPECT_EQ(GetPixel(surface.Get(), 40, 50), kOutline);
     std::swap(scene.layers[0], scene.layers[1]);
     ASSERT_EQ(openGl.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(GetPixel(surface.Get(), 40, 50), kFill);
@@ -1716,7 +1808,6 @@ TEST(VectorLayerRenderer, GdiAndOpenGlAgreeOnOverlappingPolygonsInOneLayer)
     // The first polygon's right edge (pixel column 60) and top edge (pixel
     // row 49) stay visible only outside the second polygon; inside the
     // overlap the second polygon's fill covers them in both backends.
-    constexpr COLORREF kOutline = RGB(24, 58, 82);
     for (const mwg::PixelPoint pixel : {mwg::PixelPoint{60, 60}, {50, 49}})
     {
         EXPECT_EQ(GetPixel(gdiSurface.Get(), pixel.x, pixel.y), kFill)
@@ -1966,7 +2057,6 @@ TEST(VectorLayerRenderer, OpenGlPreservesPolygonPrecisionFarFromLayerOrigin)
     {
         GTEST_SKIP() << "OpenGL buffer objects are unavailable.";
     }
-    constexpr COLORREF kOutline = RGB(24, 58, 82);
     EXPECT_GT(CountPixels(surface.Get(), bounds, kOutline), 20U);
 
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
