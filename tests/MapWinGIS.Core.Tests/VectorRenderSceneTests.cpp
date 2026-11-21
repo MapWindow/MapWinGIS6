@@ -37,7 +37,7 @@ namespace
         return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
     }
 
-    std::filesystem::path MakeDimensionalPolygonDataset(
+    std::filesystem::path MakeGeometryDataset(
         const std::filesystem::path& directory,
         const char* fileName,
         const OGRwkbGeometryType geometryType,
@@ -55,13 +55,13 @@ namespace
             driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
         if (output == nullptr)
         {
-            throw std::runtime_error("Cannot create dimensional polygon dataset");
+            throw std::runtime_error("Cannot create geometry dataset");
         }
 
-        OGRLayer* layer = output->CreateLayer("polygons", nullptr, geometryType, nullptr);
+        OGRLayer* layer = output->CreateLayer("geometry", nullptr, geometryType, nullptr);
         if (layer == nullptr)
         {
-            throw std::runtime_error("Cannot create dimensional polygon layer");
+            throw std::runtime_error("Cannot create geometry layer");
         }
 
         const char* text = geometryWkt;
@@ -69,7 +69,7 @@ namespace
         if (OGRGeometryFactory::createFromWkt(&text, nullptr, &geometry) != OGRERR_NONE ||
             geometry == nullptr)
         {
-            throw std::runtime_error("Cannot parse dimensional polygon geometry");
+            throw std::runtime_error("Cannot parse geometry");
         }
 
         OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
@@ -77,7 +77,7 @@ namespace
         OGRGeometryFactory::destroyGeometry(geometry);
         if (geometryResult != OGRERR_NONE || layer->CreateFeature(feature.get()) != OGRERR_NONE)
         {
-            throw std::runtime_error("Cannot write dimensional polygon feature");
+            throw std::runtime_error("Cannot write geometry feature");
         }
 
         output.reset();
@@ -475,7 +475,7 @@ TEST(VectorRenderScene, AcceptsPolygonZAndPolygonM)
 
     for (const auto& [geometryType, shapeType, fileName, geometryWkt] : cases)
     {
-        const auto path = MakeDimensionalPolygonDataset(
+        const auto path = MakeGeometryDataset(
             directory.Path(), fileName, geometryType, geometryWkt);
         const auto dataset = VectorDataset::Open(path);
         const VectorLayer& layer = dataset->Layer(0);
@@ -628,7 +628,7 @@ TEST(VectorRenderScene, LinearizesCurvedPolygonGeometry)
 {
     GdalEnvironment::Initialize();
     TempDirectory directory;
-    const auto path = MakeDimensionalPolygonDataset(
+    const auto path = MakeGeometryDataset(
         directory.Path(),
         "curved-polygon.gpkg",
         wkbCurvePolygon,
@@ -650,7 +650,7 @@ TEST(VectorRenderScene, RendersPolygonalCollectionMembersAndCountsSkippedParts)
     std::filesystem::path path;
     {
         const GdalEnvironment::QuietScope quiet;
-        path = MakeDimensionalPolygonDataset(
+        path = MakeGeometryDataset(
             directory.Path(),
             "collection.gpkg",
             wkbMultiPolygon,
@@ -671,7 +671,7 @@ TEST(VectorRenderScene, SkipsPolygonsWithADegenerateExteriorInsteadOfPromotingAH
 {
     GdalEnvironment::Initialize();
     TempDirectory directory;
-    const auto path = MakeDimensionalPolygonDataset(
+    const auto path = MakeGeometryDataset(
         directory.Path(),
         "degenerate-exterior.gpkg",
         wkbMultiPolygon,
@@ -723,6 +723,30 @@ TEST(VectorRenderScene, RejectsDatasetWithoutLayers)
     EXPECT_THROW(
         (void)rendering::CreateVectorRenderScene(*dataset),
         CoreError);
+}
+
+TEST(VectorRenderScene, ExplicitlyRejectsPointAndLineLayers)
+{
+    GdalEnvironment::Initialize();
+    TempDirectory directory;
+    const std::tuple<OGRwkbGeometryType, const char*, const char*> cases[] = {
+        {wkbPoint, "point.gpkg", "POINT (1 2)"},
+        {wkbLineString, "line.gpkg", "LINESTRING (0 0, 1 1, 2 0)"}};
+
+    for (const auto& [geometryType, fileName, geometryWkt] : cases)
+    {
+        SCOPED_TRACE(fileName);
+        const auto path = MakeGeometryDataset(
+            directory.Path(), fileName, geometryType, geometryWkt);
+        const auto dataset = VectorDataset::Open(path);
+
+        EXPECT_THROW(
+            (void)rendering::CreateVectorRenderScene(dataset->Layer(0)),
+            CoreError);
+        EXPECT_THROW(
+            (void)rendering::CreateVectorRenderScene(*dataset),
+            CoreError);
+    }
 }
 
 TEST(VectorRenderScene, DatasetOverloadUsesFirstPolygonLayer)
