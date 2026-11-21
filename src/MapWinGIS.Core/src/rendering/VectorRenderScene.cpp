@@ -239,13 +239,17 @@ namespace mwg::rendering
     {
         const diagnostics::PerformanceScope scope(
             diagnostics::PerformanceOperation::SceneBuild);
+        detail::ValidateVectorRenderSceneOptions(options);
         if (BaseShapeType(layer.Type()) != ShapeType::Polygon)
         {
             throw CoreError("Vector rendering supports polygon layers only");
         }
 
         VectorRenderScene scene;
-        const bool hasFastExtent = mwg::detail::VectorLayerAccess::HasFastExtent(layer);
+        const bool supportsFastExtent =
+            mwg::detail::VectorLayerAccess::HasFastExtent(layer);
+        const bool hasFastExtent =
+            !options.spatialFilter.has_value() && supportsFastExtent;
         if (hasFastExtent)
         {
             scene.extent = layer.GetExtent();
@@ -259,7 +263,8 @@ namespace mwg::rendering
                     diagnostics::PerformanceOperation::GeometryConversion);
                 builder.AppendGeometry(geometry);
             },
-            hasFastExtent ? nullptr : &scene.extent);
+            hasFastExtent ? nullptr : &scene.extent,
+            options.spatialFilter ? &*options.spatialFilter : nullptr);
 
         if (!options.prepareFillMeshes)
         {
@@ -280,6 +285,15 @@ namespace mwg::rendering
             scene.fillMeshes.push_back(std::move(mesh));
         }
         return scene;
+    }
+
+    void detail::ValidateVectorRenderSceneOptions(
+        const VectorRenderSceneOptions& options)
+    {
+        if (options.spatialFilter.has_value() && !options.spatialFilter->IsValid())
+        {
+            throw InvalidArgument("Vector scene spatial filter extent must be valid");
+        }
     }
 
     VectorRenderScene CreateVectorRenderScene(const VectorLayer& layer)

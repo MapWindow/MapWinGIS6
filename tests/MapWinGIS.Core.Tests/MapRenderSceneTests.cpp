@@ -20,6 +20,7 @@
 #include <ogrsf_frmts.h>
 
 #include "TestData.h"
+#include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/map/Map.h"
 #include "mapwingis/map/MapView.h"
@@ -221,6 +222,17 @@ TEST_F(MapRenderSceneTest, SkipsLayersWithoutGeometry)
     ASSERT_EQ(scene.skippedLayers.size(), 1U);
     EXPECT_EQ(scene.skippedLayers[0].layerId, empty);
     EXPECT_EQ(scene.skippedLayers[0].reason, rendering::LayerSkipReason::NoGeometry);
+}
+
+TEST_F(MapRenderSceneTest, RejectsInvalidOptionsBeforeBuildingLayers)
+{
+    _map.AddLayer(OpenRectangles({{0.0, 0.0, 1.0, 1.0}}));
+
+    EXPECT_THROW(
+        (void)rendering::CreateMapRenderScene(
+            _map,
+            rendering::VectorRenderSceneOptions{.spatialFilter = Extent{}}),
+        InvalidArgument);
 }
 
 TEST_F(MapRenderSceneTest, LayerThatCannotBeRenderedDoesNotStopTheOthers)

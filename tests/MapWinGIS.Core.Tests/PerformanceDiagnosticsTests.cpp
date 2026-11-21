@@ -129,6 +129,31 @@ TEST_F(PerformanceDiagnosticsTest, DoesNotTriangulateScenesByDefault)
     EXPECT_EQ(snapshot.Counter(PerformanceCounter::PolygonsTriangulated), 0);
 }
 
+TEST_F(PerformanceDiagnosticsTest, CountsFeaturesExcludedBySpatialFilter)
+{
+    TempDirectory directory;
+    constexpr std::array<Extent, 3> rectangles{
+        {{0, 0, 10, 10}, {20, 20, 30, 30}, {40, 40, 50, 50}}};
+    const std::filesystem::path path =
+        MakeRectanglesDataset(directory.Path(), "viewport.gpkg", rectangles);
+    const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+
+    PerformanceDiagnostics::Reset();
+    const rendering::VectorRenderScene scene =
+        rendering::CreateVectorRenderScene(
+            *dataset,
+            rendering::VectorRenderSceneOptions{
+                .spatialFilter = Extent{20, 20, 20, 20}});
+
+    ASSERT_EQ(scene.polygons.size(), 1U);
+    const PerformanceSnapshot snapshot = PerformanceDiagnostics::Snapshot();
+    EXPECT_EQ(snapshot.Counter(PerformanceCounter::FeaturesProcessed), 1);
+    EXPECT_EQ(snapshot.Counter(PerformanceCounter::GeometriesLoaded), 1);
+    EXPECT_EQ(
+        snapshot.Counter(PerformanceCounter::FeaturesSkippedOutsideViewport),
+        2);
+}
+
 TEST_F(PerformanceDiagnosticsTest, RecordsSceneCacheMissesAndHits)
 {
     TempDirectory directory;

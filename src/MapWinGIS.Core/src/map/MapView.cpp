@@ -6,6 +6,7 @@
  */
 #include "mapwingis/map/MapView.h"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -16,12 +17,16 @@
 #include "mapwingis/core/Error.h"
 #include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/vector/VectorDataset.h"
+#include "internal/VectorLayerAccess.h"
 #include "internal/VectorRenderSceneBuilder.h"
 
 namespace mwg
 {
     namespace
     {
+        constexpr double kMinimumViewportSceneMarginPixels = 64.0;
+        constexpr double kViewportSceneMarginFraction = 0.5;
+
         void ValidateStepFactor(const double factor)
         {
             if (!std::isfinite(factor) || factor <= 1.0)
@@ -67,9 +72,61 @@ namespace mwg
 
         using LayerScene = rendering::detail::LayerScene;
 
+        struct CachedLayerScene
+        {
+            LayerScene scene;
+            Extent processingExtent;
+            /// True for complete scenes and stable failures. False with an
+            /// empty extent means that the scene is awaiting a valid viewport.
+            bool complete = true;
+        };
+
+        [[nodiscard]] Extent ViewportProcessingExtent() const
+        {
+            const Extent visible = _viewport.VisibleExtent();
+            const std::optional<double> resolution = _viewport.Resolution();
+            if (!visible.IsValid() || !resolution.has_value())
+            {
+                return {};
+            }
+            const double horizontalMarginPixels =
+                std::max(kMinimumViewportSceneMarginPixels,
+                         static_cast<double>(_viewport.Width()) *
+                             kViewportSceneMarginFraction);
+            const double verticalMarginPixels =
+                std::max(kMinimumViewportSceneMarginPixels,
+                         static_cast<double>(_viewport.Height()) *
+                             kViewportSceneMarginFraction);
+            const double horizontalMargin = horizontalMarginPixels * *resolution;
+            const double verticalMargin = verticalMarginPixels * *resolution;
+            return {
+                visible.xMin - horizontalMargin,
+                visible.yMin - verticalMargin,
+                visible.xMax + horizontalMargin,
+                visible.yMax + verticalMargin};
+        }
+
+        [[nodiscard]] bool CacheCoversViewport(const CachedLayerScene& cached) const
+        {
+            const Extent visible = _viewport.VisibleExtent();
+            if (!visible.IsValid() || cached.complete)
+            {
+                return true;
+            }
+            if (cached.processingExtent.IsEmpty())
+            {
+                return false;
+            }
+            const Extent& processing = cached.processingExtent;
+            return processing.xMin <= visible.xMin &&
+                   processing.yMin <= visible.yMin &&
+                   processing.xMax >= visible.xMax &&
+                   processing.yMax >= visible.yMax;
+        }
+
         Map _map;
         Viewport _viewport;
-        std::map<LayerId, LayerScene> _layerScenes;
+        std::map<LayerId, CachedLayerScene> _layerScenes;
         rendering::MapRenderScene _scene;
         bool _sceneStale = false;
         std::optional<PendingFit> _pendingFit;
@@ -143,15 +200,19 @@ namespace mwg
 
         // Stage the cache node before AddLayer can change the map or pending
         // fit. Updating a node handle's key and inserting it later cannot allocate.
-        std::map<LayerId, Impl::LayerScene> staged;
+        std::map<LayerId, Impl::CachedLayerScene> staged;
         if (empty)
         {
-            staged.emplace(LayerId{}, rendering::SkippedLayer{
-                LayerId{}, rendering::LayerSkipReason::NoGeometry, {}});
+            staged.emplace(LayerId{}, Impl::CachedLayerScene{
+                rendering::SkippedLayer{
+                    LayerId{}, rendering::LayerSkipReason::NoGeometry, {}},
+                {}, true});
         }
         else
         {
-            staged.emplace(LayerId{}, rendering::LayerRenderScene{LayerId{}, scene});
+            staged.emplace(LayerId{}, Impl::CachedLayerScene{
+                rendering::LayerRenderScene{LayerId{}, scene},
+                {}, true});
         }
         auto cachedScene = staged.extract(staged.begin());
 
@@ -159,11 +220,11 @@ namespace mwg
         cachedScene.key() = id;
         if (empty)
         {
-            std::get<rendering::SkippedLayer>(cachedScene.mapped()).layerId = id;
+            std::get<rendering::SkippedLayer>(cachedScene.mapped().scene).layerId = id;
         }
         else
         {
-            std::get<rendering::LayerRenderScene>(cachedScene.mapped()).layerId = id;
+            std::get<rendering::LayerRenderScene>(cachedScene.mapped().scene).layerId = id;
         }
         _impl->_layerScenes.insert(std::move(cachedScene));
         if (empty)
@@ -287,8 +348,30 @@ namespace mwg
 
     const rendering::MapRenderScene& MapView::Scene()
     {
-        if (_impl->_sceneStale)
+        const Extent processingExtent = _impl->ViewportProcessingExtent();
+        bool refreshScene = _impl->_sceneStale;
+        if (!refreshScene)
         {
+            for (int position = 0; position < _impl->_map.LayerCount(); ++position)
+            {
+                const MapLayer& layer = _impl->_map.Layer(position);
+                if (!layer.IsVisible())
+                {
+                    continue;
+                }
+                const auto cached = _impl->_layerScenes.find(layer.Id());
+                if (cached == _impl->_layerScenes.end() ||
+                    !_impl->CacheCoversViewport(cached->second))
+                {
+                    refreshScene = true;
+                    break;
+                }
+            }
+        }
+
+        if (refreshScene)
+        {
+            _impl->_sceneStale = true;
             rendering::MapRenderScene scene;
             scene.layers.reserve(static_cast<std::size_t>(_impl->_map.LayerCount()));
             scene.skippedLayers.reserve(static_cast<std::size_t>(_impl->_map.LayerCount()));
@@ -304,12 +387,47 @@ namespace mwg
                 }
 
                 auto cached = _impl->_layerScenes.find(layer.Id());
-                if (cached == _impl->_layerScenes.end())
+                if (cached == _impl->_layerScenes.end() ||
+                    !_impl->CacheCoversViewport(cached->second))
                 {
                     diagnostics::PerformanceDiagnostics::IncrementCounter(
                         diagnostics::PerformanceCounter::SceneCacheMisses);
-                    cached = _impl->_layerScenes.emplace(
-                        layer.Id(), rendering::detail::BuildLayerRenderScene(layer)).first;
+                    rendering::VectorRenderSceneOptions options;
+                    const bool canFilter =
+                        processingExtent.IsValid() &&
+                        detail::VectorLayerAccess::HasFastSpatialFilter(layer.Source());
+                    if (canFilter)
+                    {
+                        options.spatialFilter = processingExtent;
+                    }
+                    Impl::LayerScene layerScene =
+                        rendering::detail::BuildLayerRenderScene(layer, options);
+                    bool complete = processingExtent.IsValid() && !canFilter;
+                    if (canFilter)
+                    {
+                        const auto* skipped =
+                            std::get_if<rendering::SkippedLayer>(&layerScene);
+                        if (skipped != nullptr &&
+                            skipped->reason == rendering::LayerSkipReason::Failed)
+                        {
+                            layerScene =
+                                rendering::detail::BuildLayerRenderScene(layer, {});
+                            complete = true;
+                        }
+                    }
+                    else if (const auto* skipped =
+                                 std::get_if<rendering::SkippedLayer>(&layerScene);
+                             skipped != nullptr &&
+                             skipped->reason == rendering::LayerSkipReason::Failed)
+                    {
+                        complete = true;
+                    }
+                    cached = _impl->_layerScenes.insert_or_assign(
+                        layer.Id(),
+                        Impl::CachedLayerScene{
+                            std::move(layerScene),
+                            canFilter && !complete ? processingExtent : Extent{},
+                            complete}).first;
                 }
                 else
                 {
@@ -318,14 +436,14 @@ namespace mwg
                 }
 
                 if (const auto* drawable =
-                        std::get_if<rendering::LayerRenderScene>(&cached->second))
+                        std::get_if<rendering::LayerRenderScene>(&cached->second.scene))
                 {
                     scene.layers.push_back(*drawable);
                 }
                 else
                 {
                     scene.skippedLayers.push_back(
-                        std::get<rendering::SkippedLayer>(cached->second));
+                        std::get<rendering::SkippedLayer>(cached->second.scene));
                 }
             }
 

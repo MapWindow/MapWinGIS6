@@ -333,6 +333,136 @@ TEST_P(VectorRenderSceneTest, CopiesPolygonCoordinatesAndExtent)
     EXPECT_DOUBLE_EQ(scene.polygons.front().front().back().y, Provinces::kMinY);
 }
 
+TEST(VectorRenderScene, SpatialFilterReadsOnlyIntersectingFeatures)
+{
+    TempDirectory directory;
+    const std::vector<Extent> rectangles{
+        {0.0, 0.0, 1.0, 1.0},
+        {10.0, 10.0, 11.0, 11.0},
+        {20.0, 20.0, 21.0, 21.0}};
+    const auto dataset = VectorDataset::Open(MakeRectanglesDataset(
+        directory.Path(), "spatial-filter.gpkg", rectangles));
+    EXPECT_EQ(dataset->Layer(0).FeatureCount(), 3);
+    const Extent fullExtent = dataset->Layer(0).GetExtent();
+    EXPECT_DOUBLE_EQ(fullExtent.xMin, 0.0);
+    EXPECT_DOUBLE_EQ(fullExtent.yMin, 0.0);
+    EXPECT_DOUBLE_EQ(fullExtent.xMax, 21.0);
+    EXPECT_DOUBLE_EQ(fullExtent.yMax, 21.0);
+
+    const rendering::VectorRenderScene scene =
+        rendering::CreateVectorRenderScene(
+            dataset->Layer(0),
+            rendering::VectorRenderSceneOptions{
+                .spatialFilter = Extent{10.0, 10.0, 10.0, 10.0}});
+
+    ASSERT_EQ(scene.polygons.size(), 1U);
+    EXPECT_EQ(scene.sourceFeatureCount, 1);
+    EXPECT_DOUBLE_EQ(scene.extent.xMin, 10.0);
+    EXPECT_DOUBLE_EQ(scene.extent.yMin, 10.0);
+    EXPECT_DOUBLE_EQ(scene.extent.xMax, 11.0);
+    EXPECT_DOUBLE_EQ(scene.extent.yMax, 11.0);
+    EXPECT_EQ(dataset->Layer(0).FeatureCount(), 3);
+    const Extent cachedExtent = dataset->Layer(0).GetExtent();
+    EXPECT_DOUBLE_EQ(cachedExtent.xMin, fullExtent.xMin);
+    EXPECT_DOUBLE_EQ(cachedExtent.yMin, fullExtent.yMin);
+    EXPECT_DOUBLE_EQ(cachedExtent.xMax, fullExtent.xMax);
+    EXPECT_DOUBLE_EQ(cachedExtent.yMax, fullExtent.yMax);
+}
+
+TEST(VectorRenderScene, RejectsInvalidSpatialFilter)
+{
+    TempDirectory directory;
+    const std::vector<Extent> rectangles{{0.0, 0.0, 1.0, 1.0}};
+    const auto dataset = VectorDataset::Open(MakeRectanglesDataset(
+        directory.Path(), "invalid-filter.gpkg", rectangles));
+
+    EXPECT_THROW(
+        (void)rendering::CreateVectorRenderScene(
+            dataset->Layer(0),
+            rendering::VectorRenderSceneOptions{.spatialFilter = Extent{}}),
+        InvalidArgument);
+}
+
+TEST(VectorRenderScene, RestoresTheSourceSpatialFilter)
+{
+    VectorReadTestDriver driver;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    ASSERT_NE(driver.openedLayer, nullptr);
+
+    OGRPolygon previous;
+    OGRLinearRing ring;
+    ring.addPoint(100.0, 100.0);
+    ring.addPoint(101.0, 100.0);
+    ring.addPoint(101.0, 101.0);
+    ring.addPoint(100.0, 101.0);
+    ring.closeRings();
+    ASSERT_EQ(previous.addRing(&ring), OGRERR_NONE);
+    ASSERT_EQ(driver.openedLayer->SetSpatialFilter(&previous), OGRERR_NONE);
+
+    const rendering::VectorRenderScene scene =
+        rendering::CreateVectorRenderScene(
+            dataset->Layer(0),
+            rendering::VectorRenderSceneOptions{
+                .spatialFilter = Extent{0.0, 0.0, 1.0, 1.0}});
+    EXPECT_EQ(scene.polygons.size(), 1U);
+
+    const OGRGeometry* restored = driver.openedLayer->GetSpatialFilter();
+    ASSERT_NE(restored, nullptr);
+    EXPECT_TRUE(restored->Equals(&previous));
+    EXPECT_EQ(driver.nextFeature, 0);
+
+    const rendering::VectorRenderScene unfiltered =
+        rendering::CreateVectorRenderScene(dataset->Layer(0));
+    EXPECT_EQ(unfiltered.polygons.size(), 1U);
+    EXPECT_EQ(unfiltered.sourceFeatureCount, 3);
+    EXPECT_EQ(driver.nextFeature, 0);
+}
+
+TEST(VectorRenderScene, RestoresFilterCursorAndCachedMetadataAfterReadFailure)
+{
+    VectorReadTestDriver driver;
+    driver.fastExtent = true;
+    driver.failOnSecondRead = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    ASSERT_NE(driver.openedLayer, nullptr);
+    EXPECT_EQ(dataset->Layer(0).FeatureCount(), 3);
+    const Extent fullExtent = dataset->Layer(0).GetExtent();
+
+    OGRPolygon previous;
+    OGRLinearRing ring;
+    ring.addPoint(0.0, 0.0);
+    ring.addPoint(1.0, 0.0);
+    ring.addPoint(1.0, 1.0);
+    ring.addPoint(0.0, 1.0);
+    ring.closeRings();
+    ASSERT_EQ(previous.addRing(&ring), OGRERR_NONE);
+    ASSERT_EQ(driver.openedLayer->SetSpatialFilter(&previous), OGRERR_NONE);
+    const GdalEnvironment::QuietScope quiet;
+
+    EXPECT_THROW(
+        (void)rendering::CreateVectorRenderScene(
+            dataset->Layer(0),
+            rendering::VectorRenderSceneOptions{
+                .spatialFilter = Extent{0.0, 0.0, 1.0, 1.0}}),
+        CoreError);
+
+    const OGRGeometry* restored = driver.openedLayer->GetSpatialFilter();
+    ASSERT_NE(restored, nullptr);
+    EXPECT_TRUE(restored->Equals(&previous));
+    EXPECT_EQ(driver.nextFeature, 0);
+    EXPECT_EQ(dataset->Layer(0).FeatureCount(), 3);
+    const Extent cachedExtent = dataset->Layer(0).GetExtent();
+    EXPECT_EQ(cachedExtent.xMin, fullExtent.xMin);
+    EXPECT_EQ(cachedExtent.yMin, fullExtent.yMin);
+    EXPECT_EQ(cachedExtent.xMax, fullExtent.xMax);
+    EXPECT_EQ(cachedExtent.yMax, fullExtent.yMax);
+
+    driver.failOnSecondRead = false;
+    EXPECT_EQ(rendering::CreateVectorRenderScene(dataset->Layer(0)).sourceFeatureCount,
+              3);
+    EXPECT_EQ(driver.nextFeature, 0);
+}
+
 TEST(VectorRenderScene, AcceptsPolygonZAndPolygonM)
 {
     GdalEnvironment::Initialize();

@@ -387,6 +387,27 @@ When the user pans or zooms:
 - Small pans do not cause complete layer reconstruction.
 - No visible features are accidentally omitted at viewport boundaries.
 
+### Phase 5 implementation and limitations
+
+- `MapView` requests features through an OGR bounding-box spatial filter when
+  the driver reports `OLCFastSpatialFilter`. The margin is at least 64 pixels
+  and grows with the viewport size to cover longer navigation steps.
+- Filtered scenes retain source geometry and backend cache identity while the
+  visible extent remains inside the processed extent.
+- Pans or zoom-outs beyond the margin rebuild the affected layer selection.
+  This phase does not yet provide incremental feature-level merging or tiling.
+- Caller-prepared scenes remain complete snapshots and are not viewport
+  filtered. The ActiveX control currently supplies these prepared complete
+  scenes, so its large-layer initial load still processes every feature before
+  the first visible rendering. The phase remains open until that path uses
+  viewport-aware preparation or the acceptance criteria are revised.
+- Drivers without a native fast spatial filter retain complete scenes instead
+  of repeatedly scanning the complete layer for marginal viewport changes.
+  An automatic filtered build that fails falls back to a complete scene.
+- The skipped-feature counter is available only when OGR can return a
+  reliable non-forced layer feature count and the source uses a native fast
+  spatial filter. It never forces a complete scan for the diagnostic value.
+
 ---
 
 # Phase 6 – Optimize OpenGL rendering and data transfer

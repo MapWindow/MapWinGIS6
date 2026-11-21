@@ -26,10 +26,15 @@ namespace mwg::detail
         static std::int64_t ForEachGeometry(
             const VectorLayer& layer,
             const std::function<void(const OGRGeometry&)>& callback,
-            Extent* extent = nullptr);
+            Extent* extent = nullptr,
+            const Extent* spatialFilter = nullptr);
 
         /// Whether the source driver can return an extent without scanning
         /// every feature.
         [[nodiscard]] static bool HasFastExtent(const VectorLayer& layer);
+
+        /// Whether MapView can safely reduce feature reads with the layer's
+        /// single active geometry field.
+        [[nodiscard]] static bool HasFastSpatialFilter(const VectorLayer& layer);
     };
 }

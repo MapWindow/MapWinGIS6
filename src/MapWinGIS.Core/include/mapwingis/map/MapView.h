@@ -28,11 +28,16 @@ namespace mwg
     ///
     /// Redraws: every mutator returns whether the displayed frame may have
     /// changed. Hosts request a redraw when it returns true and draw Scene()
-    /// through GetViewport(). Changes to the layer collection or visibility
-    /// mark the scene stale; Scene() rebuilds it on the next call. Adding a
-    /// prepared scene retains the existing geometry instead. Edits to source
-    /// geometry are not observed. Call InvalidateLayerScene for each affected
-    /// map layer, or InvalidateScene for all layers.
+    /// through GetViewport(). Automatically filtered scenes cover only the
+    /// live viewport plus a processing margin; drawing a different viewport
+    /// requires a complete prepared scene. Changes to the layer collection or
+    /// visibility mark the scene stale; Scene() rebuilds it on the next call.
+    /// For a valid viewport, automatically built layer scenes use a padded
+    /// spatial filter. Small viewport changes reuse the cached scene; a change
+    /// beyond that margin refreshes only the affected layer scenes. Adding a
+    /// prepared scene retains the existing complete geometry instead. Edits to
+    /// source geometry are not observed. Call InvalidateLayerScene for each
+    /// affected map layer, or InvalidateScene for all layers.
     ///
     /// Initial view: while the viewport has no view, adding a layer fits the
     /// viewport to the map. A fit that cannot happen because the viewport has
@@ -160,8 +165,12 @@ namespace mwg
         /// per-layer scenes when the map or a layer scene changed. The
         /// reference stays valid for the lifetime of the MapView; a later
         /// call that reassembles the scene replaces its contents. Geometry
-        /// for a visible uncached layer is read once; visibility changes reuse
-        /// its cache. Reassembly shares cached geometry with the map snapshot
+        /// for a visible uncached layer is read once. A valid viewport limits
+        /// automatically built scenes to features intersecting a padded
+        /// visible extent when the driver supports a fast spatial filter.
+        /// Drivers without that capability retain a complete scene. Visibility
+        /// changes and viewport moves within the processing extent reuse
+        /// the cache. Reassembly shares cached geometry with the map snapshot
         /// instead of copying it, so a held LayerRenderScene::scene stays
         /// valid after the layer is invalidated or removed.
         /// Failed layers retain their diagnostics until explicitly invalidated.

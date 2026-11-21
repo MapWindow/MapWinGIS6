@@ -18,6 +18,7 @@
 #include "mapwingis/core/Extent.h"
 
 class GDALDriver;
+class OGRLayer;
 
 namespace mwg::test
 {
@@ -45,9 +46,12 @@ namespace mwg::test
         bool onlyEmptyGeometries = false;
         bool unknownCount = false;
         bool fastExtent = false;
+        bool fastSpatialFilter = false;
+        bool failSpatialFilter = false;
         bool failExtentCapabilityAllocation = false;
         bool ignoredFields = false;
         bool ignoredGeometry = false;
+        OGRLayer* openedLayer = nullptr;
         std::string layerName = "features";
         std::string storedName = "Original";
         int storedValue = 0;
@@ -56,6 +60,7 @@ namespace mwg::test
         int attributeReadCalls = 0;
         int countCalls = 0;
         int extentCalls = 0;
+        int spatialFilterCalls = 0;
         int recomputeExtentCalls = 0;
         std::string recomputeExtentStatement;
 

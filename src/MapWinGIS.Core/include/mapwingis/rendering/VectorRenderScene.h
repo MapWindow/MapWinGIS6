@@ -135,6 +135,12 @@ namespace mwg
             /// Enable this only for a rendering operation that needs triangle
             /// meshes. Source geometry and bounds are prepared either way.
             bool prepareFillMeshes = false;
+            /// When present, only features whose bounding boxes intersect this
+            /// extent are converted. Drivers with OLCFastSpatialFilter avoid
+            /// reading the other features; other drivers may still read and
+            /// parse them. Scene construction restores the source filter.
+            /// \throws InvalidArgument when the extent is not valid.
+            std::optional<Extent> spatialFilter;
         };
 
         /// Owned polygon geometry and its source-coordinate bounds.
@@ -164,8 +170,10 @@ namespace mwg
         /// has fewer than three points, are skipped and counted in
         /// skippedGeometryCount. Interior rings with fewer than three points
         /// are dropped. The returned coordinates remain in the layer's coordinate
-        /// system; this function does not transform projections. Not
-        /// thread-safe, consistent with the input layer's contract.
+        /// system; this function does not transform projections. When options
+        /// specify a spatial filter, sourceFeatureCount is the number of
+        /// matching source features and extent covers only their geometry.
+        /// Not thread-safe, consistent with the input layer's contract.
         /// \throws CoreError when the layer is not polygonal or contains no
         ///         polygon geometry to render.
         [[nodiscard]] MWG_CORE_API VectorRenderScene CreateVectorRenderScene(
@@ -175,7 +183,11 @@ namespace mwg
         ///
         /// The default is source geometry only. Set prepareFillMeshes to true
         /// when the requested fill rendering operation needs triangle meshes.
-        /// The default overload never invokes polygon triangulation.
+        /// Set spatialFilter to avoid converting geometry outside a viewport.
+        /// Drivers with OLCFastSpatialFilter can also avoid reading it.
+        /// Features returned by an OGR spatial filter include bounding-box
+        /// boundary intersections. The default overload never invokes polygon
+        /// triangulation.
         [[nodiscard]] MWG_CORE_API VectorRenderScene CreateVectorRenderScene(
             const VectorLayer& layer,
             const VectorRenderSceneOptions& options);
