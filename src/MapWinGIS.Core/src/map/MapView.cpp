@@ -371,6 +371,7 @@ namespace mwg
 
         if (refreshScene)
         {
+            _impl->_sceneStale = true;
             rendering::MapRenderScene scene;
             scene.layers.reserve(static_cast<std::size_t>(_impl->_map.LayerCount()));
             scene.skippedLayers.reserve(static_cast<std::size_t>(_impl->_map.LayerCount()));

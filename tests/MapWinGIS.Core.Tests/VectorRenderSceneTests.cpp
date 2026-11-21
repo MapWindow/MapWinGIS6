@@ -409,6 +409,58 @@ TEST(VectorRenderScene, RestoresTheSourceSpatialFilter)
     const OGRGeometry* restored = driver.openedLayer->GetSpatialFilter();
     ASSERT_NE(restored, nullptr);
     EXPECT_TRUE(restored->Equals(&previous));
+    EXPECT_EQ(driver.nextFeature, 0);
+
+    const rendering::VectorRenderScene unfiltered =
+        rendering::CreateVectorRenderScene(dataset->Layer(0));
+    EXPECT_EQ(unfiltered.polygons.size(), 1U);
+    EXPECT_EQ(unfiltered.sourceFeatureCount, 3);
+    EXPECT_EQ(driver.nextFeature, 0);
+}
+
+TEST(VectorRenderScene, RestoresFilterCursorAndCachedMetadataAfterReadFailure)
+{
+    VectorReadTestDriver driver;
+    driver.fastExtent = true;
+    driver.failOnSecondRead = true;
+    const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+    ASSERT_NE(driver.openedLayer, nullptr);
+    EXPECT_EQ(dataset->Layer(0).FeatureCount(), 3);
+    const Extent fullExtent = dataset->Layer(0).GetExtent();
+
+    OGRPolygon previous;
+    OGRLinearRing ring;
+    ring.addPoint(0.0, 0.0);
+    ring.addPoint(1.0, 0.0);
+    ring.addPoint(1.0, 1.0);
+    ring.addPoint(0.0, 1.0);
+    ring.closeRings();
+    ASSERT_EQ(previous.addRing(&ring), OGRERR_NONE);
+    ASSERT_EQ(driver.openedLayer->SetSpatialFilter(&previous), OGRERR_NONE);
+    const GdalEnvironment::QuietScope quiet;
+
+    EXPECT_THROW(
+        (void)rendering::CreateVectorRenderScene(
+            dataset->Layer(0),
+            rendering::VectorRenderSceneOptions{
+                .spatialFilter = Extent{0.0, 0.0, 1.0, 1.0}}),
+        CoreError);
+
+    const OGRGeometry* restored = driver.openedLayer->GetSpatialFilter();
+    ASSERT_NE(restored, nullptr);
+    EXPECT_TRUE(restored->Equals(&previous));
+    EXPECT_EQ(driver.nextFeature, 0);
+    EXPECT_EQ(dataset->Layer(0).FeatureCount(), 3);
+    const Extent cachedExtent = dataset->Layer(0).GetExtent();
+    EXPECT_EQ(cachedExtent.xMin, fullExtent.xMin);
+    EXPECT_EQ(cachedExtent.yMin, fullExtent.yMin);
+    EXPECT_EQ(cachedExtent.xMax, fullExtent.xMax);
+    EXPECT_EQ(cachedExtent.yMax, fullExtent.yMax);
+
+    driver.failOnSecondRead = false;
+    EXPECT_EQ(rendering::CreateVectorRenderScene(dataset->Layer(0)).sourceFeatureCount,
+              3);
+    EXPECT_EQ(driver.nextFeature, 0);
 }
 
 TEST(VectorRenderScene, AcceptsPolygonZAndPolygonM)

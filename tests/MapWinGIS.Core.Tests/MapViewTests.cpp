@@ -549,6 +549,35 @@ TEST_F(MapViewTest, AllocationFailurePreservesThePublishedSceneAndAllowsRetry)
     EXPECT_EQ(scene.layers[1].layerId, second);
 }
 
+TEST_F(MapViewTest, InterruptedViewportRefreshPreservesThePublishedSceneAndRetries)
+{
+    VectorReadTestDriver driver;
+    driver.fastSpatialFilter = true;
+    std::shared_ptr<VectorDataset> dataset =
+        VectorDataset::Open(VectorReadTestDriver::kPath);
+    MapView view;
+    ASSERT_TRUE(view.Resize(300, 200));
+    const LayerId layer = view.AddLayer(dataset);
+    const auto& published = view.Scene();
+    ASSERT_EQ(published.layers.size(), 1U);
+    EXPECT_EQ(published.layers.front().layerId, layer);
+    const std::shared_ptr<const rendering::VectorRenderScene> original =
+        published.layers.front().scene;
+
+    ASSERT_TRUE(view.Pan(1000.0, 0.0));
+    driver.failExtentCapabilityAllocation = true;
+
+    EXPECT_THROW((void)view.Scene(), std::bad_alloc);
+    EXPECT_EQ(published.layers.front().scene, original);
+
+    driver.failExtentCapabilityAllocation = false;
+    const auto& refreshed = view.Scene();
+    ASSERT_EQ(refreshed.layers.size(), 1U);
+    EXPECT_EQ(refreshed.layers.front().layerId, layer);
+    EXPECT_NE(refreshed.layers.front().scene, original);
+    EXPECT_TRUE(refreshed.skippedLayers.empty());
+}
+
 TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
 {
     const std::shared_ptr<VectorDataset> dataset = OpenComplexPolygons();
