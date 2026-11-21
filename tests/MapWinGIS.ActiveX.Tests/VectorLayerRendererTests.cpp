@@ -1150,15 +1150,24 @@ TEST(VectorLayerRenderer, OpenGlLazyComplexMeshesSurviveModesNavigationAndRemova
     mwg::rendering::MapRenderScene scene;
     scene.layers.push_back({mwg::LayerId{1}, Share(std::move(layer))});
     mwg::Viewport viewport = FitViewport(bounds, {0.0, 0.0, 22.0, 10.0});
+
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult = availabilityProbe.Draw(
+        surface.Get(),
+        bounds,
+        MakeConvexPolygonScene(),
+        FitViewport(bounds));
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
     PerformanceCapture diagnostics;
     mwg::activex::OpenGlVectorLayerRenderer renderer;
 
     const HRESULT first =
         renderer.Draw(surface.Get(), bounds, scene, viewport);
-    if (first == S_FALSE)
-    {
-        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
-    }
     ASSERT_EQ(first, S_OK);
     EXPECT_EQ(MapPixel(surface.Get(), viewport, 2.0, 2.0), kFill);
     EXPECT_EQ(MapPixel(surface.Get(), viewport, 7.0, 7.0), GetSysColor(COLOR_WINDOW));
@@ -1208,7 +1217,7 @@ TEST(VectorLayerRenderer, OpenGlLazyComplexMeshesSurviveModesNavigationAndRemova
         4);
 
     scene.layers.clear();
-    ASSERT_TRUE(Access::PruneCaches(renderer, scene));
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(Access::FillMeshCacheSize(renderer), 0U);
     EXPECT_EQ(Access::GpuBufferCacheSize(renderer), 0U);
 }

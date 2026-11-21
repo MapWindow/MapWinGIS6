@@ -44,6 +44,7 @@
 #include "mapwingis/map/Map.h"
 #include "mapwingis/map/Viewport.h"
 #include "mapwingis/rendering/MapRenderScene.h"
+#include "mapwingis/rendering/PolygonTriangulation.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 using namespace mwg;
@@ -671,6 +672,35 @@ TEST_F(RenderingBaseline, MeasuresLazyOpenGlFillCosts)
         GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
     }
 
+    rendering::VectorRenderScene probeLayer;
+    probeLayer.extent = {0.0, 0.0, 1.0, 1.0};
+    probeLayer.sourceFeatureCount = 1;
+    probeLayer.polygons = {
+        {{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}, {0.0, 0.0}}}};
+    probeLayer.fillMeshes.push_back(
+        rendering::TriangulatePolygon(probeLayer.polygons.front()));
+    rendering::MapRenderScene probeScene;
+    probeScene.layers.push_back({
+        mwg::LayerId{1},
+        std::make_shared<const rendering::VectorRenderScene>(std::move(probeLayer))});
+    DibSurface probeSurface(64, 64);
+    ASSERT_TRUE(probeSurface.IsValid());
+    const RECT probeBounds{0, 0, 64, 64};
+    Viewport probeViewport(64, 64);
+    ASSERT_TRUE(probeViewport.FitExtent(probeScene.layers.front().scene->extent, 4.0));
+    activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult =
+        availabilityProbe.Draw(
+            probeSurface.Get(),
+            probeBounds,
+            probeScene,
+            probeViewport);
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "OpenGL is unavailable; no baseline can be measured.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
     DiagnosticCapture diagnostics;
     const int featureCount = FeatureCountFromEnvironment();
     TempDirectory directory;
@@ -707,13 +737,6 @@ TEST_F(RenderingBaseline, MeasuresLazyOpenGlFillCosts)
     const HRESULT firstFrame =
         openGl.Draw(surface.Get(), bounds, scene, viewport);
     const double firstOpenGlMs = ElapsedMilliseconds(start);
-    if (firstFrame == S_FALSE)
-    {
-        std::wcout << L"  OpenGL lazy fill unavailable: "
-                   << openGl.GetLastFailureReason() << L'\n';
-        ReportPerformanceDiagnostics();
-        GTEST_SKIP() << "OpenGL lazy fill unavailable; no baseline measured.";
-    }
     ASSERT_EQ(firstFrame, S_OK);
     const diagnostics::PerformanceSnapshot afterFirstDraw =
         diagnostics::PerformanceDiagnostics::Snapshot();
