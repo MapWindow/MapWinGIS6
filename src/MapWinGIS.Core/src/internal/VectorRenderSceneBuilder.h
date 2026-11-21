@@ -31,4 +31,8 @@ namespace mwg::rendering::detail
     [[nodiscard]] VectorRenderScene BuildVectorRenderScene(
         const VectorLayer& layer,
         const VectorRenderSceneOptions& options = {});
+
+    /// Rejects programmer errors in scene options before per-layer failures
+    /// can convert them into skipped-layer diagnostics.
+    void ValidateVectorRenderSceneOptions(const VectorRenderSceneOptions& options);
 }

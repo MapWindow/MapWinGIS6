@@ -6,6 +6,7 @@
  */
 #include "mapwingis/map/MapView.h"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -16,12 +17,16 @@
 #include "mapwingis/core/Error.h"
 #include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/vector/VectorDataset.h"
+#include "internal/VectorLayerAccess.h"
 #include "internal/VectorRenderSceneBuilder.h"
 
 namespace mwg
 {
     namespace
     {
+        constexpr double kMinimumViewportSceneMarginPixels = 64.0;
+        constexpr double kViewportSceneMarginFraction = 0.5;
+
         void ValidateStepFactor(const double factor)
         {
             if (!std::isfinite(factor) || factor <= 1.0)
@@ -70,8 +75,10 @@ namespace mwg
         struct CachedLayerScene
         {
             LayerScene scene;
-            /// Empty when the cached scene is complete or a stable failure.
             Extent processingExtent;
+            /// True for complete scenes and stable failures. False with an
+            /// empty extent means that the scene is awaiting a valid viewport.
+            bool complete = true;
         };
 
         [[nodiscard]] Extent ViewportProcessingExtent() const
@@ -82,20 +89,33 @@ namespace mwg
             {
                 return {};
             }
-            const double margin = kViewportSceneMarginPixels * *resolution;
+            const double horizontalMarginPixels =
+                std::max(kMinimumViewportSceneMarginPixels,
+                         static_cast<double>(_viewport.Width()) *
+                             kViewportSceneMarginFraction);
+            const double verticalMarginPixels =
+                std::max(kMinimumViewportSceneMarginPixels,
+                         static_cast<double>(_viewport.Height()) *
+                             kViewportSceneMarginFraction);
+            const double horizontalMargin = horizontalMarginPixels * *resolution;
+            const double verticalMargin = verticalMarginPixels * *resolution;
             return {
-                visible.xMin - margin,
-                visible.yMin - margin,
-                visible.xMax + margin,
-                visible.yMax + margin};
+                visible.xMin - horizontalMargin,
+                visible.yMin - verticalMargin,
+                visible.xMax + horizontalMargin,
+                visible.yMax + verticalMargin};
         }
 
         [[nodiscard]] bool CacheCoversViewport(const CachedLayerScene& cached) const
         {
             const Extent visible = _viewport.VisibleExtent();
-            if (!visible.IsValid() || cached.processingExtent.IsEmpty())
+            if (!visible.IsValid() || cached.complete)
             {
                 return true;
+            }
+            if (cached.processingExtent.IsEmpty())
+            {
+                return false;
             }
             const Extent& processing = cached.processingExtent;
             return processing.xMin <= visible.xMin &&
@@ -186,13 +206,13 @@ namespace mwg
             staged.emplace(LayerId{}, Impl::CachedLayerScene{
                 rendering::SkippedLayer{
                     LayerId{}, rendering::LayerSkipReason::NoGeometry, {}},
-                {}});
+                {}, true});
         }
         else
         {
             staged.emplace(LayerId{}, Impl::CachedLayerScene{
                 rendering::LayerRenderScene{LayerId{}, scene},
-                {}});
+                {}, true});
         }
         auto cachedScene = staged.extract(staged.begin());
 
@@ -372,25 +392,41 @@ namespace mwg
                     diagnostics::PerformanceDiagnostics::IncrementCounter(
                         diagnostics::PerformanceCounter::SceneCacheMisses);
                     rendering::VectorRenderSceneOptions options;
-                    if (processingExtent.IsValid())
+                    const bool canFilter =
+                        processingExtent.IsValid() &&
+                        detail::VectorLayerAccess::HasFastSpatialFilter(layer.Source());
+                    if (canFilter)
                     {
                         options.spatialFilter = processingExtent;
                     }
                     Impl::LayerScene layerScene =
                         rendering::detail::BuildLayerRenderScene(layer, options);
-                    Extent cachedProcessingExtent = processingExtent;
-                    if (const auto* skipped =
-                            std::get_if<rendering::SkippedLayer>(&layerScene);
-                        skipped != nullptr &&
-                        skipped->reason == rendering::LayerSkipReason::Failed)
+                    bool complete = processingExtent.IsValid() && !canFilter;
+                    if (canFilter)
                     {
-                        cachedProcessingExtent = {};
+                        const auto* skipped =
+                            std::get_if<rendering::SkippedLayer>(&layerScene);
+                        if (skipped != nullptr &&
+                            skipped->reason == rendering::LayerSkipReason::Failed)
+                        {
+                            layerScene =
+                                rendering::detail::BuildLayerRenderScene(layer, {});
+                            complete = true;
+                        }
                     }
-                    _impl->_layerScenes.erase(layer.Id());
-                    cached = _impl->_layerScenes.emplace(
+                    else if (const auto* skipped =
+                                 std::get_if<rendering::SkippedLayer>(&layerScene);
+                             skipped != nullptr &&
+                             skipped->reason == rendering::LayerSkipReason::Failed)
+                    {
+                        complete = true;
+                    }
+                    cached = _impl->_layerScenes.insert_or_assign(
                         layer.Id(),
                         Impl::CachedLayerScene{
-                            std::move(layerScene), cachedProcessingExtent}).first;
+                            std::move(layerScene),
+                            canFilter && !complete ? processingExtent : Extent{},
+                            complete}).first;
                 }
                 else
                 {

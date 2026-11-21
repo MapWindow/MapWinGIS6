@@ -40,7 +40,10 @@ namespace mwg::rendering
 
         if (scene.polygons.empty())
         {
-            return SkippedLayer{layer.Id(), LayerSkipReason::NoGeometry, {}};
+            const LayerSkipReason reason = options.spatialFilter.has_value()
+                ? LayerSkipReason::OutsideViewport
+                : LayerSkipReason::NoGeometry;
+            return SkippedLayer{layer.Id(), reason, {}};
         }
         return LayerRenderScene{layer.Id(), std::make_shared<const VectorRenderScene>(std::move(scene))};
     }
@@ -54,6 +57,7 @@ namespace mwg::rendering
         const Map& map,
         const VectorRenderSceneOptions& options)
     {
+        detail::ValidateVectorRenderSceneOptions(options);
         MapRenderScene result;
         for (int position = 0; position < map.LayerCount(); ++position)
         {

@@ -22,7 +22,7 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase c
   - OpenGL lazy fill meshes are cached per stable layer ID and immutable scene identity, surviving viewport changes, layer reordering, temporary draws, visibility changes, and backend selection.
   - Scene replacement, explicit per-layer invalidation, removed-layer pruning, and clear-all invalidation release only the affected generated mesh storage; retained mesh bytes are tracked for tests.
   - Limitation: no cache-size limit or eviction policy was added because measurements did not establish that the additional complexity is justified.
-- [x] **Phase 5 – Introduce viewport-aware geometry processing** (PR 5)
+- [ ] **Phase 5 – Introduce viewport-aware geometry processing** (PR 5)
 - [ ] **Phase 6 – Optimize OpenGL rendering and data transfer** (PR 6)
 - [ ] **Phase 7 – Testing and regression prevention** (PR 7)
 
@@ -389,17 +389,24 @@ When the user pans or zooms:
 
 ### Phase 5 implementation and limitations
 
-- `MapView` requests features through an OGR bounding-box spatial filter
-  expanded by a 64-pixel margin around the visible extent.
+- `MapView` requests features through an OGR bounding-box spatial filter when
+  the driver reports `OLCFastSpatialFilter`. The margin is at least 64 pixels
+  and grows with the viewport size to cover longer navigation steps.
 - Filtered scenes retain source geometry and backend cache identity while the
   visible extent remains inside the processed extent.
 - Pans or zoom-outs beyond the margin rebuild the affected layer selection.
   This phase does not yet provide incremental feature-level merging or tiling.
 - Caller-prepared scenes remain complete snapshots and are not viewport
-  filtered.
+  filtered. The ActiveX control currently supplies these prepared complete
+  scenes, so its large-layer initial load still processes every feature before
+  the first visible rendering. The phase remains open until that path uses
+  viewport-aware preparation or the acceptance criteria are revised.
+- Drivers without a native fast spatial filter retain complete scenes instead
+  of repeatedly scanning the complete layer for marginal viewport changes.
+  An automatic filtered build that fails falls back to a complete scene.
 - The skipped-feature counter is available only when OGR can return a
-  non-forced layer feature count; it never forces a complete scan for the
-  diagnostic value.
+  reliable non-forced layer feature count and the source uses a native fast
+  spatial filter. It never forces a complete scan for the diagnostic value.
 
 ---
 

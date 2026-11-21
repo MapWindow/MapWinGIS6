@@ -53,14 +53,14 @@ geometry, renders polygonal members of geometry collections, and counts other
 skipped parts in `VectorRenderScene::skippedGeometryCount`.
 
 `MapView` automatically builds viewport-filtered layer scenes with a calculated
-margin. Core applies the filter through OGR before reading feature geometries,
-so off-screen features do not reach conversion or triangulation. The private
-layer cache records the processing extent and retains immutable geometry and
-backend mesh identity while the visible extent remains inside it. Larger pans
-or zoom-outs rebuild affected layer scenes. Prepared scenes supplied through
-`AddLayer` are complete snapshots and have no processing-extent restriction.
-Filtered scene construction must not replace a layer's cached full extent or
-feature count with the selected subset. See `VectorRenderSceneOptions`,
+margin only when the OGR driver reports a native fast spatial filter. The
+private layer cache records the processing extent and retains immutable
+geometry and backend mesh identity while the visible extent remains inside it.
+Drivers without a fast filter retain complete scenes rather than repeatedly
+reading the whole source. Prepared scenes supplied through `AddLayer` are also
+complete snapshots and have no processing-extent restriction. Filtered scene
+construction must not replace a layer's cached full extent or feature count
+with the selected subset. See `VectorRenderSceneOptions`,
 `VectorLayerAccess::ForEachGeometry`, and `MapView.cpp`.
 
 ## References

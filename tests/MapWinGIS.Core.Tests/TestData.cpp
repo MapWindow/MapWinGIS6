@@ -47,6 +47,7 @@ namespace mwg::test
             {
                 _definition->Reference();
                 _definition->SetGeomType(wkbPolygon);
+                _state.openedLayer = this;
                 OGRFieldDefn nameField("NAME", OFTString);
                 _definition->AddFieldDefn(&nameField);
                 OGRFieldDefn valueField("VALUE", OFTInteger);
@@ -55,6 +56,10 @@ namespace mwg::test
 
             ~VectorReadTestLayer() override
             {
+                if (_state.openedLayer == this)
+                {
+                    _state.openedLayer = nullptr;
+                }
                 _definition->Release();
             }
 
@@ -141,6 +146,11 @@ namespace mwg::test
                         throw std::bad_alloc();
                     return _state.fastExtent ? TRUE : FALSE;
                 }
+                if (capability != nullptr &&
+                    std::string_view(capability) == OLCFastSpatialFilter)
+                {
+                    return _state.fastSpatialFilter ? TRUE : FALSE;
+                }
                 return capability != nullptr &&
                                std::string_view(capability) == OLCRandomWrite
                            ? TRUE
@@ -148,6 +158,21 @@ namespace mwg::test
             }
 
         protected:
+            OGRErr ISetSpatialFilter(
+                const int geometryField,
+                const OGRGeometry* filter) override
+            {
+                ++_state.spatialFilterCalls;
+                if (_state.failSpatialFilter)
+                {
+                    _state.failSpatialFilter = false;
+                    CPLError(CE_Failure, CPLE_AppDefined,
+                             "Simulated spatial filter failure");
+                    return OGRERR_FAILURE;
+                }
+                return OGRLayer::ISetSpatialFilter(geometryField, filter);
+            }
+
             OGRErr ISetFeature(OGRFeature* feature) override
             {
                 if (_state.failSetFeature)

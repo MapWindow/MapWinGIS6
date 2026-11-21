@@ -136,9 +136,9 @@ namespace mwg
             /// meshes. Source geometry and bounds are prepared either way.
             bool prepareFillMeshes = false;
             /// When present, only features whose bounding boxes intersect this
-            /// extent are read and converted. This uses the source layer's
-            /// spatial-filter capability and leaves the source filter restored
-            /// after scene construction.
+            /// extent are converted. Drivers with OLCFastSpatialFilter avoid
+            /// reading the other features; other drivers may still read and
+            /// parse them. Scene construction restores the source filter.
             /// \throws InvalidArgument when the extent is not valid.
             std::optional<Extent> spatialFilter;
         };
@@ -183,7 +183,8 @@ namespace mwg
         ///
         /// The default is source geometry only. Set prepareFillMeshes to true
         /// when the requested fill rendering operation needs triangle meshes.
-        /// Set spatialFilter to avoid loading geometry outside a viewport.
+        /// Set spatialFilter to avoid converting geometry outside a viewport.
+        /// Drivers with OLCFastSpatialFilter can also avoid reading it.
         /// Features returned by an OGR spatial filter include bounding-box
         /// boundary intersections. The default overload never invokes polygon
         /// triangulation.

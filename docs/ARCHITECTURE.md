@@ -323,9 +323,13 @@ the frame trigger a full render.
 Wheel input calls `MapView::ZoomAt` at the cursor. The control acquires and
 releases mouse capture through either its window or its windowless in-place
 site, and ends a drag on capture loss, cancellation, close, or destruction.
-Small view changes within the processing margin reuse the render scene, and
-both backends draw through the updated viewport. A larger change requests a
-new spatially filtered snapshot from Core before rendering.
+Automatically built `MapView` scenes use a viewport-relative processing margin:
+small view changes reuse the scene, and a larger change rebuilds only affected
+layer selections. The ActiveX control currently commits caller-prepared complete
+scenes, so its view changes continue to reuse the complete snapshot and do not
+request filtered scenes. Alternate-size draws use the live scene; filtered
+direct-host scenes are therefore valid only through the live viewport. Hosts
+that draw a different viewport must supply complete prepared scenes.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. For each
@@ -473,8 +477,11 @@ share one.
 
 For direct `CreateVectorRenderScene` and `CreateMapRenderScene` calls, Core
 prepares and retains the complete supported polygon scene in memory. `MapView`
-instead applies a padded visible-extent spatial filter to automatically
-prepared layers, while a caller-supplied prepared scene remains complete.
+instead applies a padded visible-extent spatial filter to
+automatically prepared layers when the driver reports
+`OLCFastSpatialFilter`, while a caller-supplied prepared scene remains
+complete. Drivers without a native fast filter retain complete scenes so a pan
+does not repeatedly force a full-layer scan.
 Core reads feature geometries sequentially without WKT serialization and
 reparsing. MapView caches one filtered or complete scene per layer: visibility
 changes reassemble the map snapshot without rereading visible layers, hidden
@@ -483,8 +490,10 @@ only the corresponding cache entries. InvalidateLayerScene rebuilds one
 layer after source edits; InvalidateScene clears all layer caches. Adding a
 prepared layer seeds its cache directly. Layer scenes are immutable and shared through
 `std::shared_ptr<const VectorRenderScene>`, so assembling the map snapshot
-shares cached coordinates and meshes instead of copying them; peak memory
-is bounded to selected geometry plus the cache for a prepared layer.
+shares cached coordinates and meshes instead of copying them. An automatically
+built layer holds its selected geometry once, and a prepared layer holds its
+complete geometry once. Rebuilding a selection temporarily retains both the old
+scene and the new selection until the assembled snapshot is replaced.
 OpenGL's lazily generated fill meshes have a second, backend-owned cache keyed
 by stable `LayerId` and the immutable scene identity. Reordering, hiding,
 redrawing, viewport changes, and backend selection retain valid entries.

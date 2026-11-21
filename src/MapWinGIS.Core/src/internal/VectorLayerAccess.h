@@ -32,5 +32,9 @@ namespace mwg::detail
         /// Whether the source driver can return an extent without scanning
         /// every feature.
         [[nodiscard]] static bool HasFastExtent(const VectorLayer& layer);
+
+        /// Whether MapView can safely reduce feature reads with the layer's
+        /// single active geometry field.
+        [[nodiscard]] static bool HasFastSpatialFilter(const VectorLayer& layer);
     };
 }

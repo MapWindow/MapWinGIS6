@@ -472,41 +472,113 @@ namespace mwg
         OGRLayer& ogrLayer = *layer._impl->_layer;
         GIntBig unfilteredFeatureCount = -1;
         if (spatialFilter != nullptr &&
-            diagnostics::PerformanceDiagnostics::IsEnabled())
+            diagnostics::PerformanceDiagnostics::IsEnabled() &&
+            detail::VectorLayerAccess::HasFastSpatialFilter(layer))
         {
-            unfilteredFeatureCount = ogrLayer.GetFeatureCount(FALSE);
-        }
-        OGRGeometryUniquePtr previousSpatialFilter;
-        if (spatialFilter != nullptr)
-        {
-            if (const OGRGeometry* previous = ogrLayer.GetSpatialFilter();
-                previous != nullptr)
+            const GDALDriver* const driver =
+                layer._impl->_dataset.GetDriver();
+            const char* const driverName =
+                driver != nullptr ? driver->GetDescription() : nullptr;
+            // The Shapefile total can include deleted DBF records that OGR
+            // iteration never returns.
+            if (driverName == nullptr ||
+                std::string_view(driverName) != "ESRI Shapefile")
             {
-                previousSpatialFilter.reset(previous->clone());
-            }
-            if (ogrLayer.SetSpatialFilterRect(
-                    spatialFilter->xMin,
-                    spatialFilter->yMin,
-                    spatialFilter->xMax,
-                    spatialFilter->yMax) != OGRERR_NONE)
-            {
-                throw CoreError("Cannot apply vector layer spatial filter");
+                GdalEnvironment::ClearLastError();
+                unfilteredFeatureCount = ogrLayer.GetFeatureCount(FALSE);
+                GdalEnvironment::RethrowLogException();
             }
         }
+
         struct SpatialFilterReset final
         {
+            explicit SpatialFilterReset(OGRLayer& source, const int field)
+                : layer(source), geometryField(field)
+            {
+            }
+
             ~SpatialFilterReset()
             {
-                if (applied)
+                if (!applied)
                 {
-                    (void)layer.SetSpatialFilter(previous.get());
+                    return;
+                }
+                try
+                {
+                    Restore();
+                }
+                catch (...)
+                {
+                    // An original exception is already in flight; normal
+                    // completion checks restoration and propagates its error.
                 }
             }
 
+            void Restore()
+            {
+                if (!applied)
+                {
+                    return;
+                }
+                GdalEnvironment::ClearLastError();
+                const OGRErr result =
+                    layer.SetSpatialFilter(geometryField, previous.get());
+                GdalEnvironment::RethrowLogException();
+                if (result != OGRERR_NONE)
+                {
+                    std::string message = "Cannot restore vector layer spatial filter";
+                    if (const std::string detail = GdalEnvironment::LastErrorMessage();
+                        !detail.empty())
+                    {
+                        message += ": " + detail;
+                    }
+                    throw CoreError(message);
+                }
+                applied = false;
+            }
+
             OGRLayer& layer;
+            int geometryField;
             OGRGeometryUniquePtr previous;
             bool applied = false;
-        } spatialFilterReset{ogrLayer, std::move(previousSpatialFilter), spatialFilter != nullptr};
+        } spatialFilterReset{ogrLayer, ogrLayer.GetGeomFieldFilter()};
+
+        if (spatialFilter != nullptr)
+        {
+            GdalEnvironment::ClearLastError();
+            if (const OGRGeometry* previous = ogrLayer.GetSpatialFilter();
+                previous != nullptr)
+            {
+                spatialFilterReset.previous.reset(previous->clone());
+                if (spatialFilterReset.previous == nullptr)
+                {
+                    throw std::bad_alloc();
+                }
+            }
+            GdalEnvironment::RethrowLogException();
+
+            // Arm restoration before applying: some drivers may mutate their
+            // filter state before returning an error.
+            spatialFilterReset.applied = true;
+            GdalEnvironment::ClearLastError();
+            const OGRErr result = ogrLayer.SetSpatialFilterRect(
+                    spatialFilterReset.geometryField,
+                    spatialFilter->xMin,
+                    spatialFilter->yMin,
+                    spatialFilter->xMax,
+                    spatialFilter->yMax);
+            GdalEnvironment::RethrowLogException();
+            if (result != OGRERR_NONE)
+            {
+                std::string message = "Cannot apply vector layer spatial filter";
+                if (const std::string detail = GdalEnvironment::LastErrorMessage();
+                    !detail.empty())
+                {
+                    message += ": " + detail;
+                }
+                throw CoreError(message);
+            }
+        }
 
         const VectorLayer::Impl::IgnoredFields ignoredFields(
             ogrLayer, layer._impl->_fields, false);
@@ -572,12 +644,22 @@ namespace mwg
                 diagnostics::PerformanceCounter::FeaturesSkippedOutsideViewport,
                 unfilteredFeatureCount - count);
         }
+        spatialFilterReset.Restore();
         return count;
     }
 
     bool detail::VectorLayerAccess::HasFastExtent(const VectorLayer& layer)
     {
         return layer._impl->_layer->TestCapability(OLCFastGetExtent) != FALSE;
+    }
+
+    bool detail::VectorLayerAccess::HasFastSpatialFilter(const VectorLayer& layer)
+    {
+        OGRLayer& ogrLayer = *layer._impl->_layer;
+        const OGRFeatureDefn* definition = ogrLayer.GetLayerDefn();
+        return definition != nullptr &&
+               definition->GetGeomFieldCount() == 1 &&
+               ogrLayer.TestCapability(OLCFastSpatialFilter) != FALSE;
     }
 
     VectorLayer::VectorLayer(std::unique_ptr<Impl> impl)

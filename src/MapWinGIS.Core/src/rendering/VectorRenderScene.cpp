@@ -239,16 +239,13 @@ namespace mwg::rendering
     {
         const diagnostics::PerformanceScope scope(
             diagnostics::PerformanceOperation::SceneBuild);
+        detail::ValidateVectorRenderSceneOptions(options);
         if (BaseShapeType(layer.Type()) != ShapeType::Polygon)
         {
             throw CoreError("Vector rendering supports polygon layers only");
         }
 
         VectorRenderScene scene;
-        if (options.spatialFilter.has_value() && !options.spatialFilter->IsValid())
-        {
-            throw InvalidArgument("Vector scene spatial filter extent must be valid");
-        }
         const bool supportsFastExtent =
             mwg::detail::VectorLayerAccess::HasFastExtent(layer);
         const bool hasFastExtent =
@@ -288,6 +285,15 @@ namespace mwg::rendering
             scene.fillMeshes.push_back(std::move(mesh));
         }
         return scene;
+    }
+
+    void detail::ValidateVectorRenderSceneOptions(
+        const VectorRenderSceneOptions& options)
+    {
+        if (options.spatialFilter.has_value() && !options.spatialFilter->IsValid())
+        {
+            throw InvalidArgument("Vector scene spatial filter extent must be valid");
+        }
     }
 
     VectorRenderScene CreateVectorRenderScene(const VectorLayer& layer)

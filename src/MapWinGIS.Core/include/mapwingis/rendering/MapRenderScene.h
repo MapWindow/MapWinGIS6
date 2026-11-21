@@ -44,6 +44,8 @@ namespace mwg::rendering
         /// The layer cannot be rendered, for example because it is not a
         /// polygon layer or its geometry cannot be read. See the message.
         Failed,
+        /// No polygon geometry intersects an applied spatial filter.
+        OutsideViewport,
     };
 
     /// A map layer that is not part of a MapRenderScene.
@@ -74,8 +76,9 @@ namespace mwg::rendering
     /// layers' source coordinate system; the scene does not reproject.
     ///
     /// The scene is a snapshot: later changes to the map or its sources are
-    /// not reflected, so create a new scene after the map changes. Reads
-    /// every visible layer completely. Not thread-safe; see Map.
+    /// not reflected, so create a new scene after the map changes. With no
+    /// spatial filter, every visible layer is read completely. Not
+    /// thread-safe; see Map.
     /// \throws std::bad_alloc when memory runs out. Other std::exception
     ///         errors from individual layers are reported in skippedLayers.
     ///         Exceptions not derived from std::exception propagate.
@@ -86,6 +89,7 @@ namespace mwg::rendering
     /// Hidden, empty, and failed layers retain the same handling as the
     /// default overload. Fill preparation is disabled by default, so drawable
     /// layer scenes contain source rings without triangulating polygons.
+    /// \throws InvalidArgument when the spatial-filter extent is invalid.
     [[nodiscard]] MWG_CORE_API MapRenderScene CreateMapRenderScene(
         const Map& map,
         const VectorRenderSceneOptions& options);

@@ -302,18 +302,21 @@ TEST_F(MapViewTest, MapChangesRebuildTheSceneAndReportARedraw)
     EXPECT_FALSE(_view.SetLayerVisible(second, true));
 }
 
-TEST_F(MapViewTest, SceneIsReusedUntilTheMapChanges)
+TEST_F(MapViewTest, SceneIsReusedWhileViewportCoverageRemainsValid)
 {
+    ASSERT_TRUE(_view.Resize(300, 200));
     _view.AddLayer(OpenRectangles({{0.0, 0.0, 1.0, 1.0}}));
     const rendering::MapRenderScene& scene = _view.Scene();
-    const auto* polygons = scene.layers.front().scene->polygons.Coordinates().data();
+    const std::shared_ptr<const rendering::VectorRenderScene> layerScene =
+        scene.layers.front().scene;
 
-    ASSERT_TRUE(_view.Resize(300, 200));
-    EXPECT_EQ(_view.Scene().layers.front().scene->polygons.Coordinates().data(), polygons);
+    ASSERT_TRUE(_view.Pan(*_view.GetViewport().Resolution(), 0.0));
+    EXPECT_EQ(_view.Scene().layers.front().scene, layerScene);
 
     EXPECT_TRUE(_view.InvalidateScene());
     EXPECT_EQ(&_view.Scene(), &scene);
     EXPECT_EQ(scene.layers.size(), 1U);
+    EXPECT_NE(scene.layers.front().scene, layerScene);
 }
 
 TEST_F(MapViewTest, PreparedLayersRetainTheirGeometryUntilInvalidated)
@@ -620,7 +623,7 @@ TEST_F(MapViewTest, FiltersAutomaticScenesToThePaddedViewportAndReusesSmallPans)
     ASSERT_EQ(firstScene.skippedLayers.size(), 1U);
     EXPECT_EQ(firstScene.skippedLayers.front().layerId, far);
     EXPECT_EQ(firstScene.skippedLayers.front().reason,
-              rendering::LayerSkipReason::NoGeometry);
+              rendering::LayerSkipReason::OutsideViewport);
     const void* coordinates = firstScene.layers.front().scene->polygons.Coordinates().data();
 
     ASSERT_TRUE(_view.Pan(1.0, 0.0));
@@ -628,15 +631,175 @@ TEST_F(MapViewTest, FiltersAutomaticScenesToThePaddedViewportAndReusesSmallPans)
     EXPECT_EQ(_view.Scene().layers.front().scene->polygons.Coordinates().data(),
               coordinates);
 
-    const double resolution = *_view.GetViewport().Resolution();
-    ASSERT_TRUE(_view.Pan(
-        1000.0 + MapView::kViewportSceneMarginPixels * resolution,
-        0.0));
+    ASSERT_TRUE(_view.Pan(1000.0, 0.0));
     const rendering::MapRenderScene& movedScene = _view.Scene();
     ASSERT_EQ(movedScene.layers.size(), 1U);
     EXPECT_EQ(movedScene.layers.front().layerId, far);
     ASSERT_EQ(movedScene.skippedLayers.size(), 1U);
     EXPECT_EQ(movedScene.skippedLayers.front().layerId, near);
+}
+
+TEST_F(MapViewTest, ReusesGeometryThatBecomesVisibleInsideTheProcessingMargin)
+{
+    ASSERT_TRUE(_view.Resize(100, 100));
+    const LayerId near = _view.AddLayer(
+        OpenRectangles({{0.0, 0.0, 10.0, 10.0}}));
+    ASSERT_EQ(_view.Scene().layers.size(), 1U);
+
+    const Viewport& viewport = _view.GetViewport();
+    const Extent visible = viewport.VisibleExtent();
+    const double resolution = *viewport.Resolution();
+    const Extent marginFeature{
+        visible.xMax + resolution,
+        visible.yMin,
+        visible.xMax + 2.0 * resolution,
+        visible.yMin + 2.0 * resolution};
+    const LayerId margin = _view.AddLayer(OpenRectangles({marginFeature}));
+
+    const auto& prepared = _view.Scene();
+    ASSERT_EQ(prepared.layers.size(), 2U);
+    EXPECT_EQ(prepared.layers[0].layerId, near);
+    EXPECT_EQ(prepared.layers[1].layerId, margin);
+    const std::shared_ptr<const rendering::VectorRenderScene> marginScene =
+        prepared.layers[1].scene;
+    EXPECT_FALSE(IsVisible(viewport, marginFeature));
+
+    ASSERT_TRUE(_view.Pan(3.0 * resolution, 0.0));
+    const auto& panned = _view.Scene();
+    EXPECT_EQ(panned.layers[1].scene, marginScene);
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), marginFeature));
+}
+
+TEST_F(MapViewTest, RebuildsFilteredScenesWhenTheViewportGrowsOrZoomsOut)
+{
+    ASSERT_TRUE(_view.Resize(100, 100));
+    const LayerId layer = _view.AddLayer(
+        OpenRectangles({{0.0, 0.0, 10.0, 10.0}}));
+    const auto& initial = _view.Scene();
+    ASSERT_EQ(initial.layers.size(), 1U);
+    EXPECT_EQ(initial.layers.front().layerId, layer);
+    const std::shared_ptr<const rendering::VectorRenderScene> initialScene =
+        initial.layers.front().scene;
+
+    ASSERT_TRUE(_view.Resize(400, 400));
+    const auto& resized = _view.Scene();
+    ASSERT_EQ(resized.layers.size(), 1U);
+    EXPECT_NE(resized.layers.front().scene, initialScene);
+    const std::shared_ptr<const rendering::VectorRenderScene> resizedScene =
+        resized.layers.front().scene;
+
+    ASSERT_TRUE(_view.ZoomOut(4.0));
+    const auto& zoomed = _view.Scene();
+    ASSERT_EQ(zoomed.layers.size(), 1U);
+    EXPECT_NE(zoomed.layers.front().scene, resizedScene);
+}
+
+TEST_F(MapViewTest, AwaitingViewportSceneIsRefilteredAfterResize)
+{
+    MapView view;
+    view.AddLayer(OpenRectangles({{0.0, 0.0, 10.0, 10.0},
+                                  {20.0, 20.0, 30.0, 30.0}}));
+    const auto& withoutViewport = view.Scene();
+    ASSERT_EQ(withoutViewport.layers.size(), 1U);
+    ASSERT_EQ(withoutViewport.layers.front().scene->polygons.size(), 2U);
+    const std::shared_ptr<const rendering::VectorRenderScene> complete =
+        withoutViewport.layers.front().scene;
+
+    ASSERT_TRUE(view.Resize(100, 100));
+    const auto& resized = view.Scene();
+    ASSERT_EQ(resized.layers.size(), 1U);
+    EXPECT_NE(resized.layers.front().scene, complete);
+}
+
+TEST_F(MapViewTest, DriverWithoutFastSpatialFilterKeepsItsCompleteScene)
+{
+    VectorReadTestDriver driver;
+    driver.fastExtent = true;
+    MapView view;
+    ASSERT_TRUE(view.Resize(100, 100));
+    const LayerId layer = view.AddLayer(
+        VectorDataset::Open(VectorReadTestDriver::kPath));
+    const auto& initial = view.Scene();
+    ASSERT_EQ(initial.layers.size(), 1U);
+    EXPECT_EQ(initial.layers.front().layerId, layer);
+    const std::shared_ptr<const rendering::VectorRenderScene> complete =
+        initial.layers.front().scene;
+
+    ASSERT_TRUE(view.Pan(1000.0, 0.0));
+    const auto& panned = view.Scene();
+    ASSERT_EQ(panned.layers.size(), 1U);
+    EXPECT_EQ(panned.layers.front().scene, complete);
+    EXPECT_EQ(panned.layers.front().scene->sourceFeatureCount, 3);
+    EXPECT_EQ(driver.readCalls, 4);
+}
+
+TEST_F(MapViewTest, SpatialFilterFailureFallsBackToACompleteScene)
+{
+    VectorReadTestDriver driver;
+    driver.fastExtent = true;
+    driver.fastSpatialFilter = true;
+    driver.failSpatialFilter = true;
+    MapView view;
+    ASSERT_TRUE(view.Resize(100, 100));
+    const LayerId layer = view.AddLayer(
+        VectorDataset::Open(VectorReadTestDriver::kPath));
+    const GdalEnvironment::QuietScope quiet;
+
+    const auto& scene = view.Scene();
+    ASSERT_EQ(scene.layers.size(), 1U);
+    EXPECT_EQ(scene.layers.front().layerId, layer);
+    EXPECT_EQ(scene.layers.front().scene->sourceFeatureCount, 3);
+    EXPECT_TRUE(scene.skippedLayers.empty());
+    EXPECT_GE(driver.spatialFilterCalls, 2);
+
+    const std::shared_ptr<const rendering::VectorRenderScene> complete =
+        scene.layers.front().scene;
+    ASSERT_TRUE(view.Pan(1000.0, 0.0));
+    EXPECT_EQ(view.Scene().layers.front().scene, complete);
+}
+
+TEST_F(MapViewTest, PreparedSceneRemainsCompleteAfterALargePan)
+{
+    ASSERT_TRUE(_view.Resize(100, 100));
+    const auto dataset = OpenRectangles({{0.0, 0.0, 10.0, 10.0}});
+    const LayerId layer = _view.AddLayer(
+        dataset, rendering::CreateVectorRenderScene(*dataset));
+    const auto& initial = _view.Scene();
+    ASSERT_EQ(initial.layers.size(), 1U);
+    EXPECT_EQ(initial.layers.front().layerId, layer);
+    const std::shared_ptr<const rendering::VectorRenderScene> complete =
+        initial.layers.front().scene;
+
+    ASSERT_TRUE(_view.Pan(1000.0, 0.0));
+    const auto& panned = _view.Scene();
+    ASSERT_EQ(panned.layers.size(), 1U);
+    EXPECT_EQ(panned.layers.front().scene, complete);
+}
+
+TEST_F(MapViewTest, ShowingALayerAfterPanRebuildsItsFilteredSelection)
+{
+    ASSERT_TRUE(_view.Resize(100, 100));
+    const LayerId near = _view.AddLayer(
+        OpenRectangles({{0.0, 0.0, 10.0, 10.0}}));
+    const LayerId far = _view.AddLayer(
+        OpenRectangles({{1000.0, 0.0, 1010.0, 10.0}}));
+    const auto& initial = _view.Scene();
+    ASSERT_EQ(initial.layers.size(), 1U);
+    const std::shared_ptr<const rendering::VectorRenderScene> nearScene =
+        initial.layers.front().scene;
+
+    ASSERT_TRUE(_view.SetLayerVisible(near, false));
+    ASSERT_EQ(_view.Scene().skippedLayers.size(), 2U);
+    ASSERT_TRUE(_view.Pan(1000.0, 0.0));
+    ASSERT_TRUE(_view.SetLayerVisible(near, true));
+    const auto& shown = _view.Scene();
+    ASSERT_EQ(shown.layers.size(), 1U);
+    EXPECT_EQ(shown.layers.front().layerId, far);
+    ASSERT_TRUE(_view.Pan(-1000.0, 0.0));
+    const auto& returned = _view.Scene();
+    ASSERT_EQ(returned.layers.size(), 1U);
+    EXPECT_EQ(returned.layers.front().layerId, near);
+    EXPECT_NE(returned.layers.front().scene, nearScene);
 }
 
 TEST_F(MapViewTest, PreparedEmptyLayerPreservesExistingAndStaleScenes)
