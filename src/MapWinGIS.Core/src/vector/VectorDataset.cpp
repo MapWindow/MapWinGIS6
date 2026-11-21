@@ -466,9 +466,48 @@ namespace mwg
     std::int64_t detail::VectorLayerAccess::ForEachGeometry(
         const VectorLayer& layer,
         const std::function<void(const OGRGeometry&)>& callback,
-        Extent* extent)
+        Extent* extent,
+        const Extent* spatialFilter)
     {
         OGRLayer& ogrLayer = *layer._impl->_layer;
+        GIntBig unfilteredFeatureCount = -1;
+        if (spatialFilter != nullptr &&
+            diagnostics::PerformanceDiagnostics::IsEnabled())
+        {
+            unfilteredFeatureCount = ogrLayer.GetFeatureCount(FALSE);
+        }
+        OGRGeometryUniquePtr previousSpatialFilter;
+        if (spatialFilter != nullptr)
+        {
+            if (const OGRGeometry* previous = ogrLayer.GetSpatialFilter();
+                previous != nullptr)
+            {
+                previousSpatialFilter.reset(previous->clone());
+            }
+            if (ogrLayer.SetSpatialFilterRect(
+                    spatialFilter->xMin,
+                    spatialFilter->yMin,
+                    spatialFilter->xMax,
+                    spatialFilter->yMax) != OGRERR_NONE)
+            {
+                throw CoreError("Cannot apply vector layer spatial filter");
+            }
+        }
+        struct SpatialFilterReset final
+        {
+            ~SpatialFilterReset()
+            {
+                if (applied)
+                {
+                    (void)layer.SetSpatialFilter(previous.get());
+                }
+            }
+
+            OGRLayer& layer;
+            OGRGeometryUniquePtr previous;
+            bool applied = false;
+        } spatialFilterReset{ogrLayer, std::move(previousSpatialFilter), spatialFilter != nullptr};
+
         const VectorLayer::Impl::IgnoredFields ignoredFields(
             ogrLayer, layer._impl->_fields, false);
         ogrLayer.ResetReading();
@@ -517,10 +556,22 @@ namespace mwg
         if (extent != nullptr)
         {
             *extent = computedExtent.value_or(Extent{});
-            layer._impl->_extent = *extent;
-            layer._impl->_extentNeedsExactRecalculation = false;
+            if (spatialFilter == nullptr)
+            {
+                layer._impl->_extent = *extent;
+                layer._impl->_extentNeedsExactRecalculation = false;
+            }
         }
-        layer._impl->_featureCount = count;
+        if (spatialFilter == nullptr)
+        {
+            layer._impl->_featureCount = count;
+        }
+        else if (unfilteredFeatureCount >= count)
+        {
+            diagnostics::PerformanceDiagnostics::IncrementCounter(
+                diagnostics::PerformanceCounter::FeaturesSkippedOutsideViewport,
+                unfilteredFeatureCount - count);
+        }
         return count;
     }
 

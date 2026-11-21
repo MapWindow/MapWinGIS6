@@ -333,6 +333,46 @@ TEST_P(VectorRenderSceneTest, CopiesPolygonCoordinatesAndExtent)
     EXPECT_DOUBLE_EQ(scene.polygons.front().front().back().y, Provinces::kMinY);
 }
 
+TEST(VectorRenderScene, SpatialFilterReadsOnlyIntersectingFeatures)
+{
+    TempDirectory directory;
+    const std::vector<Extent> rectangles{
+        {0.0, 0.0, 1.0, 1.0},
+        {10.0, 10.0, 11.0, 11.0},
+        {20.0, 20.0, 21.0, 21.0}};
+    const auto dataset = VectorDataset::Open(MakeRectanglesDataset(
+        directory.Path(), "spatial-filter.gpkg", rectangles));
+
+    const rendering::VectorRenderScene scene =
+        rendering::CreateVectorRenderScene(
+            dataset->Layer(0),
+            rendering::VectorRenderSceneOptions{
+                .spatialFilter = Extent{10.0, 10.0, 10.0, 10.0}});
+
+    ASSERT_EQ(scene.polygons.size(), 1U);
+    EXPECT_EQ(scene.sourceFeatureCount, 1);
+    EXPECT_DOUBLE_EQ(scene.extent.xMin, 10.0);
+    EXPECT_DOUBLE_EQ(scene.extent.yMin, 10.0);
+    EXPECT_DOUBLE_EQ(scene.extent.xMax, 11.0);
+    EXPECT_DOUBLE_EQ(scene.extent.yMax, 11.0);
+    EXPECT_TRUE(dataset->Layer(0).GetExtent().Intersects(
+        Extent{20.0, 20.0, 21.0, 21.0}));
+}
+
+TEST(VectorRenderScene, RejectsInvalidSpatialFilter)
+{
+    TempDirectory directory;
+    const std::vector<Extent> rectangles{{0.0, 0.0, 1.0, 1.0}};
+    const auto dataset = VectorDataset::Open(MakeRectanglesDataset(
+        directory.Path(), "invalid-filter.gpkg", rectangles));
+
+    EXPECT_THROW(
+        (void)rendering::CreateVectorRenderScene(
+            dataset->Layer(0),
+            rendering::VectorRenderSceneOptions{.spatialFilter = Extent{}}),
+        InvalidArgument);
+}
+
 TEST(VectorRenderScene, AcceptsPolygonZAndPolygonM)
 {
     GdalEnvironment::Initialize();

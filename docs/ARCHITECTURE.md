@@ -233,10 +233,17 @@ has no extent or transform of its own.
   in `skippedLayers` with a reason and do not stop the other layers.
   This includes `std::exception` errors except `std::bad_alloc`, which propagates.
   Exceptions outside that hierarchy also propagate. The scene
-  holds no view state and no references to the map or its datasets.
+  holds no view state and no references to the map or its datasets. The
+  lower-level scene options can apply an OGR spatial filter so callers load
+  only feature envelopes that intersect a requested extent.
 - **Shared viewport.** Renderers draw the scene through the `Viewport` passed
-  with it, so every layer uses the same transformation. A view change, such as
-  a resize, does not rebuild the scene.
+  with it, so every layer uses the same transformation. `MapView` builds
+  automatically prepared layer scenes from the visible extent plus a
+  64-pixel margin. Small pans and zoom-in operations therefore retain the
+  immutable scene and backend mesh caches. A resize or navigation operation
+  that moves outside the cached processing extent rebuilds only the affected
+  layer scenes; prepared scenes supplied by a caller are complete snapshots
+  and remain reusable for every view.
 - **Redraws.** Map changes go through `MapView` (`AddLayer`, `RemoveLayer`,
   `ClearLayers`, `SetLayerVisible`), which marks the scene stale; `Scene()`
   assembles it from cached layer scenes on the next call.
@@ -316,8 +323,9 @@ the frame trigger a full render.
 Wheel input calls `MapView::ZoomAt` at the cursor. The control acquires and
 releases mouse capture through either its window or its windowless in-place
 site, and ends a drag on capture loss, cancellation, close, or destruction.
-These view changes do not rebuild the render scene, and both backends draw
-through the updated viewport.
+Small view changes within the processing margin reuse the render scene, and
+both backends draw through the updated viewport. A larger change requests a
+new spatially filtered snapshot from Core before rendering.
 
 Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. For each
@@ -463,17 +471,20 @@ layers and other geometry types are not rendered. There is no reprojection, so
 coordinates remain in the source coordinate system and layers are assumed to
 share one.
 
-Core prepares and retains the complete supported polygon scene in memory,
-reading feature geometries sequentially without WKT serialization and
-reparsing. MapView caches one scene per layer: visibility changes reassemble
-the map snapshot without rereading visible layers, hidden layers are prepared
-when first shown, and removing or clearing layers drops only the corresponding
-cache entries. InvalidateLayerScene rebuilds one layer after source edits;
-InvalidateScene clears all layer caches. Adding a prepared layer seeds its
-cache directly. Layer scenes are immutable and shared through
+For direct `CreateVectorRenderScene` and `CreateMapRenderScene` calls, Core
+prepares and retains the complete supported polygon scene in memory. `MapView`
+instead applies a padded visible-extent spatial filter to automatically
+prepared layers, while a caller-supplied prepared scene remains complete.
+Core reads feature geometries sequentially without WKT serialization and
+reparsing. MapView caches one filtered or complete scene per layer: visibility
+changes reassemble the map snapshot without rereading visible layers, hidden
+layers are prepared when first shown, and removing or clearing layers drops
+only the corresponding cache entries. InvalidateLayerScene rebuilds one
+layer after source edits; InvalidateScene clears all layer caches. Adding a
+prepared layer seeds its cache directly. Layer scenes are immutable and shared through
 `std::shared_ptr<const VectorRenderScene>`, so assembling the map snapshot
 shares cached coordinates and meshes instead of copying them; peak memory
-stays at one copy of each layer's geometry.
+is bounded to selected geometry plus the cache for a prepared layer.
 OpenGL's lazily generated fill meshes have a second, backend-owned cache keyed
 by stable `LayerId` and the immutable scene identity. Reordering, hiding,
 redrawing, viewport changes, and backend selection retain valid entries.
@@ -493,12 +504,13 @@ each polygon. Both backends read the flat buffers directly. Triangulation
 accepts a view without reconstructing nested vectors. Standalone `Polygon`
 and `Ring` types remain available for caller-created triangulation input.
 
-There is no tiling, paging, or clipping to the visible extent. GDI skips a
-layer whose device coordinates exceed its range. It clips drawing to the
-requested target rectangle and the host's existing clip region, then restores
-the device context. Fill triangulation runs when scene preparation explicitly
-requests it or when OpenGL first needs a missing mesh. View changes (resize,
-zoom, pan) and redraws reuse the retained meshes. The opt-in
+There is no tiling or paging. GDI skips a layer whose device coordinates
+exceed its range. It clips drawing to the requested target rectangle and the
+host's existing clip region, then restores the device context. Fill
+triangulation runs when scene preparation explicitly requests it or when
+OpenGL first needs a missing mesh. View changes inside the scene's processing
+margin and redraws reuse retained meshes; changes outside the margin replace
+the affected scene and its backend mesh entry. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))
 tracks scene preparation, mesh storage, and backend frame costs on both a
 convex grid and a complex mix of concave, holed multipart, and many-vertex

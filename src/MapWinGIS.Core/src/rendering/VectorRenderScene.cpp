@@ -245,7 +245,14 @@ namespace mwg::rendering
         }
 
         VectorRenderScene scene;
-        const bool hasFastExtent = mwg::detail::VectorLayerAccess::HasFastExtent(layer);
+        if (options.spatialFilter.has_value() && !options.spatialFilter->IsValid())
+        {
+            throw InvalidArgument("Vector scene spatial filter extent must be valid");
+        }
+        const bool supportsFastExtent =
+            mwg::detail::VectorLayerAccess::HasFastExtent(layer);
+        const bool hasFastExtent =
+            !options.spatialFilter.has_value() && supportsFastExtent;
         if (hasFastExtent)
         {
             scene.extent = layer.GetExtent();
@@ -259,7 +266,8 @@ namespace mwg::rendering
                     diagnostics::PerformanceOperation::GeometryConversion);
                 builder.AppendGeometry(geometry);
             },
-            hasFastExtent ? nullptr : &scene.extent);
+            hasFastExtent ? nullptr : &scene.extent,
+            options.spatialFilter ? &*options.spatialFilter : nullptr);
 
         if (!options.prepareFillMeshes)
         {

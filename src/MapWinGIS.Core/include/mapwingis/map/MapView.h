@@ -29,8 +29,11 @@ namespace mwg
     /// Redraws: every mutator returns whether the displayed frame may have
     /// changed. Hosts request a redraw when it returns true and draw Scene()
     /// through GetViewport(). Changes to the layer collection or visibility
-    /// mark the scene stale; Scene() rebuilds it on the next call. Adding a
-    /// prepared scene retains the existing geometry instead. Edits to source
+    /// mark the scene stale; Scene() rebuilds it on the next call. For a valid
+    /// viewport, automatically built layer scenes use a padded spatial filter.
+    /// Small viewport changes reuse the cached scene; a change beyond that
+    /// margin refreshes only the affected layer scenes. Adding a prepared
+    /// scene retains the existing complete geometry instead. Edits to source
     /// geometry are not observed. Call InvalidateLayerScene for each affected
     /// map layer, or InvalidateScene for all layers.
     ///
@@ -54,6 +57,10 @@ namespace mwg
 
         /// Zoom factor used by ZoomIn and ZoomOut when none is given.
         static constexpr double kDefaultZoomFactor = 2.0;
+
+        /// Calculated pixel margin added around a viewport filter so a small
+        /// pan can reuse the same geometry and triangulation state.
+        static constexpr double kViewportSceneMarginPixels = 64.0;
 
         MapView();
         ~MapView();
@@ -160,8 +167,10 @@ namespace mwg
         /// per-layer scenes when the map or a layer scene changed. The
         /// reference stays valid for the lifetime of the MapView; a later
         /// call that reassembles the scene replaces its contents. Geometry
-        /// for a visible uncached layer is read once; visibility changes reuse
-        /// its cache. Reassembly shares cached geometry with the map snapshot
+        /// for a visible uncached layer is read once; a valid viewport limits
+        /// automatically built scenes to features intersecting a padded
+        /// visible extent. Visibility changes and small viewport moves reuse
+        /// the cache. Reassembly shares cached geometry with the map snapshot
         /// instead of copying it, so a held LayerRenderScene::scene stays
         /// valid after the layer is invalidated or removed.
         /// Failed layers retain their diagnostics until explicitly invalidated.

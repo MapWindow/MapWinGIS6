@@ -26,7 +26,8 @@ namespace mwg::detail
         static std::int64_t ForEachGeometry(
             const VectorLayer& layer,
             const std::function<void(const OGRGeometry&)>& callback,
-            Extent* extent = nullptr);
+            Extent* extent = nullptr,
+            const Extent* spatialFilter = nullptr);
 
         /// Whether the source driver can return an extent without scanning
         /// every feature.

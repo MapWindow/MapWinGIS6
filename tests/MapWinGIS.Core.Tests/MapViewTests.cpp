@@ -588,8 +588,11 @@ TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
     EXPECT_EQ(navigated.fillMeshes[1]->indices.size(), holedMeshIndices);
     EXPECT_EQ(navigated.polygons[1].size(), holedPolygonRings);
 
-    // Reassembly keeps the cached meshes and original rings for outlines and GDI.
-    const LayerId second = _view.AddLayer(OpenRectangles({{100.0, 0.0, 110.0, 10.0}}));
+    // Reassembly keeps complete prepared meshes and original rings for
+    // outlines and GDI, even when that scene lies outside the current view.
+    const auto secondDataset = OpenRectangles({{100.0, 0.0, 110.0, 10.0}});
+    const LayerId second = _view.AddLayer(
+        secondDataset, rendering::CreateVectorRenderScene(*secondDataset));
     ASSERT_EQ(_view.Scene().layers.size(), 2U);
     const rendering::VectorRenderScene& rebuilt = *_view.Scene().layers.front().scene;
     ASSERT_EQ(rebuilt.polygons.size(), 2U);
@@ -601,6 +604,39 @@ TEST_F(MapViewTest, ComplexSceneMeshesSurviveViewportChanges)
     EXPECT_TRUE(_view.RemoveLayer(second));
     ASSERT_EQ(_view.Scene().layers.size(), 1U);
     EXPECT_TRUE(_view.Scene().layers.front().scene->fillMeshes[1].has_value());
+}
+
+TEST_F(MapViewTest, FiltersAutomaticScenesToThePaddedViewportAndReusesSmallPans)
+{
+    ASSERT_TRUE(_view.Resize(100, 100));
+    const auto nearDataset = OpenRectangles({{0.0, 0.0, 10.0, 10.0}});
+    const auto farDataset = OpenRectangles({{1000.0, 0.0, 1010.0, 10.0}});
+    const LayerId near = _view.AddLayer(nearDataset);
+    const LayerId far = _view.AddLayer(farDataset);
+
+    const rendering::MapRenderScene& firstScene = _view.Scene();
+    ASSERT_EQ(firstScene.layers.size(), 1U);
+    EXPECT_EQ(firstScene.layers.front().layerId, near);
+    ASSERT_EQ(firstScene.skippedLayers.size(), 1U);
+    EXPECT_EQ(firstScene.skippedLayers.front().layerId, far);
+    EXPECT_EQ(firstScene.skippedLayers.front().reason,
+              rendering::LayerSkipReason::NoGeometry);
+    const void* coordinates = firstScene.layers.front().scene->polygons.Coordinates().data();
+
+    ASSERT_TRUE(_view.Pan(1.0, 0.0));
+    EXPECT_EQ(&_view.Scene(), &firstScene);
+    EXPECT_EQ(_view.Scene().layers.front().scene->polygons.Coordinates().data(),
+              coordinates);
+
+    const double resolution = *_view.GetViewport().Resolution();
+    ASSERT_TRUE(_view.Pan(
+        1000.0 + MapView::kViewportSceneMarginPixels * resolution,
+        0.0));
+    const rendering::MapRenderScene& movedScene = _view.Scene();
+    ASSERT_EQ(movedScene.layers.size(), 1U);
+    EXPECT_EQ(movedScene.layers.front().layerId, far);
+    ASSERT_EQ(movedScene.skippedLayers.size(), 1U);
+    EXPECT_EQ(movedScene.skippedLayers.front().layerId, near);
 }
 
 TEST_F(MapViewTest, PreparedEmptyLayerPreservesExistingAndStaleScenes)
