@@ -40,6 +40,8 @@ namespace mwg::activex
             return S_FALSE;
         }
 
+        _openGlRenderer.PruneFillMeshCache(stableScene);
+
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
             const HRESULT openGlResult =

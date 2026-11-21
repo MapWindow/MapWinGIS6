@@ -474,6 +474,11 @@ cache directly. Layer scenes are immutable and shared through
 `std::shared_ptr<const VectorRenderScene>`, so assembling the map snapshot
 shares cached coordinates and meshes instead of copying them; peak memory
 stays at one copy of each layer's geometry.
+OpenGL's lazily generated fill meshes have a second, backend-owned cache keyed
+by stable `LayerId` and the immutable scene identity. Reordering, hiding,
+redrawing, viewport changes, and backend selection retain valid entries.
+Replacing one layer scene invalidates only that layer's entry; removed layers
+and explicit invalidation release their generated mesh storage.
 When a driver cannot provide a fast extent, scene preparation computes bounds
 during the geometry traversal. It caches those bounds on the vector layer,
 so a later map fit does not scan the layer again.

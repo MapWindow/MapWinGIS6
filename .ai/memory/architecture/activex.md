@@ -41,6 +41,13 @@ replacement initialization must retain its failure state for the 60-draw
 retry delay. A size change bypasses the delay.
 See `OpenGlVectorLayerRenderer::Draw` and the renderer/control regression tests.
 
+The OpenGL lazy fill-mesh cache belongs to the renderer and is shared with
+temporary renderers. It is keyed by `LayerId` and the immutable scene identity:
+reordering, hiding, viewport changes, and backend selection preserve entries,
+while a changed scene for one layer invalidates only that entry. The coordinator
+prunes removed IDs before every backend choice, and explicit layer or scene
+invalidation releases the retained CPU mesh storage.
+
 Core objects are not thread-safe by default. The control serializes their use.
 ActiveX-specific implementation units are also compiled into
 `MapWinGIS.ActiveX.Impl.lib`, allowing native tests to exercise them without
@@ -67,10 +74,11 @@ The control exposes a deliberately small v6 automation API. It does not expose
 the broad MapWinGIS 5 map, layer, shape, event, or editing surface. The current
 render scene is built in source coordinates, without reprojection; backend
 support differs: GDI draws the original rings with an alternate fill rule,
-while OpenGL fill draws require explicitly prepared meshes. Normal Core scene
-creation is mesh-free; fill operations without usable meshes fall back to
-GDI, which fills the original rings. The OpenGL renderer also has an
-outline mode that draws those rings without triangulation.
+while OpenGL fill draws require triangle meshes. Normal Core scene
+creation is mesh-free; OpenGL fills prepare missing meshes lazily and fall
+back to GDI if preparation fails or an explicitly prepared mesh is unusable.
+GDI fills the original rings. The OpenGL renderer also has an outline mode
+that draws those rings without triangulation.
 Consult the current implementation and architecture documentation before
 assuming a capability or compatibility guarantee.
 

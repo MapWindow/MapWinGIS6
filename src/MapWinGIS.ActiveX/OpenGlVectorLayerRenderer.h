@@ -126,11 +126,15 @@ namespace mwg::activex
             const rendering::MapRenderScene& scene) noexcept;
         [[nodiscard]] std::span<const std::optional<rendering::TriangleMesh>>
             GetFillMeshes(
-                std::size_t layerIndex,
+                LayerId layerId,
                 const rendering::VectorRenderScene& scene) const noexcept;
+        void PruneFillMeshCache(
+            const rendering::MapRenderScene& scene) noexcept;
         void ClearFillMeshCache() noexcept;
+        void ClearLayerFillMeshCache(LayerId layerId) noexcept;
         [[nodiscard]] std::size_t FillMeshCacheSize() const noexcept;
         [[nodiscard]] std::size_t CachedGeneratedMeshStorage() const noexcept;
+        [[nodiscard]] std::size_t CachedGeneratedMeshStorageBytes() const noexcept;
         [[nodiscard]] HRESULT RenderScene(
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
