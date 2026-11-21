@@ -74,5 +74,17 @@ namespace mwg::activex::testing
         {
             return renderer.CachedGeneratedMeshStorage();
         }
+
+        [[nodiscard]] static std::size_t CachedGeneratedMeshStorageBytes(
+            const OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.CachedGeneratedMeshStorageBytes();
+        }
+
+        static void InvalidateLayerSceneCache(
+            OpenGlVectorLayerRenderer& renderer, const LayerId layerId) noexcept
+        {
+            renderer.ClearLayerFillMeshCache(layerId);
+        }
     };
 }

@@ -18,7 +18,10 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase c
   - Explicitly prepared meshes remain preferred; outline and GDI paths continue to use source rings without requiring fill meshes.
   - Triangulation failures, including exceptions from GDAL logging callbacks, return to the coordinator for GDI fallback without preventing outline rendering.
   - Limitation: triangulation remains synchronous, and broader cache ownership, memory limits, and invalidation rules remain Phase 4 work.
-- [ ] **Phase 4 – Add intelligent caching and invalidation** (PR 4)
+- [x] **Phase 4 – Add intelligent caching and invalidation** (PR 4)
+  - OpenGL lazy fill meshes are cached per stable layer ID and immutable scene identity, surviving viewport changes, layer reordering, temporary draws, visibility changes, and backend selection.
+  - Scene replacement, explicit per-layer invalidation, removed-layer pruning, and clear-all invalidation release only the affected generated mesh storage; retained mesh bytes are tracked for tests.
+  - Limitation: no cache-size limit or eviction policy was added because measurements did not establish that the additional complexity is justified.
 - [ ] **Phase 5 – Introduce viewport-aware geometry processing** (PR 5)
 - [ ] **Phase 6 – Optimize OpenGL rendering and data transfer** (PR 6)
 - [ ] **Phase 7 – Testing and regression prevention** (PR 7)

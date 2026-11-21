@@ -23,7 +23,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <new>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
@@ -170,6 +172,24 @@ namespace mwg::activex
                 }
             }
 
+            return true;
+        }
+
+        [[nodiscard]] bool AreFillMeshesUsable(
+            const std::span<const std::optional<rendering::TriangleMesh>> fillMeshes,
+            const std::size_t polygonCount) noexcept
+        {
+            if (fillMeshes.size() != polygonCount)
+            {
+                return false;
+            }
+            for (const std::optional<rendering::TriangleMesh>& mesh : fillMeshes)
+            {
+                if (!mesh.has_value() || !IsMeshUsable(*mesh))
+                {
+                    return false;
+                }
+            }
             return true;
         }
 
@@ -350,11 +370,13 @@ namespace mwg::activex
         {
             std::weak_ptr<const rendering::VectorRenderScene> scene;
             std::vector<std::optional<rendering::TriangleMesh>> generatedMeshes;
+            bool failed = false;
+            std::uint64_t preparationToken = 0;
         };
 
-        std::vector<Layer> layers;
-        bool failed = false;
+        std::map<LayerId, Layer> layers;
         std::uint64_t generation = 0;
+        std::uint64_t nextPreparationToken = 0;
     };
 
     bool OpenGlVectorLayerRenderer::IsSceneSupported(
@@ -695,110 +717,107 @@ namespace mwg::activex
     }
 
     HRESULT OpenGlVectorLayerRenderer::PrepareFillMeshes(
-        const rendering::MapRenderScene& scene) noexcept
+        const rendering::MapRenderScene& scene,
+        const bool pruneCache) noexcept
     {
-        if (_fillMeshCache != nullptr &&
-            _fillMeshCache->layers.size() == scene.layers.size())
+        if (pruneCache && !PruneFillMeshCache(scene))
         {
-            bool matches = true;
-            for (std::size_t index = 0; index < scene.layers.size(); ++index)
-            {
-                if (_fillMeshCache->layers[index].scene.lock() !=
-                    scene.layers[index].scene)
-                {
-                    matches = false;
-                    break;
-                }
-            }
-            if (matches)
-            {
-                if (_fillMeshCache->failed)
-                {
-                    _lastFailureReason =
-                        L"The OpenGL backend could not triangulate a polygon for fill "
-                        L"rendering; this frame was rendered with GDI.";
-                    return S_FALSE;
-                }
-                return S_OK;
-            }
+            return S_FALSE;
         }
 
+        std::shared_ptr<FillMeshCache> cache;
         try
         {
             if (_fillMeshCache == nullptr)
             {
                 _fillMeshCache = std::make_shared<FillMeshCache>();
             }
-            FillMeshCache prepared;
-            prepared.layers.reserve(scene.layers.size());
+            cache = _fillMeshCache;
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
-                FillMeshCache::Layer cachedLayer;
-                cachedLayer.scene = layer.scene;
-                if (!prepared.failed &&
-                    layer.scene != nullptr &&
-                    layer.scene->fillMeshes.empty())
+                if (layer.scene == nullptr || !layer.scene->fillMeshes.empty())
                 {
-                    cachedLayer.generatedMeshes.reserve(layer.scene->polygons.size());
-                    for (std::size_t index = 0;
-                         index < layer.scene->polygons.size();
-                         ++index)
+                    continue;
+                }
+
+                const auto cached = cache->layers.find(layer.layerId);
+                if (cached != cache->layers.end())
+                {
+                    continue;
+                }
+
+                auto [pending, inserted] = cache->layers.try_emplace(layer.layerId);
+                if (!inserted)
+                {
+                    continue;
+                }
+                const std::uint64_t cacheGeneration = cache->generation;
+                const std::uint64_t preparationToken = ++cache->nextPreparationToken;
+                pending->second.scene = layer.scene;
+                pending->second.preparationToken = preparationToken;
+
+                std::vector<std::optional<rendering::TriangleMesh>> generatedMeshes;
+                generatedMeshes.reserve(layer.scene->polygons.size());
+                bool failed = false;
+                for (std::size_t index = 0;
+                     index < layer.scene->polygons.size();
+                     ++index)
+                {
+                    try
                     {
-                        try
+                        rendering::TriangleMesh mesh =
+                            rendering::TriangulatePolygon(layer.scene->polygons[index]);
+                        if (!IsMeshUsable(mesh))
                         {
-                            rendering::TriangleMesh mesh =
-                                rendering::TriangulatePolygon(layer.scene->polygons[index]);
-                            if (!IsMeshUsable(mesh))
-                            {
-                                prepared.failed = true;
-                                cachedLayer.generatedMeshes.resize(
-                                    layer.scene->polygons.size());
-                                break;
-                            }
-                            cachedLayer.generatedMeshes.push_back(std::move(mesh));
-                        }
-                        catch (const mwg::CoreError&)
-                        {
-                            prepared.failed = true;
-                            cachedLayer.generatedMeshes.resize(
-                                layer.scene->polygons.size());
+                            failed = true;
                             break;
                         }
-                        catch (const std::bad_alloc&)
-                        {
-                            throw;
-                        }
-                        catch (const std::length_error&)
-                        {
-                            throw;
-                        }
-                        catch (const std::exception&)
-                        {
-                            prepared.failed = true;
-                            cachedLayer.generatedMeshes.resize(
-                                layer.scene->polygons.size());
-                            break;
-                        }
-                        catch (...)
-                        {
-                            prepared.failed = true;
-                            cachedLayer.generatedMeshes.resize(
-                                layer.scene->polygons.size());
-                            break;
-                        }
+                        generatedMeshes.push_back(std::move(mesh));
+                    }
+                    catch (const mwg::CoreError&)
+                    {
+                        failed = true;
+                        break;
+                    }
+                    catch (const std::bad_alloc&)
+                    {
+                        throw;
+                    }
+                    catch (const std::length_error&)
+                    {
+                        throw;
+                    }
+                    catch (const std::exception&)
+                    {
+                        failed = true;
+                        break;
+                    }
+                    catch (...)
+                    {
+                        failed = true;
+                        break;
                     }
                 }
-                prepared.layers.push_back(std::move(cachedLayer));
-            }
-            if (prepared.failed)
-            {
-                for (FillMeshCache::Layer& layer : prepared.layers)
+                pending = cache->layers.find(layer.layerId);
+                if (_fillMeshCache != cache ||
+                    cache->generation != cacheGeneration ||
+                    pending == cache->layers.end() ||
+                    pending->second.preparationToken != preparationToken ||
+                    pending->second.scene.lock() != layer.scene)
                 {
-                    layer.generatedMeshes.clear();
+                    _lastFailureReason =
+                        L"The OpenGL fill-mesh cache changed during triangulation; "
+                        L"this frame was rendered with GDI.";
+                    return S_FALSE;
                 }
+                if (failed)
+                {
+                    std::vector<std::optional<rendering::TriangleMesh>>()
+                        .swap(generatedMeshes);
+                }
+                pending->second.generatedMeshes = std::move(generatedMeshes);
+                pending->second.failed = failed;
             }
-            _fillMeshCache->layers = std::move(prepared.layers);
-            _fillMeshCache->failed = prepared.failed;
         }
         catch (const std::bad_alloc&)
         {
@@ -813,27 +832,121 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        if (_fillMeshCache->failed)
+        for (const rendering::LayerRenderScene& layer : scene.layers)
         {
-            _lastFailureReason =
-                L"The OpenGL backend could not triangulate a polygon for fill "
-                L"rendering; this frame was rendered with GDI.";
-            return S_FALSE;
+            if (layer.scene == nullptr || !layer.scene->fillMeshes.empty())
+            {
+                continue;
+            }
+            const auto cached = cache->layers.find(layer.layerId);
+            if (cached == cache->layers.end() ||
+                cached->second.failed ||
+                cached->second.scene.lock() != layer.scene ||
+                !AreFillMeshesUsable(
+                    cached->second.generatedMeshes,
+                    layer.scene->polygons.size()))
+            {
+                _lastFailureReason =
+                    L"The OpenGL backend could not triangulate a polygon for fill "
+                    L"rendering; this frame was rendered with GDI.";
+                return S_FALSE;
+            }
         }
         return S_OK;
     }
 
     std::span<const std::optional<rendering::TriangleMesh>>
     OpenGlVectorLayerRenderer::GetFillMeshes(
-        const std::size_t layerIndex,
+        const LayerId layerId,
         const rendering::VectorRenderScene& scene) const noexcept
     {
-        const FillMeshCache::Layer& cached = _fillMeshCache->layers[layerIndex];
         if (!scene.fillMeshes.empty())
         {
-            return scene.fillMeshes;
+            return AreFillMeshesUsable(scene.fillMeshes, scene.polygons.size())
+                ? std::span<const std::optional<rendering::TriangleMesh>>(scene.fillMeshes)
+                : std::span<const std::optional<rendering::TriangleMesh>>();
         }
-        return cached.generatedMeshes;
+        if (_fillMeshCache == nullptr)
+        {
+            return {};
+        }
+        const auto cached = _fillMeshCache->layers.find(layerId);
+        if (cached == _fillMeshCache->layers.end() ||
+            cached->second.scene.lock().get() != &scene ||
+            cached->second.failed ||
+            !AreFillMeshesUsable(
+                cached->second.generatedMeshes,
+                scene.polygons.size()))
+        {
+            return {};
+        }
+        return cached->second.generatedMeshes;
+    }
+
+    bool OpenGlVectorLayerRenderer::PruneFillMeshCache(
+        const rendering::MapRenderScene& scene) noexcept
+    {
+        if (_fillMeshCache == nullptr)
+        {
+            return true;
+        }
+
+        try
+        {
+            std::map<
+                LayerId,
+                std::shared_ptr<const rendering::VectorRenderScene>> drawableLayers;
+            std::set<LayerId> hiddenLayers;
+            for (const rendering::LayerRenderScene& layer : scene.layers)
+            {
+                drawableLayers.insert_or_assign(layer.layerId, layer.scene);
+            }
+            for (const rendering::SkippedLayer& layer : scene.skippedLayers)
+            {
+                if (layer.reason == rendering::LayerSkipReason::Hidden)
+                {
+                    hiddenLayers.insert(layer.layerId);
+                }
+            }
+
+            for (auto cached = _fillMeshCache->layers.begin();
+                 cached != _fillMeshCache->layers.end();)
+            {
+                const auto drawable = drawableLayers.find(cached->first);
+                if (drawable != drawableLayers.end())
+                {
+                    if (!cached->second.scene.expired() &&
+                        cached->second.scene.lock() == drawable->second)
+                    {
+                        ++cached;
+                        continue;
+                    }
+                    cached = _fillMeshCache->layers.erase(cached);
+                    continue;
+                }
+
+                if (hiddenLayers.contains(cached->first) &&
+                    !cached->second.scene.expired())
+                {
+                    ++cached;
+                    continue;
+                }
+                cached = _fillMeshCache->layers.erase(cached);
+            }
+        }
+        catch (const std::bad_alloc&)
+        {
+            _lastFailureReason =
+                L"The OpenGL backend could not allocate its fill-mesh cache index.";
+            return false;
+        }
+        catch (const std::length_error&)
+        {
+            _lastFailureReason =
+                L"The OpenGL backend could not represent its fill-mesh cache index.";
+            return false;
+        }
+        return true;
     }
 
     void OpenGlVectorLayerRenderer::ClearFillMeshCache() noexcept
@@ -843,8 +956,17 @@ namespace mwg::activex
             return;
         }
         _fillMeshCache->layers.clear();
-        _fillMeshCache->failed = false;
         ++_fillMeshCache->generation;
+    }
+
+    void OpenGlVectorLayerRenderer::ClearLayerFillMeshCache(
+        const LayerId layerId) noexcept
+    {
+        if (_fillMeshCache == nullptr)
+        {
+            return;
+        }
+        (void)_fillMeshCache->layers.erase(layerId);
     }
 
     std::size_t OpenGlVectorLayerRenderer::FillMeshCacheSize() const noexcept
@@ -859,9 +981,36 @@ namespace mwg::activex
             return 0U;
         }
         std::size_t storage = 0;
-        for (const FillMeshCache::Layer& layer : _fillMeshCache->layers)
+        for (const auto& cached : _fillMeshCache->layers)
         {
-            storage += layer.generatedMeshes.size();
+            storage += cached.second.generatedMeshes.size();
+        }
+        return storage;
+    }
+
+    std::size_t
+    OpenGlVectorLayerRenderer::CachedGeneratedMeshStorageBytes() const noexcept
+    {
+        if (_fillMeshCache == nullptr)
+        {
+            return 0U;
+        }
+
+        std::size_t storage = 0;
+        for (const auto& cached : _fillMeshCache->layers)
+        {
+            const FillMeshCache::Layer& layer = cached.second;
+            storage += layer.generatedMeshes.capacity() *
+                sizeof(std::optional<rendering::TriangleMesh>);
+            for (const std::optional<rendering::TriangleMesh>& mesh :
+                 layer.generatedMeshes)
+            {
+                if (mesh.has_value())
+                {
+                    storage += mesh->vertices.capacity() * sizeof(rendering::Point);
+                    storage += mesh->indices.capacity() * sizeof(std::uint32_t);
+                }
+            }
         }
         return storage;
     }
@@ -931,8 +1080,16 @@ namespace mwg::activex
             const rendering::LayerRenderScene& layer = scene.layers[index];
             const std::span<const std::optional<rendering::TriangleMesh>> fillMeshes =
                 renderMode == VectorRenderMode::Fill
-                    ? GetFillMeshes(index, *layer.scene)
+                    ? GetFillMeshes(layer.layerId, *layer.scene)
                     : std::span<const std::optional<rendering::TriangleMesh>>();
+            if (renderMode == VectorRenderMode::Fill &&
+                !AreFillMeshesUsable(fillMeshes, layer.scene->polygons.size()))
+            {
+                _lastFailureReason =
+                    L"The OpenGL fill-mesh cache no longer matches the scene; "
+                    L"this frame was rendered with GDI.";
+                return S_FALSE;
+            }
             const HRESULT layerResult =
                 DrawLayer(
                     *layer.scene,
@@ -1107,6 +1264,10 @@ namespace mwg::activex
                 L"The OpenGL backend could not represent its render-scene snapshot.";
             return S_FALSE;
         }
+        if (!PruneFillMeshCache(stableScene))
+        {
+            return S_FALSE;
+        }
         const diagnostics::PerformanceScope frameScope(
             diagnostics::PerformanceOperation::FrameRender);
         _lastFailureReason = L"OpenGL did not render this frame.";
@@ -1174,16 +1335,9 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        const std::uint64_t cacheGeneration =
-            _fillMeshCache == nullptr ? 0U : _fillMeshCache->generation;
         if (renderMode == VectorRenderMode::Fill &&
-            PrepareFillMeshes(stableScene) != S_OK)
+            PrepareFillMeshes(stableScene, false) != S_OK)
         {
-            if (_fillMeshCache != nullptr &&
-                _fillMeshCache->generation != cacheGeneration)
-            {
-                ClearFillMeshCache();
-            }
             return S_FALSE;
         }
 
@@ -1191,21 +1345,11 @@ namespace mwg::activex
             RenderScene(stableScene, viewport, target, renderMode);
         if (FAILED(renderResult) || renderResult == S_FALSE)
         {
-            if (_fillMeshCache != nullptr &&
-                _fillMeshCache->generation != cacheGeneration)
-            {
-                ClearFillMeshCache();
-            }
             return renderResult;
         }
 
         const HRESULT copyResult =
             CopyToDeviceContext(deviceContext, bounds, target);
-        if (_fillMeshCache != nullptr &&
-            _fillMeshCache->generation != cacheGeneration)
-        {
-            ClearFillMeshCache();
-        }
         return copyResult;
     }
 }

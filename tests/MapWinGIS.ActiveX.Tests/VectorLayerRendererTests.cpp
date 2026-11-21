@@ -458,6 +458,114 @@ TEST(VectorLayerRenderer, OpenGlLazilyTriangulatesAndReusesFillMeshes)
     EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
 }
 
+TEST(VectorLayerRenderer, OpenGlCachesLazyMeshesPerLayerAcrossSceneChanges)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene = MakeMapScene({
+        MakeRectangleLayer({0.0, 0.0, 10.0, 10.0}),
+        MakeRectangleLayer({20.0, 0.0, 30.0, 10.0})});
+    Edit(scene.layers[0]).fillMeshes.clear();
+    Edit(scene.layers[1]).fillMeshes.clear();
+    const mwg::LayerId firstId = scene.layers[0].layerId;
+    const mwg::LayerId secondId = scene.layers[1].layerId;
+    PerformanceCapture diagnostics;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    ASSERT_EQ(Access::PrepareFillMeshes(renderer, scene), S_OK);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 2U);
+    const std::size_t allLayersBytes =
+        Access::CachedGeneratedMeshStorageBytes(renderer);
+    EXPECT_GT(allLayersBytes, 0U);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(renderer), 2U);
+
+    std::swap(scene.layers[0], scene.layers[1]);
+    ASSERT_EQ(Access::PrepareFillMeshes(renderer, scene), S_OK);
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        2);
+
+    const std::shared_ptr<const mwg::rendering::VectorRenderScene> hiddenScene =
+        scene.layers[1].scene;
+    ASSERT_NE(hiddenScene, nullptr);
+    scene.skippedLayers.push_back(
+        {firstId, mwg::rendering::LayerSkipReason::Hidden, {}});
+    scene.layers.erase(scene.layers.begin() + 1);
+    ASSERT_EQ(Access::PrepareFillMeshes(renderer, scene), S_OK);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 2U);
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        2);
+
+    scene.skippedLayers.clear();
+    ASSERT_EQ(Access::PrepareFillMeshes(renderer, scene), S_OK);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 1U);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(renderer), 1U);
+    EXPECT_LT(
+        Access::CachedGeneratedMeshStorageBytes(renderer),
+        allLayersBytes);
+    EXPECT_EQ(scene.layers.front().layerId, secondId);
+
+    (void)Edit(scene.layers.front());
+    ASSERT_EQ(Access::PrepareFillMeshes(renderer, scene), S_OK);
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        3);
+    Access::InvalidateLayerSceneCache(renderer, secondId);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 0U);
+    ASSERT_EQ(Access::PrepareFillMeshes(renderer, scene), S_OK);
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        4);
+}
+
+TEST(VectorLayerRenderer, OpenGlRejectsAnInvalidatedInFlightLayerWithoutClearingOthers)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene = MakeMapScene({
+        mwg::rendering::VectorRenderScene{
+            mwg::Extent{-3.0, -3.0, 3.0, 3.0},
+            1,
+            0,
+            {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0},
+               {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}},
+        MakeRectangleLayer({10.0, 0.0, 20.0, 10.0}),
+        MakeRectangleLayer({30.0, 0.0, 40.0, 10.0})});
+    for (mwg::rendering::LayerRenderScene& layer : scene.layers)
+    {
+        Edit(layer).fillMeshes.clear();
+    }
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    mwg::rendering::MapRenderScene retainedScene;
+    retainedScene.layers.push_back(scene.layers[1]);
+    retainedScene.layers.push_back(scene.layers[2]);
+    ASSERT_EQ(Access::PrepareFillMeshes(renderer, retainedScene), S_OK);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 2U);
+
+    const mwg::LayerId invalidatedId = scene.layers.front().layerId;
+    bool callbackRan = false;
+    LogHandlerScope reentrantHandler(
+        [&renderer, &invalidatedId, &callbackRan](
+            const mwg::LogLevel,
+            const std::string_view)
+        {
+            if (!callbackRan)
+            {
+                callbackRan = true;
+                Access::InvalidateLayerSceneCache(renderer, invalidatedId);
+            }
+        });
+
+    EXPECT_EQ(Access::PrepareFillMeshes(renderer, scene), S_FALSE);
+    EXPECT_TRUE(callbackRan);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 2U);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(renderer), 2U);
+}
+
 TEST(VectorLayerRenderer, OpenGlSharesLazyMeshesWithTemporaryRenderers)
 {
     BitmapSurface surface(240, 201);
