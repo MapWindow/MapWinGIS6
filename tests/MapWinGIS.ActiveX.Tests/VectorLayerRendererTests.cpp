@@ -522,6 +522,50 @@ TEST(VectorLayerRenderer, OpenGlCachesLazyMeshesPerLayerAcrossSceneChanges)
         4);
 }
 
+TEST(VectorLayerRenderer, OpenGlRejectsAnInvalidatedInFlightLayerWithoutClearingOthers)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene = MakeMapScene({
+        mwg::rendering::VectorRenderScene{
+            mwg::Extent{-3.0, -3.0, 3.0, 3.0},
+            1,
+            0,
+            {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0},
+               {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}},
+        MakeRectangleLayer({10.0, 0.0, 20.0, 10.0}),
+        MakeRectangleLayer({30.0, 0.0, 40.0, 10.0})});
+    for (mwg::rendering::LayerRenderScene& layer : scene.layers)
+    {
+        Edit(layer).fillMeshes.clear();
+    }
+
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    mwg::rendering::MapRenderScene retainedScene;
+    retainedScene.layers.push_back(scene.layers[1]);
+    retainedScene.layers.push_back(scene.layers[2]);
+    ASSERT_EQ(Access::PrepareFillMeshes(renderer, retainedScene), S_OK);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 2U);
+
+    const mwg::LayerId invalidatedId = scene.layers.front().layerId;
+    bool callbackRan = false;
+    LogHandlerScope reentrantHandler(
+        [&renderer, &invalidatedId, &callbackRan](
+            const mwg::LogLevel,
+            const std::string_view)
+        {
+            if (!callbackRan)
+            {
+                callbackRan = true;
+                Access::InvalidateLayerSceneCache(renderer, invalidatedId);
+            }
+        });
+
+    EXPECT_EQ(Access::PrepareFillMeshes(renderer, scene), S_FALSE);
+    EXPECT_TRUE(callbackRan);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 2U);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(renderer), 2U);
+}
+
 TEST(VectorLayerRenderer, OpenGlSharesLazyMeshesWithTemporaryRenderers)
 {
     BitmapSurface surface(240, 201);

@@ -40,8 +40,6 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        _openGlRenderer.PruneFillMeshCache(stableScene);
-
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
             const HRESULT openGlResult =
@@ -68,7 +66,14 @@ namespace mwg::activex
         }
         else
         {
-            _diagnostic = L"GDI was selected by the rendering preference.";
+            if (!_openGlRenderer.PruneFillMeshCache(stableScene))
+            {
+                _diagnostic = _openGlRenderer.GetLastFailureReason();
+            }
+            else
+            {
+                _diagnostic = L"GDI was selected by the rendering preference.";
+            }
         }
 
         const HRESULT gdiResult =

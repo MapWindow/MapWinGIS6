@@ -123,12 +123,13 @@ namespace mwg::activex
             VectorRenderMode renderMode) noexcept;
         [[nodiscard]] bool EnsureStaging(std::size_t stagingBytes) noexcept;
         [[nodiscard]] HRESULT PrepareFillMeshes(
-            const rendering::MapRenderScene& scene) noexcept;
+            const rendering::MapRenderScene& scene,
+            bool pruneCache = true) noexcept;
         [[nodiscard]] std::span<const std::optional<rendering::TriangleMesh>>
             GetFillMeshes(
                 LayerId layerId,
                 const rendering::VectorRenderScene& scene) const noexcept;
-        void PruneFillMeshCache(
+        [[nodiscard]] bool PruneFillMeshCache(
             const rendering::MapRenderScene& scene) noexcept;
         void ClearFillMeshCache() noexcept;
         void ClearLayerFillMeshCache(LayerId layerId) noexcept;
