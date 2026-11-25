@@ -569,6 +569,7 @@ TEST(VectorLayerRenderer, AutomaticFillDoesNotTriangulateWhenAFailedLayerPrecede
         GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
     }
     ASSERT_EQ(probeResult, S_OK);
+    mwg::diagnostics::PerformanceDiagnostics::Reset();
 
     mwg::activex::VectorLayerRenderer renderer;
     renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
@@ -584,7 +585,7 @@ TEST(VectorLayerRenderer, AutomaticFillDoesNotTriangulateWhenAFailedLayerPrecede
     // triangulated successfully.
     const std::int64_t primed = mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
         mwg::diagnostics::PerformanceCounter::PolygonsTriangulated);
-    ASSERT_EQ(primed, 2);
+    ASSERT_EQ(primed, 1);
 
     // A new mesh-free layer behind the failed one must not be triangulated
     // on the Automatic paint path.
@@ -631,6 +632,7 @@ TEST(VectorLayerRenderer, AutomaticFillDoesNotTriangulateAfterAFailedLayerSceneI
         GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
     }
     ASSERT_EQ(probeResult, S_OK);
+    mwg::diagnostics::PerformanceDiagnostics::Reset();
 
     mwg::activex::VectorLayerRenderer renderer;
     renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
@@ -654,6 +656,10 @@ TEST(VectorLayerRenderer, AutomaticFillDoesNotTriangulateAfterAFailedLayerSceneI
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(
         renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_EQ(
+        renderer.GetDiagnostic(),
+        L"GDI rendered the frame; the Automatic preference paints with GDI "
+        L"until the OpenGL fill meshes are prepared.");
     EXPECT_EQ(
         mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
             mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),

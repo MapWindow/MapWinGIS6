@@ -535,8 +535,11 @@ namespace mwg::activex
             {
                 return FillMeshReadiness::Pending;
             }
+            if (cached->second.scene.lock() != layer.scene)
+            {
+                return FillMeshReadiness::Pending;
+            }
             if (cached->second.failed ||
-                cached->second.scene.lock() != layer.scene ||
                 cached->second.generatedMeshes.size() != vectorScene.polygons.size())
             {
                 return FillMeshReadiness::Failed;
