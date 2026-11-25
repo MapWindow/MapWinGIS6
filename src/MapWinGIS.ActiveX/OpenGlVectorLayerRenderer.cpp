@@ -252,9 +252,16 @@ namespace mwg::activex
             return true;
         }
 
-        /// Returns true when the scene has finite ring coordinates and, in
-        /// fill mode, one usable mesh per polygon.
-        [[nodiscard]] bool IsSupported(
+        constexpr std::wstring_view kFillMeshRejection =
+            L"The OpenGL backend requires a triangulated fill mesh for "
+            L"every polygon; this frame was rendered with GDI.";
+        constexpr std::wstring_view kOutlineRejection =
+            L"The OpenGL backend requires finite polygon coordinates for "
+            L"outline rendering; this frame was rendered with GDI.";
+
+        /// Returns why the scene cannot be drawn in the requested mode
+        /// without generating geometry, or nullopt when it is drawable.
+        [[nodiscard]] std::optional<std::wstring_view> GetSceneRejection(
             const rendering::MapRenderScene& scene,
             const VectorRenderMode renderMode) noexcept
         {
@@ -262,7 +269,9 @@ namespace mwg::activex
             {
                 if (layer.scene == nullptr)
                 {
-                    return false;
+                    return renderMode == VectorRenderMode::Fill
+                        ? kFillMeshRejection
+                        : kOutlineRejection;
                 }
                 const rendering::VectorRenderScene& vectorScene = *layer.scene;
                 if (renderMode == VectorRenderMode::Fill &&
@@ -270,7 +279,7 @@ namespace mwg::activex
                 {
                     if (vectorScene.fillMeshes.size() != vectorScene.polygons.size())
                     {
-                        return false;
+                        return kFillMeshRejection;
                     }
                     for (std::size_t index = 0;
                          index < vectorScene.polygons.size();
@@ -280,7 +289,7 @@ namespace mwg::activex
                             vectorScene.fillMeshes[index];
                         if (!mesh.has_value() || !IsMeshUsable(*mesh))
                         {
-                            return false;
+                            return kFillMeshRejection;
                         }
                     }
                 }
@@ -288,12 +297,23 @@ namespace mwg::activex
                 {
                     if (!std::isfinite(point.x) || !std::isfinite(point.y))
                     {
-                        return false;
+                        return renderMode == VectorRenderMode::Fill
+                            ? kFillMeshRejection
+                            : kOutlineRejection;
                     }
                 }
             }
 
-            return true;
+            return std::nullopt;
+        }
+
+        /// Returns true when the scene has finite ring coordinates and, in
+        /// fill mode, one usable mesh per polygon.
+        [[nodiscard]] bool IsSupported(
+            const rendering::MapRenderScene& scene,
+            const VectorRenderMode renderMode) noexcept
+        {
+            return !GetSceneRejection(scene, renderMode).has_value();
         }
 
         /// Draws one polygon's triangulated fill as indexed triangles through
@@ -472,6 +492,68 @@ namespace mwg::activex
         const VectorRenderMode renderMode) noexcept
     {
         return IsSupported(scene, renderMode);
+    }
+
+    OpenGlVectorLayerRenderer::FillMeshReadiness
+    OpenGlVectorLayerRenderer::GetFillMeshReadiness(
+        const rendering::MapRenderScene& scene) const noexcept
+    {
+        for (const rendering::LayerRenderScene& layer : scene.layers)
+        {
+            if (layer.scene == nullptr)
+            {
+                return FillMeshReadiness::Failed;
+            }
+            const rendering::VectorRenderScene& vectorScene = *layer.scene;
+            if (vectorScene.polygons.empty())
+            {
+                // A polygon-free layer needs no meshes; only a mismatched
+                // explicit mesh list rejects it.
+                if (vectorScene.fillMeshes.empty())
+                {
+                    continue;
+                }
+                return FillMeshReadiness::Failed;
+            }
+            if (!vectorScene.fillMeshes.empty())
+            {
+                // Presence and coverage only: full mesh validation stays in
+                // Draw, which already falls back to GDI on unusable meshes,
+                // so the readiness scan stays cheap on the paint path.
+                if (vectorScene.fillMeshes.size() != vectorScene.polygons.size())
+                {
+                    return FillMeshReadiness::Failed;
+                }
+                continue;
+            }
+            if (_fillMeshCache == nullptr)
+            {
+                return FillMeshReadiness::Pending;
+            }
+            const auto cached = _fillMeshCache->layers.find(layer.layerId);
+            if (cached == _fillMeshCache->layers.end())
+            {
+                return FillMeshReadiness::Pending;
+            }
+            if (cached->second.scene.lock() != layer.scene)
+            {
+                return FillMeshReadiness::Pending;
+            }
+            if (cached->second.failed ||
+                cached->second.generatedMeshes.size() != vectorScene.polygons.size())
+            {
+                return FillMeshReadiness::Failed;
+            }
+        }
+        return FillMeshReadiness::Ready;
+    }
+
+    std::optional<std::wstring_view>
+    OpenGlVectorLayerRenderer::GetSceneRejectionReason(
+        const rendering::MapRenderScene& scene,
+        const VectorRenderMode renderMode) noexcept
+    {
+        return GetSceneRejection(scene, renderMode);
     }
 
     OpenGlVectorLayerRenderer::~OpenGlVectorLayerRenderer()
@@ -812,6 +894,8 @@ namespace mwg::activex
 
             if (cached == _gpuBufferCache->layers.end())
             {
+                const diagnostics::PerformanceScope uploadScope(
+                    diagnostics::PerformanceOperation::OpenGlGpuBufferUpload);
                 GpuBufferCache::Layer prepared;
                 prepared.scene = scene;
                 prepared.hasFill = needFill;
@@ -1178,13 +1262,10 @@ namespace mwg::activex
             return {E_INVALIDARG, std::nullopt};
         }
 
-        if (!IsSupported(scene, renderMode))
+        if (const auto rejection = GetSceneRejection(scene, renderMode);
+            rejection.has_value())
         {
-            _lastFailureReason = renderMode == VectorRenderMode::Fill
-                ? L"The OpenGL backend requires a triangulated fill mesh for "
-                  L"every polygon; this frame was rendered with GDI."
-                : L"The OpenGL backend requires finite polygon coordinates for "
-                  L"outline rendering; this frame was rendered with GDI.";
+            _lastFailureReason = *rejection;
             return {S_FALSE, std::nullopt};
         }
 
@@ -1582,14 +1663,6 @@ namespace mwg::activex
             return E_FAIL;
         }
 
-        if (!ResizeFramebuffer(target.width, target.height))
-        {
-            _lastFailureReason =
-                L"OpenGL could not allocate a complete framebuffer for this target.";
-            OutputDebugStringW(L"MapWinGIS: no complete OpenGL framebuffer for this size.\n");
-            return S_FALSE;
-        }
-
         if (_contextInvalid)
         {
             _lastFailureReason =
@@ -1817,8 +1890,6 @@ namespace mwg::activex
         {
             return S_FALSE;
         }
-        const diagnostics::PerformanceScope frameScope(
-            diagnostics::PerformanceOperation::FrameRender);
         _lastFailureReason = L"OpenGL did not render this frame.";
         const TargetValidation validation =
             ValidateTarget(deviceContext, bounds, stableScene, viewport, renderMode);
@@ -1828,60 +1899,88 @@ namespace mwg::activex
         }
         const Target& target = *validation.target;
 
-        // Release a lost context once. If replacement initialization fails,
-        // preserve its failure state so later draws respect the retry delay.
-        if (_contextInvalid)
         {
-            Release();
-            _contextInvalid = false;
-        }
+            // Covers lost-context recovery, WGL context and framebuffer
+            // creation, the retry bookkeeping, and the staging allocation,
+            // so the frame scope below measures only rendering work.
+            const diagnostics::PerformanceScope contextScope(
+                diagnostics::PerformanceOperation::OpenGlContextInitialization);
 
-        if (_initializationFailed &&
-            (target.width != _retryTargetWidth || target.height != _retryTargetHeight))
-        {
-            // A resize is a useful retry boundary: drivers can reject one
-            // context/target combination yet support a later target.
-            Release();
-            _initializationFailed = false;
-            _initializationFailureReason = {};
-            _initializationRetryDrawsRemaining = 0;
-        }
-        if (_initializationFailed)
-        {
-            if (_initializationRetryDrawsRemaining > 0)
+            // Release a lost context once. If replacement initialization fails,
+            // preserve its failure state so later draws respect the retry delay.
+            if (_contextInvalid)
             {
-                --_initializationRetryDrawsRemaining;
-                _lastFailureReason = _initializationFailureReason;
+                Release();
+                _contextInvalid = false;
+            }
+
+            if (_initializationFailed &&
+                (target.width != _retryTargetWidth || target.height != _retryTargetHeight))
+            {
+                // A resize is a useful retry boundary: drivers can reject one
+                // context/target combination yet support a later target.
+                Release();
+                _initializationFailed = false;
+                _initializationFailureReason = {};
+                _initializationRetryDrawsRemaining = 0;
+            }
+            if (_initializationFailed)
+            {
+                if (_initializationRetryDrawsRemaining > 0)
+                {
+                    --_initializationRetryDrawsRemaining;
+                    _lastFailureReason = _initializationFailureReason;
+                    return S_FALSE;
+                }
+                _initializationFailed = false;
+                _initializationFailureReason = {};
+            }
+            if (!Initialize())
+            {
+                _retryTargetWidth = target.width;
+                _retryTargetHeight = target.height;
+                _initializationRetryDrawsRemaining = kInitializationRetryDraws;
                 return S_FALSE;
             }
-            _initializationFailed = false;
-            _initializationFailureReason = {};
-        }
-        if (!Initialize())
-        {
-            _retryTargetWidth = target.width;
-            _retryTargetHeight = target.height;
-            _initializationRetryDrawsRemaining = kInitializationRetryDraws;
-            return S_FALSE;
-        }
-        _contextInvalid = false;
+            _contextInvalid = false;
 
-        const auto rejectionReason = GetTargetRejectionReason(
-            target.width,
-            target.height,
-            _maximumTargetWidth,
-            _maximumTargetHeight);
-        if (rejectionReason.has_value())
-        {
-            _lastFailureReason = *rejectionReason;
-            return S_FALSE;
-        }
+            const auto rejectionReason = GetTargetRejectionReason(
+                target.width,
+                target.height,
+                _maximumTargetWidth,
+                _maximumTargetHeight);
+            if (rejectionReason.has_value())
+            {
+                _lastFailureReason = *rejectionReason;
+                return S_FALSE;
+            }
 
-        const std::size_t stagingBytes =
-            target.pixelWidth * target.pixelHeight * kBytesPerPixel;
-        if (!EnsureStaging(stagingBytes))
-        {
-            return S_FALSE;
+            const std::size_t stagingBytes =
+                target.pixelWidth * target.pixelHeight * kBytesPerPixel;
+            if (!EnsureStaging(stagingBytes))
+            {
+                return S_FALSE;
+            }
+
+            const ScopedCurrentContext currentContext(
+                _deviceContext, _renderingContext);
+            if (!currentContext.IsValid())
+            {
+                _lastFailureReason =
+                    L"OpenGL could not activate its rendering context.";
+                OutputDebugStringW(
+                    L"MapWinGIS: could not activate the OpenGL rendering context.\n");
+                _contextInvalid = true;
+                return E_FAIL;
+            }
+            if (!ResizeFramebuffer(target.width, target.height))
+            {
+                _lastFailureReason =
+                    L"OpenGL could not allocate a complete framebuffer for this target.";
+                OutputDebugStringW(
+                    L"MapWinGIS: no complete OpenGL framebuffer for this size.\n");
+                return S_FALSE;
+            }
         }
 
         if (renderMode == VectorRenderMode::Fill &&
@@ -1890,6 +1989,11 @@ namespace mwg::activex
             return S_FALSE;
         }
 
+        // The frame scope starts after mesh preparation so its breakdown does
+        // not double-count triangulation; it covers rendering, readback, and
+        // presentation.
+        const diagnostics::PerformanceScope frameScope(
+            diagnostics::PerformanceOperation::FrameRender);
         const HRESULT renderResult =
             RenderScene(stableScene, viewport, target, renderMode);
         if (FAILED(renderResult) || renderResult == S_FALSE)

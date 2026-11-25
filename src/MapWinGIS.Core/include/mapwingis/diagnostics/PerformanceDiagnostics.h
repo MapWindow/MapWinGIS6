@@ -31,6 +31,8 @@ namespace mwg::diagnostics
         OpenGlGeometrySubmission,
         FrameRender,
         FramebufferReadback,
+        OpenGlGpuBufferUpload,
+        OpenGlContextInitialization,
         Count,
     };
 

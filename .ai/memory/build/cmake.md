@@ -14,6 +14,13 @@ Generated Visual Studio projects set `WindowsTargetPlatformVersion` before
 importing `Directory.Build.props`; its legacy SDK default must not override
 that selection, including in CMake's `VCTargetsPath` probe.
 
+On the primary development machine `cmake` is not on PATH; it ships with
+Visual Studio 18 Community under `Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
+The `x64-debug`/`x64-release` Ninja presets also require `cl.exe` on PATH
+(a Developer prompt). From a plain shell, use the `vs2026-x64` configure
+preset and the `vs2026-x64-debug`/`vs2026-x64-release` build and test presets;
+the Visual Studio generator locates the v145 toolset itself.
+
 The `cmake-parity` job fails (`-FailOnLostFlags`) when a translation unit is
 compiled by MSBuild but missing from the CMake target — including test
 projects. Adding a source file to a `.vcxproj` therefore requires the same
