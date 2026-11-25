@@ -347,7 +347,13 @@ For an OpenGL fill draw, the backend accepts a mesh-free source scene and
 triangulates each polygon that has no prepared fill mesh.
 The generated meshes remain associated with that immutable scene and are
 reused by later draws; they do not mutate the Core scene. OpenGL outline
-mode draws the source rings without requiring fill meshes. GDI checks each
+mode draws the source rings without requiring fill meshes. With the
+`Automatic` preference, the coordinator instead paints a Fill-mode frame
+whose layers have no fill meshes yet with the GDI backend, so the paint
+path never blocks on triangulation; it selects OpenGL again on a later
+frame once every layer's meshes exist (scene-provided or cached from an
+earlier draw or background preparation). Only an explicit `OpenGL`
+preference keeps lazy on-draw triangulation. GDI checks each
 layer before drawing it; a layer with non-finite or out-of-range device coordinates is
 skipped and reported (`GetFailedLayers`, `RenderingStatus`) while the other
 layers are still drawn.
@@ -383,10 +389,13 @@ and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
 and MultiSurface features.
 
 The `RenderingBackendPreference` automation property is configurable as
-`Automatic`, `OpenGL`, or `GDI`. `Automatic` and `OpenGL` try the OpenGL
-backend first and fall back to GDI when the scene, hardware, allocation, or
-drawing operation is unsupported. The control reports the active backend and
-the reason for a fallback through `RenderingBackend` and `RenderingStatus`.
+`Automatic`, `OpenGL`, or `GDI`. `Automatic` paints with GDI while fill
+meshes are pending and otherwise tries the OpenGL backend first; it falls
+back to GDI when the scene, hardware, allocation, or drawing operation is
+unsupported. `OpenGL` always tries OpenGL first, triangulating lazily on
+the calling thread when a fill mesh is missing. The control reports the
+active backend and the reason for a fallback through `RenderingBackend` and
+`RenderingStatus`.
 These rendering properties are on `IMapWinGISControl2`, which derives from
 `IMapWinGISControl`. `IMapWinGISControl3` adds `ClearLayers` at DISPID 8.
 `IMapWinGISControl4` derives from `IMapWinGISControl3` and adds map navigation,

@@ -5,8 +5,14 @@
  * @brief Declares the backend coordinator for vector scene rendering.
  *
  * Tries OpenGL rendering first and uses the GDI backend for unsupported
- * geometry or when OpenGL cannot be initialized. One backend draws the whole
- * frame, so all layers share its viewport transform and pixel conventions.
+ * geometry or when OpenGL cannot be initialized. With the Automatic
+ * preference, a Fill-mode frame whose layers have no fill meshes yet is
+ * drawn entirely with GDI so the paint path never triangulates; once the
+ * meshes exist (scene-provided, cached, or later prepared in the
+ * background), a later frame selects OpenGL again. An explicit OpenGL
+ * preference keeps drawing with OpenGL and triangulates lazily on the
+ * calling thread. One backend draws the whole frame, so all layers share
+ * its viewport transform and pixel conventions.
  */
 #pragma once
 

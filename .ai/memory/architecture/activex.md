@@ -24,7 +24,11 @@ remain in Core.
 
 The ActiveX rendering coordinator selects a backend for a Core render scene.
 GDI is the CPU fallback; OpenGL has a narrower supported-scene range and can
-fall back to GDI. Backends consume Core-produced geometry and do not own
+fall back to GDI. With the `Automatic` preference, a Fill-mode frame whose
+layers have no fill meshes yet is painted with GDI (reported via
+`RenderingBackend`/`RenderingStatus`) so the paint path never triangulates;
+OpenGL is retried on later frames once meshes exist. Only the explicit
+`OpenGL` preference triangulates lazily on the drawing thread. Backends consume Core-produced geometry and do not own
 datasets or view state. The OCX owns the host-specific rendering resources.
 The control composes ordinary screen frames in an offscreen DIB-section
 `FrameBuffer` and presents them with a single `BitBlt`; alternate-size

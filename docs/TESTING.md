@@ -209,18 +209,36 @@ and configuration C for OpenGL outline-only rendering).
 `MeasuresCoreSceneAndBackendCosts` explicitly requests fill-mesh preparation
 (configurations B and D). Successful backends report first and steady frame
 times, plus pan and zoom frames, for a 1280x720 off-screen target. Normal scene
-creation does not perform triangulation. OpenGL fill rendering lazily
-triangulates source-only scenes on their first fill draw and reuses those
-backend-owned meshes on later draws. `MeasuresLazyOpenGlFillCosts` measures
+creation does not perform triangulation. When the OpenGL backend draws a
+source-only fill scene (the explicit `OpenGL` preference), it lazily
+triangulates on that draw and reuses those backend-owned meshes on later
+draws. With the default `Automatic` preference the coordinator instead paints a
+mesh-pending Fill frame with GDI, so the first frame never triangulates, and
+selects OpenGL again once every layer's meshes exist.
+`MeasuresLazyOpenGlFillCosts` measures
 that production path separately and verifies that scene preparation creates no
 meshes and later steady, pan, and zoom draws do not triangulate again. The
 renderer regression suite also checks lazy triangulation of concave and holed
 polygons across outline/fill changes, viewport changes, cache invalidation, and
-scene removal. Point and line datasets are explicitly covered as unsupported
+scene removal, and asserts the GDI-first Automatic contract: the first
+mesh-pending frame reports GDI as the active backend, performs zero
+triangulations, and a later frame switches back to OpenGL once the meshes
+exist. Point and line datasets are explicitly covered as unsupported
 by the polygon-only renderer rather than being silently accepted. OpenGL pixel
 and buffer-lifecycle tests that require a framebuffer-capable context are
 conditional on that capability. GitHub-hosted Windows CI can skip those tests,
 so run them locally on an FBO-capable OpenGL driver to verify that coverage.
+
+`MeasuresEndToEndFirstFrameThroughTheControl` and
+`MeasuresEndToEndAsyncLoadFirstFrameThroughTheControl` close the measurement
+gap between the isolated renderer baselines and the user-visible load path.
+They host the control through its class factory (no registry registration),
+load `MWG_RENDERING_BASELINE_DATASET` through `LoadVectorDatasetEx` or
+`BeginLoadVectorDataset`/`EndLoadVectorDataset`, and force the first `OnDraw`
+into a 1280x720 memory DC with the default `Automatic` settings. They report
+the load time, the first presented frame time, the active backend, and the
+diagnostic breakdown. Without timing thresholds, they assert that the first
+frame reports GDI as the active backend and performs zero triangulations.
 
 Performance diagnostics are disabled by default and aggregate process-wide
 timings with `std::chrono::steady_clock`. The collector records dataset
@@ -228,8 +246,11 @@ opening, layer metadata, OGR feature reads, internal geometry conversion,
 scene construction, GEOS validation, triangulation, OpenGL geometry
 submission, complete backend rendering, and `glReadPixels`. It also records
 feature/geometry counts, triangles, invalid and failed triangulations,
-viewport skips, and scene-cache hits and misses. OpenGL records GPU-buffer
-preparation and draw submission in the geometry-submission scope. On systems
+viewport skips, and scene-cache hits and misses. OpenGL records the build and
+upload of layer GPU buffers in their own scope, separate from draw
+submission. The complete-frame scope covers rendering, readback, and
+presentation; mesh preparation (triangulation) is recorded separately and is
+not part of the frame scope. On systems
 with OpenGL 1.5 or the ARB buffer-object extension, unchanged source geometry
 is uploaded once; other systems retain the client-array fallback.
 
@@ -347,6 +368,25 @@ The explicit-mesh run measured 3.1, 3.3, and 3.0 ms for those repeated
 operations, so the retained lazy meshes remained within normal run-to-run
 variation while 2,459 polygons triangulated exactly once. This measurement is
 diagnostic rather than a CI timing threshold.
+
+First-frame plan Phase 1 (2026-11-25) validated the user-visible path
+end-to-end on one developer workstation against the real 10.3 MB, 2,459-feature
+shapefile (`MWG_RENDERING_BASELINE_DATASET`), 1280x720 target, default
+`Automatic` settings, both load entry points. Every first frame reported GDI
+as the active backend and performed zero triangulations:
+
+| Measurement | Release | Debug |
+|---|---:|---:|
+| `LoadVectorDatasetEx` → first presented frame | 182 + 31 = 213 ms | 1073 + 91 = 1164 ms |
+| `Begin/EndLoadVectorDataset` → first presented frame | 166 + 32 = 198 ms | 1071 + 91 = 1162 ms |
+
+Comparisons with MapWinGIS 5 must use Release builds: the same workstation
+spent 1,797 ms in the OpenGL lazy-fill first frame before this phase
+(triangulation 1,689 ms of it; GPU buffer build+upload 28 ms; frame render
+88 ms excluding triangulation; eight `glReadPixels` calls 36 ms total), and
+Debug builds of GDAL/GEOS inflate triangulation roughly six-fold. The scene
+read dominates the remaining load time (about 165 ms Release / one second
+Debug for the 2,459 features); Phase 3 of the first-frame plan addresses it.
 
 Scene preparation reads geometries sequentially through OGR and copies
 their coordinates directly, avoiding indexed lookups, WKT serialization, and

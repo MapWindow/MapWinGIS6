@@ -42,26 +42,51 @@ namespace mwg::activex
 
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
-            const HRESULT openGlResult =
-                _openGlRenderer.Draw(
-                    deviceContext,
-                    bounds,
-                    stableScene,
-                    viewport,
-                    retainStagingBuffer,
-                    renderMode);
-            if (openGlResult == S_OK)
+            const bool deferOpenGlForPendingMeshes =
+                _preference == VectorRenderBackendPreference::Automatic &&
+                renderMode == VectorRenderMode::Fill &&
+                _openGlRenderer.GetFillMeshReadiness(stableScene) ==
+                    OpenGlVectorLayerRenderer::FillMeshReadiness::Pending;
+            if (deferOpenGlForPendingMeshes)
             {
-                _activeBackend = VectorRenderBackendKind::OpenGL;
-                _diagnostic = L"OpenGL rendered the frame successfully.";
-                return S_OK;
+                // Drawing with OpenGL would triangulate the whole scene on
+                // this thread before presenting a pixel. Paint the frame with
+                // GDI instead and retry OpenGL on a later frame, once the
+                // fill meshes exist (for example through background
+                // preparation). One frame still uses a single backend.
+                if (!_openGlRenderer.PruneFillMeshCache(stableScene))
+                {
+                    _diagnostic = _openGlRenderer.GetLastFailureReason();
+                }
+                else
+                {
+                    _diagnostic =
+                        L"GDI rendered the frame; the OpenGL fill meshes are still pending.";
+                }
             }
-
-            _diagnostic = _openGlRenderer.GetLastFailureReason();
-            if (FAILED(openGlResult))
+            else
             {
-                ::OutputDebugStringW(
-                    L"MapWinGIS: OpenGL rendering failed; using the GDI backend.\n");
+                const HRESULT openGlResult =
+                    _openGlRenderer.Draw(
+                        deviceContext,
+                        bounds,
+                        stableScene,
+                        viewport,
+                        retainStagingBuffer,
+                        renderMode);
+                if (openGlResult == S_OK)
+                {
+                    _activeBackend = VectorRenderBackendKind::OpenGL;
+                    _diagnostic = L"OpenGL rendered the frame successfully.";
+                    return S_OK;
+                }
+
+                _diagnostic = _openGlRenderer.GetLastFailureReason();
+                if (FAILED(openGlResult))
+                {
+                    ::OutputDebugStringW(
+                        L"MapWinGIS: OpenGL rendering failed; using the GDI backend.\n");
+                }
             }
         }
         else

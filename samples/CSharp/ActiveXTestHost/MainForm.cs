@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -37,6 +38,10 @@ internal sealed class MainForm : Form
     private readonly ToolStripStatusLabel _featureCountLabel;
     private readonly ToolStripStatusLabel _backendLabel;
     private readonly ToolStripStatusLabel _renderingStatusLabel;
+    private readonly ToolStripStatusLabel _timingLabel;
+    private double? _lastLoadMilliseconds;
+    private double? _firstPaintMilliseconds;
+    private bool _awaitingFirstPaint;
     private readonly List<CheckResult> _results = [];
     private readonly object _resultsLock = new();
     private readonly object _reportLock = new();
@@ -147,6 +152,7 @@ internal sealed class MainForm : Form
             Spring = true,
             TextAlign = ContentAlignment.MiddleLeft
         };
+        _timingLabel = new ToolStripStatusLabel("Load: - | First frame: -");
         statusStrip.Items.AddRange(
         [
             _coreStatusLabel,
@@ -157,7 +163,9 @@ internal sealed class MainForm : Form
             new ToolStripStatusLabel("|"),
             _backendLabel,
             new ToolStripStatusLabel("|"),
-            _renderingStatusLabel
+            _renderingStatusLabel,
+            new ToolStripStatusLabel("|"),
+            _timingLabel
         ]);
 
         Controls.Add(layout);
@@ -481,7 +489,12 @@ internal sealed class MainForm : Form
         dynamic automation = automationObject;
         int previousLayerCount = (int)automation.LayerCount;
         long previousFeatureCount = (long)automation.FeatureCount;
+        var loadWatch = Stopwatch.StartNew();
         long layerId = (long)automation.LoadVectorDatasetEx(path);
+        loadWatch.Stop();
+        _lastLoadMilliseconds = loadWatch.Elapsed.TotalMilliseconds;
+        _awaitingFirstPaint = true;
+        UpdateTimingLabel();
         var layer = new LoadedLayer(
             layerId, Path.GetFileNameWithoutExtension(path), null, path);
         ListViewItem item = AddLayerListItem(layer);
@@ -1081,8 +1094,26 @@ internal sealed class MainForm : Form
 
     private void RepaintHost()
     {
+        if (_awaitingFirstPaint)
+        {
+            var paintWatch = Stopwatch.StartNew();
+            _host?.Invalidate(true);
+            _host?.Update();
+            paintWatch.Stop();
+            _firstPaintMilliseconds = paintWatch.Elapsed.TotalMilliseconds;
+            _awaitingFirstPaint = false;
+            UpdateTimingLabel();
+            return;
+        }
         _host?.Invalidate(true);
         _host?.Update();
+    }
+
+    private void UpdateTimingLabel()
+    {
+        string load = _lastLoadMilliseconds is { } loadMs ? $"{loadMs:0.0} ms" : "-";
+        string firstFrame = _firstPaintMilliseconds is { } paintMs ? $"{paintMs:0.0} ms" : "-";
+        _timingLabel.Text = $"Load: {load} | First frame: {firstFrame}";
     }
 
     private void VerifyResize()

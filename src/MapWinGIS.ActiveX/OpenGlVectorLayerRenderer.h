@@ -84,6 +84,22 @@ namespace mwg::activex
             return _lastFailureReason;
         }
 
+        /// Reports whether Fill-mode drawing can proceed for this scene
+        /// without generating geometry on the calling thread. Ready means
+        /// every drawable layer has usable meshes from the scene or the
+        /// cache; Pending means at least one layer still needs lazy
+        /// preparation; Failed means a layer's meshes are unusable or its
+        /// triangulation failed, so OpenGL will reject the scene itself.
+        enum class FillMeshReadiness : int
+        {
+            Ready,
+            Pending,
+            Failed
+        };
+
+        [[nodiscard]] FillMeshReadiness GetFillMeshReadiness(
+            const rendering::MapRenderScene& scene) const noexcept;
+
     private:
         friend class testing::OpenGlVectorLayerRendererTestAccess;
         friend class testing::MapWinGISControlTestAccess;

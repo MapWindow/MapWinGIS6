@@ -15,6 +15,10 @@
 #include <Windows.h>
 #include <psapi.h>
 
+#include <atlbase.h>
+#include <objbase.h>
+#include <wrl/client.h>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -30,6 +34,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -38,6 +43,7 @@
 
 #include "OpenGlVectorLayerRenderer.h"
 #include "GdiVectorLayerRenderer.h"
+#include "MapWinGIS.ActiveX_i.h"
 #include "TestData.h"
 #include "mapwingis/diagnostics/PerformanceDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
@@ -383,6 +389,132 @@ namespace
         HGDIOBJ _previous{};
     };
 
+    /// Initializes COM on the calling thread for the object's lifetime.
+    class ComApartment final
+    {
+    public:
+        ComApartment() noexcept
+            : _result(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))
+        {
+        }
+
+        ~ComApartment()
+        {
+            if (SUCCEEDED(_result))
+            {
+                CoUninitialize();
+            }
+        }
+
+        ComApartment(const ComApartment&) = delete;
+        ComApartment& operator=(const ComApartment&) = delete;
+
+        [[nodiscard]] HRESULT Result() const noexcept { return _result; }
+
+    private:
+        HRESULT _result;
+    };
+
+    /// Creates the ActiveX control through its class factory, without
+    /// registry registration, exactly like a COM host activates it. The
+    /// rendering backend preference stays at its Automatic default.
+    class HostedControl final
+    {
+    public:
+        HostedControl()
+        {
+            wchar_t executablePath[MAX_PATH]{};
+            const DWORD length = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
+            if (length == 0 || length >= MAX_PATH)
+            {
+                return;
+            }
+
+            _module = LoadLibraryW(
+                (std::filesystem::path(executablePath).parent_path() / L"MapWinGIS.ocx").c_str());
+            if (_module == nullptr)
+            {
+                return;
+            }
+
+            using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+            const auto getClassObject = reinterpret_cast<GetClassObject>(
+                GetProcAddress(_module, "DllGetClassObject"));
+            Microsoft::WRL::ComPtr<IClassFactory> factory;
+            if (getClassObject == nullptr ||
+                FAILED(getClassObject(
+                    __uuidof(MapWinGISControl), IID_PPV_ARGS(&factory))) ||
+                FAILED(factory->CreateInstance(nullptr, IID_PPV_ARGS(&_control))) ||
+                FAILED(_control.As(&_window)) ||
+                FAILED(_control.As(&_viewObject)))
+            {
+                return;
+            }
+            _created = true;
+        }
+
+        ~HostedControl()
+        {
+            _viewObject.Reset();
+            _window.Reset();
+            _control.Reset();
+            if (_module != nullptr)
+            {
+                FreeLibrary(_module);
+            }
+        }
+
+        HostedControl(const HostedControl&) = delete;
+        HostedControl& operator=(const HostedControl&) = delete;
+
+        [[nodiscard]] bool IsCreated() const noexcept { return _created; }
+
+        [[nodiscard]] const Microsoft::WRL::ComPtr<IMapWinGISControl5>& Control() const noexcept
+        {
+            return _control;
+        }
+
+        [[nodiscard]] HRESULT Resize(const int width, const int height)
+        {
+            LRESULT result = 0;
+            return _window->OnWindowMessage(
+                WM_SIZE, 0, MAKELPARAM(width, height), &result);
+        }
+
+        [[nodiscard]] HRESULT Draw(
+            const HDC target, const int width, const int height)
+        {
+            const RECTL bounds{0, 0, width, height};
+            return _viewObject->Draw(
+                DVASPECT_CONTENT, -1, nullptr, nullptr, nullptr, target,
+                &bounds, nullptr, nullptr, 0);
+        }
+
+    private:
+        HMODULE _module{};
+        Microsoft::WRL::ComPtr<IMapWinGISControl5> _control;
+        Microsoft::WRL::ComPtr<IOleInPlaceObjectWindowless> _window;
+        Microsoft::WRL::ComPtr<IViewObjectEx> _viewObject;
+        bool _created = false;
+    };
+
+    /// Drains the thread's dispatch queue; used to deliver the asynchronous
+    /// vector-load completion while polling EndLoadVectorDataset.
+    void PumpDispatchMessages()
+    {
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE)
+        {
+            if (message.message == WM_QUIT)
+            {
+                PostQuitMessage(static_cast<int>(message.wParam));
+                break;
+            }
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+
     class RenderingBaseline : public testing::Test
     {
     protected:
@@ -409,6 +541,7 @@ namespace
                 {PerformanceOperation::GeometryValidation, "Diagnostic geometry validation"},
                 {PerformanceOperation::PolygonTriangulation, "Diagnostic polygon triangulation"},
                 {PerformanceOperation::OpenGlGeometrySubmission, "Diagnostic OpenGL geometry submission"},
+                {PerformanceOperation::OpenGlGpuBufferUpload, "Diagnostic OpenGL GPU buffer build+upload"},
                 {PerformanceOperation::FrameRender, "Diagnostic complete frame render"},
                 {PerformanceOperation::FramebufferReadback, "Diagnostic framebuffer readback"}};
             constexpr std::pair<PerformanceCounter, const char*> counters[] = {
@@ -435,6 +568,61 @@ namespace
             {
                 Report(name, static_cast<double>(snapshot.Counter(counter)), "");
             }
+        }
+
+        /// Draws the first frame through the hosted control and asserts the
+        /// GDI-first contract: the frame presents filled content, the control
+        /// reports GDI as the active backend, and no polygon was
+        /// triangulated on the paint path. Reports the load time, the
+        /// first-frame time, and the diagnostic breakdown.
+        void ExpectGdiFirstFrameAndReport(
+            HostedControl& hosted,
+            const std::string& loadName,
+            const double loadMs,
+            const HDC surface)
+        {
+            Microsoft::WRL::ComPtr<IMapWinGISControl2> rendering;
+            ASSERT_EQ(hosted.Control().As(&rendering), S_OK);
+
+            ASSERT_EQ(hosted.Resize(kTargetWidth, kTargetHeight), S_OK);
+
+            Clock::time_point start = Clock::now();
+            ASSERT_EQ(hosted.Draw(surface, kTargetWidth, kTargetHeight), S_OK);
+            const double firstFrameMs = ElapsedMilliseconds(start);
+
+            ATL::CComBSTR backend;
+            ASSERT_EQ(rendering->get_RenderingBackend(&backend), S_OK);
+            ASSERT_NE(backend.m_str, nullptr);
+            EXPECT_EQ(std::wstring_view(backend.m_str), L"GDI");
+
+            const diagnostics::PerformanceSnapshot snapshot =
+                diagnostics::PerformanceDiagnostics::Snapshot();
+            const std::int64_t triangulated = snapshot.Counter(
+                diagnostics::PerformanceCounter::PolygonsTriangulated);
+            EXPECT_EQ(triangulated, 0);
+
+            const COLORREF background = GetSysColor(COLOR_WINDOW);
+            std::size_t paintedSamples = 0;
+            for (int y = 0; y < kTargetHeight; y += 16)
+            {
+                for (int x = 0; x < kTargetWidth; x += 16)
+                {
+                    paintedSamples += GetPixel(surface, x, y) != background;
+                }
+            }
+            EXPECT_GT(paintedSamples, 0U)
+                << "the first frame must present filled polygons";
+
+            std::wcout << L"End-to-end first frame: " << kTargetWidth << L'x' << kTargetHeight
+                       << L" target, active backend "
+                       << static_cast<const wchar_t*>(backend.m_str) << L'\n';
+            Report(loadName, loadMs, "ms");
+            Report("End-to-end first presented frame", firstFrameMs, "ms");
+            Report(
+                "End-to-end polygons triangulated on the first frame",
+                static_cast<double>(triangulated),
+                "");
+            ReportPerformanceDiagnostics();
         }
 
         class DiagnosticCapture final
@@ -782,6 +970,108 @@ TEST_F(RenderingBaseline, MeasuresLazyOpenGlFillCosts)
     Report("OpenGL lazy-fill pan frame", panMs, "ms");
     Report("OpenGL lazy-fill zoom frame", zoomMs, "ms");
     ReportPerformanceDiagnostics();
+}
+
+TEST_F(RenderingBaseline, MeasuresEndToEndFirstFrameThroughTheControl)
+{
+    const char* enabled = std::getenv("MWG_RUN_RENDERING_BASELINE");
+    if (enabled == nullptr || std::string(enabled) != "1")
+    {
+        GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
+    }
+
+    ComApartment apartment;
+    ASSERT_TRUE(SUCCEEDED(apartment.Result()));
+    HostedControl hosted;
+    ASSERT_TRUE(hosted.IsCreated())
+        << "MapWinGIS.ocx could not be loaded next to the test executable.";
+
+    DiagnosticCapture diagnostics;
+    const int featureCount = FeatureCountFromEnvironment();
+    TempDirectory directory;
+    const std::filesystem::path path =
+        BaselineDatasetPath(directory.Path(), featureCount);
+
+    Microsoft::WRL::ComPtr<IMapWinGISControl4> control;
+    ASSERT_EQ(hosted.Control().As(&control), S_OK);
+
+    Clock::time_point start = Clock::now();
+    LONGLONG layerId = 0;
+    ASSERT_EQ(control->LoadVectorDatasetEx(ATL::CComBSTR(path.c_str()), &layerId), S_OK);
+    const double loadMs = ElapsedMilliseconds(start);
+    ASSERT_GT(layerId, 0);
+
+    DibSurface surface(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(surface.IsValid());
+    ExpectGdiFirstFrameAndReport(
+        hosted, "End-to-end load (LoadVectorDatasetEx)", loadMs, surface.Get());
+}
+
+TEST_F(RenderingBaseline, MeasuresEndToEndAsyncLoadFirstFrameThroughTheControl)
+{
+    const char* enabled = std::getenv("MWG_RUN_RENDERING_BASELINE");
+    if (enabled == nullptr || std::string(enabled) != "1")
+    {
+        GTEST_SKIP() << "Set MWG_RUN_RENDERING_BASELINE=1 to measure the rendering baseline.";
+    }
+
+    ComApartment apartment;
+    ASSERT_TRUE(SUCCEEDED(apartment.Result()));
+    HostedControl hosted;
+    ASSERT_TRUE(hosted.IsCreated())
+        << "MapWinGIS.ocx could not be loaded next to the test executable.";
+
+    DiagnosticCapture diagnostics;
+    const int featureCount = FeatureCountFromEnvironment();
+    TempDirectory directory;
+    const std::filesystem::path path =
+        BaselineDatasetPath(directory.Path(), featureCount);
+
+    Clock::time_point start = Clock::now();
+    LONGLONG operationId = 0;
+    ASSERT_EQ(
+        hosted.Control()->BeginLoadVectorDataset(
+            ATL::CComBSTR(path.c_str()), &operationId),
+        S_OK);
+    ASSERT_GT(operationId, 0);
+
+    // EndLoadVectorDataset stays E_PENDING until the worker commits and the
+    // completion is delivered; pump this thread's queue to let it finalize.
+    VARIANT_BOOL succeeded = VARIANT_FALSE;
+    VARIANT_BOOL cancelled = VARIANT_TRUE;
+    LONGLONG layerId = 0;
+    BSTR summary = nullptr;
+    BSTR loadDiagnostics = nullptr;
+    HRESULT endResult = E_PENDING;
+    const auto deadline = Clock::now() + std::chrono::seconds(60);
+    while (Clock::now() < deadline)
+    {
+        endResult = hosted.Control()->EndLoadVectorDataset(
+            operationId,
+            &succeeded,
+            &cancelled,
+            &layerId,
+            &summary,
+            &loadDiagnostics);
+        if (endResult != E_PENDING)
+        {
+            break;
+        }
+        PumpDispatchMessages();
+        Sleep(1);
+    }
+    const double loadMs = ElapsedMilliseconds(start);
+    ::SysFreeString(summary);
+    ::SysFreeString(loadDiagnostics);
+    ASSERT_EQ(endResult, S_OK);
+    EXPECT_EQ(succeeded, VARIANT_TRUE);
+    EXPECT_EQ(cancelled, VARIANT_FALSE);
+    ASSERT_GT(layerId, 0);
+
+    DibSurface surface(kTargetWidth, kTargetHeight);
+    ASSERT_TRUE(surface.IsValid());
+    ExpectGdiFirstFrameAndReport(
+        hosted, "End-to-end load (Begin/EndLoadVectorDataset)", loadMs, surface.Get());
 }
 
 TEST_F(RenderingBaseline, MeasuresComplexPolygonCosts)

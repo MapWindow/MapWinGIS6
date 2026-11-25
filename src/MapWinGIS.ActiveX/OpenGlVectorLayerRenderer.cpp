@@ -474,6 +474,46 @@ namespace mwg::activex
         return IsSupported(scene, renderMode);
     }
 
+    OpenGlVectorLayerRenderer::FillMeshReadiness
+    OpenGlVectorLayerRenderer::GetFillMeshReadiness(
+        const rendering::MapRenderScene& scene) const noexcept
+    {
+        for (const rendering::LayerRenderScene& layer : scene.layers)
+        {
+            if (layer.scene == nullptr)
+            {
+                return FillMeshReadiness::Failed;
+            }
+            const rendering::VectorRenderScene& vectorScene = *layer.scene;
+            if (!vectorScene.fillMeshes.empty())
+            {
+                if (!AreFillMeshesUsable(
+                        vectorScene.fillMeshes, vectorScene.polygons.size()))
+                {
+                    return FillMeshReadiness::Failed;
+                }
+                continue;
+            }
+            if (_fillMeshCache == nullptr)
+            {
+                return FillMeshReadiness::Pending;
+            }
+            const auto cached = _fillMeshCache->layers.find(layer.layerId);
+            if (cached == _fillMeshCache->layers.end())
+            {
+                return FillMeshReadiness::Pending;
+            }
+            if (cached->second.failed ||
+                cached->second.scene.lock() != layer.scene ||
+                !AreFillMeshesUsable(
+                    cached->second.generatedMeshes, vectorScene.polygons.size()))
+            {
+                return FillMeshReadiness::Failed;
+            }
+        }
+        return FillMeshReadiness::Ready;
+    }
+
     OpenGlVectorLayerRenderer::~OpenGlVectorLayerRenderer()
     {
         Release();
@@ -812,6 +852,8 @@ namespace mwg::activex
 
             if (cached == _gpuBufferCache->layers.end())
             {
+                const diagnostics::PerformanceScope uploadScope(
+                    diagnostics::PerformanceOperation::OpenGlGpuBufferUpload);
                 GpuBufferCache::Layer prepared;
                 prepared.scene = scene;
                 prepared.hasFill = needFill;
@@ -1817,8 +1859,6 @@ namespace mwg::activex
         {
             return S_FALSE;
         }
-        const diagnostics::PerformanceScope frameScope(
-            diagnostics::PerformanceOperation::FrameRender);
         _lastFailureReason = L"OpenGL did not render this frame.";
         const TargetValidation validation =
             ValidateTarget(deviceContext, bounds, stableScene, viewport, renderMode);
@@ -1890,6 +1930,11 @@ namespace mwg::activex
             return S_FALSE;
         }
 
+        // The frame scope starts after mesh preparation so its breakdown does
+        // not double-count triangulation; it covers rendering, readback, and
+        // presentation.
+        const diagnostics::PerformanceScope frameScope(
+            diagnostics::PerformanceOperation::FrameRender);
         const HRESULT renderResult =
             RenderScene(stableScene, viewport, target, renderMode);
         if (FAILED(renderResult) || renderResult == S_FALSE)

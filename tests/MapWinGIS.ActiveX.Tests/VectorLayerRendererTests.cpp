@@ -342,6 +342,10 @@ TEST(VectorLayerRenderer, UsesOpenGlForLazyConvexPolygonWhenAvailable)
 
     ASSERT_TRUE(PatBlt(surface.Get(), 0, 0, 120, 100, BLACKNESS));
     mwg::activex::VectorLayerRenderer renderer;
+    // The explicit OpenGL preference keeps the lazy on-draw triangulation;
+    // Automatic instead paints the first frame with GDI (see
+    // AutomaticFillPaintsGdiWhileFillMeshesArePending).
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(
         renderer.GetActiveBackend(),
@@ -351,6 +355,93 @@ TEST(VectorLayerRenderer, UsesOpenGlForLazyConvexPolygonWhenAvailable)
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), kFill);
     EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
 }
+
+TEST(VectorLayerRenderer, AutomaticFillPaintsGdiWhileFillMeshesArePending)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    Edit(scene.layers.front()).fillMeshes.clear();
+    const mwg::Viewport viewport = FitViewport(bounds);
+    PerformanceCapture diagnostics;
+
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+
+    // The Automatic preference must not triangulate on the paint path: the
+    // first frame is painted with GDI while the meshes are pending.
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_EQ(
+        renderer.GetDiagnostic(),
+        L"GDI rendered the frame; the OpenGL fill meshes are still pending.");
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        0);
+    EXPECT_EQ(MapPixel(surface.Get(), viewport, 5.0, 5.0), kFill);
+    EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
+}
+
+TEST(VectorLayerRenderer, AutomaticFillSwitchesToOpenGlOnceFillMeshesExist)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    Edit(scene.layers.front()).fillMeshes.clear();
+    const mwg::Viewport viewport = FitViewport(bounds);
+
+    BitmapSurface probeSurface(120, 100);
+    ASSERT_TRUE(probeSurface.IsValid());
+    mwg::activex::OpenGlVectorLayerRenderer availabilityProbe;
+    const HRESULT probeResult = availabilityProbe.Draw(
+        probeSurface.Get(),
+        bounds,
+        MakeConvexPolygonScene(),
+        viewport);
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+
+    // Once the meshes exist, a later Automatic frame selects OpenGL again.
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(
+        renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
+
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Automatic);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(
+        renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
+    EXPECT_EQ(renderer.GetDiagnostic(), L"OpenGL rendered the frame successfully.");
+}
+
+TEST(VectorLayerRenderer, AutomaticFillWithSceneMeshesUsesOpenGl)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    // Scene-provided meshes make the Automatic frame OpenGL-eligible
+    // immediately; nothing is pending.
+    const mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    const mwg::Viewport viewport = FitViewport(bounds);
+
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(
+        renderer.GetActiveBackend(),
+        mwg::activex::VectorRenderBackendKind::OpenGL);
+    EXPECT_EQ(renderer.GetDiagnostic(), L"OpenGL rendered the frame successfully.");
+}
+
 
 TEST(VectorLayerRenderer, OpenGlRecreatesLostContextOnLaterDraw)
 {
@@ -695,6 +786,10 @@ TEST(VectorLayerRenderer, OpenGlLazyTriangulationFailureFallsBackAndPreservesOut
     ASSERT_EQ(probeResult, S_OK);
 
     mwg::activex::VectorLayerRenderer renderer;
+    // The explicit OpenGL preference drives the lazy triangulation path that
+    // this test exercises; Automatic would paint the pending-mesh frame with
+    // GDI without attempting OpenGL.
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(
         renderer.GetActiveBackend(),
@@ -751,6 +846,10 @@ TEST(VectorLayerRenderer, SnapshotsSceneAcrossReentrantTriangulationCallback)
     Edit(scene.layers.front()).fillMeshes.clear();
     bool callbackRan = false;
     mwg::activex::VectorLayerRenderer renderer;
+    // The explicit OpenGL preference drives the lazy triangulation whose
+    // reentrant logging callback this test relies on; Automatic would paint
+    // the pending-mesh frame with GDI without attempting OpenGL.
+    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
     LogHandlerScope reentrantHandler(
         [&scene, &callbackRan, &renderer](
             const mwg::LogLevel,
