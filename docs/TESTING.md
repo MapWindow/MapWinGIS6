@@ -214,7 +214,10 @@ source-only fill scene (the explicit `OpenGL` preference), it lazily
 triangulates on that draw and reuses those backend-owned meshes on later
 draws. With the default `Automatic` preference the coordinator instead paints a
 mesh-pending Fill frame with GDI, so the first frame never triangulates, and
-selects OpenGL again once every layer's meshes exist.
+selects OpenGL again once every layer's meshes exist — today only via an
+explicit OpenGL-preference draw or scene-provided meshes; Phase 2 adds
+background preparation, so under the control's default settings Fill stays
+on GDI until then.
 `MeasuresLazyOpenGlFillCosts` measures
 that production path separately and verifies that scene preparation creates no
 meshes and later steady, pan, and zoom draws do not triangulate again. The
@@ -222,8 +225,8 @@ renderer regression suite also checks lazy triangulation of concave and holed
 polygons across outline/fill changes, viewport changes, cache invalidation, and
 scene removal, and asserts the GDI-first Automatic contract: the first
 mesh-pending frame reports GDI as the active backend, performs zero
-triangulations, and a later frame switches back to OpenGL once the meshes
-exist. Point and line datasets are explicitly covered as unsupported
+triangulations, and a frame switches back to OpenGL once meshes exist
+(primed by an explicit OpenGL draw or scene-provided meshes). Point and line datasets are explicitly covered as unsupported
 by the polygon-only renderer rather than being silently accepted. OpenGL pixel
 and buffer-lifecycle tests that require a framebuffer-capable context are
 conditional on that capability. GitHub-hosted Windows CI can skip those tests,
@@ -249,8 +252,11 @@ feature/geometry counts, triangles, invalid and failed triangulations,
 viewport skips, and scene-cache hits and misses. OpenGL records the build and
 upload of layer GPU buffers in their own scope, separate from draw
 submission. The complete-frame scope covers rendering, readback, and
-presentation; mesh preparation (triangulation) is recorded separately and is
-not part of the frame scope. On systems
+presentation; context recovery, WGL context and framebuffer creation, and
+the staging allocation are recorded in the OpenGL context-initialization
+scope, and mesh preparation (triangulation) is recorded separately — none
+of these is part of the frame scope, so the breakdown does not
+double-count them. On systems
 with OpenGL 1.5 or the ARB buffer-object extension, unchanged source geometry
 is uploaded once; other systems retain the client-array fallback.
 

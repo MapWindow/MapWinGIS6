@@ -41,7 +41,11 @@ Choose `Repaint` to request a redraw. Choose `Recreate` to dispose of the contro
 
 The status bar shows the active rendering backend and rendering status. Automated mode selects GDI, then requests OpenGL. The OpenGL request can fall back to GDI when the scene or system does not support OpenGL.
 
-With the default `Automatic` preference, the first frame after loading a layer is painted with GDI while the OpenGL fill meshes are still pending; the status reports GDI for those frames.
+With the default `Automatic` preference, Fill frames are painted with GDI
+until the OpenGL fill meshes exist. Nothing prepares them in the background
+yet (planned), so the status keeps reporting GDI and `RenderingStatus`
+explains it; only an explicit `OpenGL` preference draw prepares the meshes
+today.
 
 ## Read the load and first-frame timings
 

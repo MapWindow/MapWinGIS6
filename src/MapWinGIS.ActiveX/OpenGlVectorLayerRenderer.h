@@ -86,10 +86,10 @@ namespace mwg::activex
 
         /// Reports whether Fill-mode drawing can proceed for this scene
         /// without generating geometry on the calling thread. Ready means
-        /// every drawable layer has usable meshes from the scene or the
-        /// cache; Pending means at least one layer still needs lazy
-        /// preparation; Failed means a layer's meshes are unusable or its
-        /// triangulation failed, so OpenGL will reject the scene itself.
+        /// every drawable layer has meshes from the scene or the cache;
+        /// Pending means at least one layer still needs preparation; Failed
+        /// means the frame must stay on GDI (a missing scene, unusable
+        /// meshes, or a failed triangulation).
         enum class FillMeshReadiness : int
         {
             Ready,
@@ -99,6 +99,14 @@ namespace mwg::activex
 
         [[nodiscard]] FillMeshReadiness GetFillMeshReadiness(
             const rendering::MapRenderScene& scene) const noexcept;
+
+        /// Returns why the scene cannot be drawn in the requested mode
+        /// without generating geometry, or nullopt when it is drawable.
+        /// Does not create a context or touch the fill-mesh cache.
+        [[nodiscard]] static std::optional<std::wstring_view>
+        GetSceneRejectionReason(
+            const rendering::MapRenderScene& scene,
+            VectorRenderMode renderMode) noexcept;
 
     private:
         friend class testing::OpenGlVectorLayerRendererTestAccess;

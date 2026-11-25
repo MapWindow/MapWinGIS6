@@ -152,7 +152,7 @@ internal sealed class MainForm : Form
             Spring = true,
             TextAlign = ContentAlignment.MiddleLeft
         };
-        _timingLabel = new ToolStripStatusLabel("Load: - | First frame: -");
+        _timingLabel = new ToolStripStatusLabel("Last load: - | First frame: -");
         statusStrip.Items.AddRange(
         [
             _coreStatusLabel,
@@ -494,6 +494,7 @@ internal sealed class MainForm : Form
         loadWatch.Stop();
         _lastLoadMilliseconds = loadWatch.Elapsed.TotalMilliseconds;
         _awaitingFirstPaint = true;
+        _firstPaintMilliseconds = null;
         UpdateTimingLabel();
         var layer = new LoadedLayer(
             layerId, Path.GetFileNameWithoutExtension(path), null, path);
@@ -1113,7 +1114,7 @@ internal sealed class MainForm : Form
     {
         string load = _lastLoadMilliseconds is { } loadMs ? $"{loadMs:0.0} ms" : "-";
         string firstFrame = _firstPaintMilliseconds is { } paintMs ? $"{paintMs:0.0} ms" : "-";
-        _timingLabel.Text = $"Load: {load} | First frame: {firstFrame}";
+        _timingLabel.Text = $"Last load: {load} | First frame: {firstFrame}";
     }
 
     private void VerifyResize()

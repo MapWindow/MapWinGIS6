@@ -29,9 +29,10 @@ namespace mwg::diagnostics
         GeometryValidation,
         PolygonTriangulation,
         OpenGlGeometrySubmission,
-        OpenGlGpuBufferUpload,
         FrameRender,
         FramebufferReadback,
+        OpenGlGpuBufferUpload,
+        OpenGlContextInitialization,
         Count,
     };
 

@@ -63,6 +63,7 @@ namespace
     constexpr int kTargetWidth = 1280;
     constexpr int kTargetHeight = 720;
     constexpr int kSteadyFrames = 5;
+    constexpr COLORREF kFillColor = RGB(61, 122, 169);
 
     using Clock = std::chrono::steady_clock;
 
@@ -460,7 +461,17 @@ namespace
             _control.Reset();
             if (_module != nullptr)
             {
-                FreeLibrary(_module);
+                // COM checks DllCanUnloadNow before unloading. An in-flight
+                // asynchronous load may still own a worker or the dispatch
+                // window; in that case leave the module loaded for the
+                // process lifetime rather than crashing a later test.
+                using DllCanUnloadNow = HRESULT(STDAPICALLTYPE*)();
+                const auto canUnload = reinterpret_cast<DllCanUnloadNow>(
+                    GetProcAddress(_module, "DllCanUnloadNow"));
+                if (canUnload == nullptr || canUnload() == S_OK)
+                {
+                    FreeLibrary(_module);
+                }
             }
         }
 
@@ -542,6 +553,7 @@ namespace
                 {PerformanceOperation::PolygonTriangulation, "Diagnostic polygon triangulation"},
                 {PerformanceOperation::OpenGlGeometrySubmission, "Diagnostic OpenGL geometry submission"},
                 {PerformanceOperation::OpenGlGpuBufferUpload, "Diagnostic OpenGL GPU buffer build+upload"},
+                {PerformanceOperation::OpenGlContextInitialization, "Diagnostic OpenGL context initialization"},
                 {PerformanceOperation::FrameRender, "Diagnostic complete frame render"},
                 {PerformanceOperation::FramebufferReadback, "Diagnostic framebuffer readback"}};
             constexpr std::pair<PerformanceCounter, const char*> counters[] = {
@@ -600,18 +612,21 @@ namespace
             const std::int64_t triangulated = snapshot.Counter(
                 diagnostics::PerformanceCounter::PolygonsTriangulated);
             EXPECT_EQ(triangulated, 0);
+            EXPECT_EQ(
+                snapshot.Counter(
+                    diagnostics::PerformanceCounter::TriangulationFailures),
+                0);
 
-            const COLORREF background = GetSysColor(COLOR_WINDOW);
             std::size_t paintedSamples = 0;
             for (int y = 0; y < kTargetHeight; y += 16)
             {
                 for (int x = 0; x < kTargetWidth; x += 16)
                 {
-                    paintedSamples += GetPixel(surface, x, y) != background;
+                    paintedSamples += GetPixel(surface, x, y) == kFillColor;
                 }
             }
             EXPECT_GT(paintedSamples, 0U)
-                << "the first frame must present filled polygons";
+                << "the first frame must present polygon fills";
 
             std::wcout << L"End-to-end first frame: " << kTargetWidth << L'x' << kTargetHeight
                        << L" target, active backend "

@@ -27,7 +27,10 @@ GDI is the CPU fallback; OpenGL has a narrower supported-scene range and can
 fall back to GDI. With the `Automatic` preference, a Fill-mode frame whose
 layers have no fill meshes yet is painted with GDI (reported via
 `RenderingBackend`/`RenderingStatus`) so the paint path never triangulates;
-OpenGL is retried on later frames once meshes exist. Only the explicit
+OpenGL is retried on later frames once meshes exist. Nothing prepares those
+meshes during `Automatic` drawing today (Phase 2 adds background
+preparation), so default Fill stays on GDI until an explicit `OpenGL` draw
+caches the meshes or a scene supplies them. Only the explicit
 `OpenGL` preference triangulates lazily on the drawing thread. Backends consume Core-produced geometry and do not own
 datasets or view state. The OCX owns the host-specific rendering resources.
 The control composes ordinary screen frames in an offscreen DIB-section

@@ -42,26 +42,45 @@ namespace mwg::activex
 
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
-            const bool deferOpenGlForPendingMeshes =
+            const bool automaticFill =
                 _preference == VectorRenderBackendPreference::Automatic &&
-                renderMode == VectorRenderMode::Fill &&
-                _openGlRenderer.GetFillMeshReadiness(stableScene) ==
-                    OpenGlVectorLayerRenderer::FillMeshReadiness::Pending;
-            if (deferOpenGlForPendingMeshes)
+                renderMode == VectorRenderMode::Fill;
+            const auto readiness = automaticFill
+                ? _openGlRenderer.GetFillMeshReadiness(stableScene)
+                : OpenGlVectorLayerRenderer::FillMeshReadiness::Ready;
+
+            if (automaticFill &&
+                readiness != OpenGlVectorLayerRenderer::FillMeshReadiness::Ready)
             {
-                // Drawing with OpenGL would triangulate the whole scene on
-                // this thread before presenting a pixel. Paint the frame with
-                // GDI instead and retry OpenGL on a later frame, once the
-                // fill meshes exist (for example through background
-                // preparation). One frame still uses a single backend.
+                // Drawing with OpenGL here would either triangulate missing
+                // meshes on this thread before presenting a pixel (Pending)
+                // or reuse a failed preparation while triangulating other
+                // layers (Failed). Paint the frame with GDI instead; a later
+                // frame retries once every layer's meshes exist. One frame
+                // still uses a single backend.
                 if (!_openGlRenderer.PruneFillMeshCache(stableScene))
                 {
                     _diagnostic = _openGlRenderer.GetLastFailureReason();
                 }
-                else
+                else if (
+                    readiness ==
+                    OpenGlVectorLayerRenderer::FillMeshReadiness::Pending)
                 {
                     _diagnostic =
-                        L"GDI rendered the frame; the OpenGL fill meshes are still pending.";
+                        L"GDI rendered the frame; the Automatic preference "
+                        L"paints with GDI until the OpenGL fill meshes are "
+                        L"prepared.";
+                }
+                else
+                {
+                    const auto reason =
+                        OpenGlVectorLayerRenderer::GetSceneRejectionReason(
+                            stableScene, renderMode);
+                    _diagnostic = reason.has_value()
+                        ? *reason
+                        : L"The OpenGL backend could not triangulate a "
+                          L"polygon for fill rendering; this frame was "
+                          L"rendered with GDI.";
                 }
             }
             else

@@ -350,9 +350,11 @@ reused by later draws; they do not mutate the Core scene. OpenGL outline
 mode draws the source rings without requiring fill meshes. With the
 `Automatic` preference, the coordinator instead paints a Fill-mode frame
 whose layers have no fill meshes yet with the GDI backend, so the paint
-path never blocks on triangulation; it selects OpenGL again on a later
-frame once every layer's meshes exist (scene-provided or cached from an
-earlier draw or background preparation). Only an explicit `OpenGL`
+path never blocks on triangulation. Nothing prepares those meshes during
+`Automatic` drawing today — they exist only when a scene supplies them or
+an explicit `OpenGL` draw caches them — so under the control's default
+settings Fill stays on GDI until background preparation (planned) fills
+the cache and the frame is redrawn. Only an explicit `OpenGL`
 preference keeps lazy on-draw triangulation. GDI checks each
 layer before drawing it; a layer with non-finite or out-of-range device coordinates is
 skipped and reported (`GetFailedLayers`, `RenderingStatus`) while the other
