@@ -5,9 +5,9 @@
  * @brief Declares reusable polygon triangulation for rendering.
  *
  * Converts a backend-neutral polygon with optional interior rings into an
- * indexed triangle mesh using the constrained Delaunay triangulation provided
- * by GDAL/OGR and GEOS. The mesh stays in the source coordinate system and
- * contains no graphics-API or platform types.
+ * indexed triangle mesh. The implementation uses earcut first and a GEOS
+ * constrained Delaunay triangulation fallback. The mesh stays in the source
+ * coordinate system and contains no graphics-API or platform types.
  */
 #pragma once
 
@@ -24,18 +24,20 @@ namespace mwg::rendering
     /// point at the end. Interior rings with fewer than three points are
     /// ignored. Duplicate consecutive vertices are tolerated.
     ///
-    /// The triangulation is the constrained Delaunay triangulation from
-    /// OGRGeometry::ConstrainedDelaunayTriangulation(), which preserves the
-    /// polygon boundaries. Vertices are shared through the index buffer and
-    /// all triangles have counter-clockwise winding. The result is the 2D
-    /// rendering mesh; no Z or M values are computed.
+    /// Earcut triangulates the original ring coordinates first. If it cannot
+    /// produce a mesh, the implementation falls back to
+    /// OGRGeometry::ConstrainedDelaunayTriangulation(). Vertices are shared
+    /// through the index buffer and all triangles have counter-clockwise
+    /// winding. The result is the 2D rendering mesh; no Z or M values are
+    /// computed. Earcut works directly from the supplied rings and does not
+    /// run an OGC validity precheck. A mesh is rejected when its area does
+    /// not agree with the signed ring area, which keeps ambiguous
+    /// self-intersections on the caller's existing failure fallback.
     ///
-    /// Invalid input is never repaired: self-intersecting or otherwise
-    /// invalid polygons are rejected instead of being reinterpreted.
     /// \throws InvalidArgument when the polygon has no exterior ring of at
     ///         least three points or contains non-finite coordinates.
-    /// \throws CoreError when the polygon is invalid or the triangulation
-    ///         fails or produces no triangles.
+    /// \throws CoreError when both triangulation paths fail or no triangles
+    ///         can be produced.
     [[nodiscard]] MWG_CORE_API TriangleMesh TriangulatePolygon(const Polygon& polygon);
 
     /// Triangulates borrowed flat-buffer rings with the same contract as the

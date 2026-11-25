@@ -5,6 +5,13 @@ dependencies, and GoogleTest is supplied by the `tests` feature. The optional
 `full-drivers` feature adds a larger set of GDAL drivers. The manifest baseline
 and GDAL minimum version must be considered together when updating GDAL.
 
+`earcut-hpp` 3.2.4 is an ISC-licensed, header-only production dependency used
+internally by Core polygon triangulation. CMake discovers the baseline port with
+`find_package(earcut_hpp CONFIG REQUIRED)` and links
+`earcut_hpp::earcut_hpp`; vcpkg supplies the include path to MSBuild. Keep
+earcut behind the `TriangulatePolygon` entry point and retain GEOS as the
+second-level fallback.
+
 GDAL 3.12 renamed the OGR geometry accessors to snake_case (`get_Area()`,
 `get_Length()`); the old camelCase names such as `getArea()` are removed.
 `get_Area()` is not on the `OGRGeometry` base at all (only on `OGRCurve` and

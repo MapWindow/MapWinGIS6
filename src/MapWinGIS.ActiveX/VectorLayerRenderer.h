@@ -7,14 +7,12 @@
  * Tries OpenGL rendering first and uses the GDI backend for unsupported
  * geometry or when OpenGL cannot be initialized. With the Automatic
  * preference, a Fill-mode frame whose layers have no fill meshes yet is
- * painted entirely with GDI so the paint path never triangulates; nothing
- * prepares those meshes during Automatic drawing, so Fill stays on GDI
- * until meshes exist — scene-provided, cached by an explicit OpenGL draw,
- * or later prepared in the background — and a later frame then selects
- * OpenGL again. An explicit OpenGL preference keeps drawing with OpenGL
- * and triangulates lazily on the calling thread. One backend draws the
- * whole frame, so all layers share its viewport transform and pixel
- * conventions.
+ * painted entirely with GDI so the paint path never triangulates. Missing
+ * meshes are prepared on a background worker and published to the owner
+ * thread; a later frame then selects OpenGL. An explicit OpenGL preference
+ * keeps drawing with OpenGL and triangulates lazily on the calling thread.
+ * One backend draws the whole frame, so all layers share its viewport
+ * transform and pixel conventions.
  */
 #pragma once
 
@@ -85,6 +83,24 @@ namespace mwg::activex
         void InvalidateLayerSceneCache(const LayerId layerId) noexcept
         {
             _openGlRenderer.ClearLayerFillMeshCache(layerId);
+        }
+
+        void ConfigureFillMeshPreparation(
+            OpenGlVectorLayerRenderer::FillMeshPreparationWakeCallback wakeCallback,
+            void* wakeContext) noexcept
+        {
+            _openGlRenderer.ConfigureFillMeshPreparation(wakeCallback, wakeContext);
+        }
+
+        void PrepareFillMeshesInBackground(
+            const rendering::MapRenderScene& scene) noexcept
+        {
+            _openGlRenderer.PrepareFillMeshesInBackground(scene);
+        }
+
+        [[nodiscard]] bool PublishPreparedFillMeshes() noexcept
+        {
+            return _openGlRenderer.PublishPreparedFillMeshes();
         }
 
     private:

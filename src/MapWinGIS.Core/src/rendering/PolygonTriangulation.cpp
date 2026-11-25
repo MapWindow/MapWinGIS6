@@ -2,14 +2,15 @@
 
 /**
  * @file PolygonTriangulation.cpp
- * @brief Implements polygon triangulation through OGR and GEOS.
+ * @brief Implements fast polygon triangulation with a GEOS fallback.
  *
- * Builds a temporary OGR polygon from the backend-neutral rings, validates
- * it, and converts the constrained Delaunay triangulation into an indexed
- * triangle mesh. All OGR geometry is owned through RAII handles.
+ * Converts backend-neutral ring coordinates directly with earcut. When that
+ * path cannot produce a mesh, it builds a temporary OGR polygon and converts
+ * its constrained Delaunay triangulation into an indexed triangle mesh.
  */
 #include "mapwingis/rendering/PolygonTriangulation.h"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +21,9 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
+#include <mapbox/earcut.hpp>
 #include <ogrsf_frmts.h>
 
 #include "mapwingis/core/Error.h"
@@ -227,66 +230,229 @@ namespace mwg::rendering
         private:
             bool _succeeded = false;
         };
+
+        template <typename PolygonType>
+        std::vector<std::vector<std::array<double, 2>>> MakeEarcutPolygon(
+            const PolygonType& polygon,
+            std::vector<Point>& flattenedPoints)
+        {
+            if (polygon.empty())
+            {
+                throw InvalidArgument("Polygon has no rings");
+            }
+
+            ValidateRing(polygon.front(), "exterior");
+            std::vector<std::vector<std::array<double, 2>>> result;
+            result.reserve(polygon.size());
+            for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
+            {
+                const auto& ring = polygon[ringIndex];
+                if (ringIndex != 0 && ring.size() < 3)
+                {
+                    continue;
+                }
+                if (ringIndex != 0)
+                {
+                    ValidateRing(ring, "interior");
+                }
+
+                std::vector<std::array<double, 2>> converted;
+                converted.reserve(ring.size());
+                const std::size_t ringStart = flattenedPoints.size();
+                for (const Point& point : ring)
+                {
+                    if (flattenedPoints.size() > ringStart &&
+                        flattenedPoints.back().x == point.x &&
+                        flattenedPoints.back().y == point.y)
+                    {
+                        continue;
+                    }
+                    converted.push_back({point.x, point.y});
+                    flattenedPoints.push_back(point);
+                }
+                if (converted.size() > 1 &&
+                    converted.front() == converted.back())
+                {
+                    converted.pop_back();
+                    flattenedPoints.pop_back();
+                }
+                result.push_back(std::move(converted));
+            }
+            return result;
+        }
+
+        template <typename PolygonType>
+        [[nodiscard]] double ExpectedFillArea(const PolygonType& polygon)
+        {
+            double total = 0.0;
+            for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
+            {
+                const auto& ring = polygon[ringIndex];
+                if (ringIndex != 0 && ring.size() < 3)
+                {
+                    continue;
+                }
+                double twiceArea = 0.0;
+                for (std::size_t pointIndex = 0;
+                     pointIndex < ring.size();
+                     ++pointIndex)
+                {
+                    const Point& point = ring[pointIndex];
+                    const Point& next = ring[(pointIndex + 1U) % ring.size()];
+                    twiceArea += point.x * next.y - next.x * point.y;
+                }
+                const double area = std::abs(twiceArea) * 0.5;
+                total += ringIndex == 0 ? area : -area;
+            }
+            return total;
+        }
+
+        [[nodiscard]] double MeshArea(const TriangleMesh& mesh)
+        {
+            double result = 0.0;
+            for (std::size_t index = 0; index < mesh.indices.size(); index += 3U)
+            {
+                const Point& a = mesh.vertices[mesh.indices[index]];
+                const Point& b = mesh.vertices[mesh.indices[index + 1U]];
+                const Point& c = mesh.vertices[mesh.indices[index + 2U]];
+                result += std::abs(TwiceSignedArea(a, b, c)) * 0.5;
+            }
+            return result;
+        }
+
+        template <typename PolygonType>
+        [[nodiscard]] bool TryTriangulateWithEarcut(
+            const PolygonType& polygon,
+            TriangleMesh& mesh)
+        {
+            std::vector<Point> flattenedPoints;
+            flattenedPoints.reserve(polygon.empty() ? 0U : polygon.front().size());
+            const auto rings = MakeEarcutPolygon(polygon, flattenedPoints);
+            std::vector<std::uint32_t> indices =
+                mapbox::earcut<std::uint32_t>(rings);
+            if (indices.empty())
+            {
+                return false;
+            }
+            if (indices.size() % 3U != 0U)
+            {
+                return false;
+            }
+
+            for (std::size_t index = 0; index < indices.size(); index += 3U)
+            {
+                const std::uint32_t a = indices[index];
+                const std::uint32_t b = indices[index + 1U];
+                const std::uint32_t c = indices[index + 2U];
+                if (a >= flattenedPoints.size() ||
+                    b >= flattenedPoints.size() ||
+                    c >= flattenedPoints.size() ||
+                    TwiceSignedArea(
+                        flattenedPoints[a],
+                        flattenedPoints[b],
+                        flattenedPoints[c]) == 0.0)
+                {
+                    return false;
+                }
+                if (TwiceSignedArea(
+                        flattenedPoints[a],
+                        flattenedPoints[b],
+                        flattenedPoints[c]) < 0.0)
+                {
+                    std::swap(indices[index + 1U], indices[index + 2U]);
+                }
+            }
+            mesh.vertices = std::move(flattenedPoints);
+            mesh.indices = std::move(indices);
+            if (mesh.indices.empty())
+            {
+                return false;
+            }
+            const double expectedArea = ExpectedFillArea(polygon);
+            const double meshArea = MeshArea(mesh);
+            const double tolerance =
+                std::max(1.0, std::abs(expectedArea)) * 1e-9;
+            return expectedArea > 0.0 &&
+                std::abs(meshArea - expectedArea) <= tolerance;
+        }
+
+        template <typename PolygonType>
+        TriangleMesh TriangulateWithGeos(const PolygonType& polygon)
+        {
+            GdalEnvironment::Initialize();
+            const std::unique_ptr<OGRPolygon> source = MakeOgrPolygon(polygon);
+            GdalErrorScope scope;
+            std::unique_ptr<OGRGeometry> triangulation;
+            try
+            {
+                triangulation.reset(source->ConstrainedDelaunayTriangulation());
+            }
+            catch (const std::bad_alloc&)
+            {
+                throw;
+            }
+            catch (const std::exception& error)
+            {
+                throw CoreError(std::string("Polygon triangulation failed: ") + error.what());
+            }
+            scope.RethrowCaptureException();
+            if (triangulation == nullptr)
+            {
+                std::string message = "Polygon triangulation failed";
+                const std::string detail = scope.DetailedErrorMessage();
+                if (!detail.empty())
+                {
+                    message += ": " + detail;
+                }
+                throw CoreError(message);
+            }
+
+            MeshBuilder builder;
+            AppendTriangles(*triangulation, builder);
+            TriangleMesh mesh = builder.TakeResult();
+            if (mesh.indices.empty())
+            {
+                throw CoreError("Polygon triangulation produced no triangles");
+            }
+            return mesh;
+        }
     }
 
     template <typename PolygonType>
     TriangleMesh Triangulate(const PolygonType& polygon)
     {
         TriangulationFailureScope failureScope;
-        GdalEnvironment::Initialize();
-        const std::unique_ptr<OGRPolygon> source = MakeOgrPolygon(polygon);
-
-        GdalErrorScope scope;
-        bool valid = false;
+        TriangleMesh mesh;
+        bool meshed = false;
         {
-            const diagnostics::PerformanceScope validationScope(
-                diagnostics::PerformanceOperation::GeometryValidation);
-            valid = source->IsValid();
-        }
-        scope.RethrowCaptureException();
-        if (!valid)
-        {
-            diagnostics::PerformanceDiagnostics::IncrementCounter(
-                diagnostics::PerformanceCounter::InvalidGeometries);
-            throw CoreError(
-                "Polygon triangulation requires a valid polygon; the input is "
-                "self-intersecting or otherwise invalid");
-        }
-
-        const diagnostics::PerformanceScope triangulationScope(
-            diagnostics::PerformanceOperation::PolygonTriangulation);
-        std::unique_ptr<OGRGeometry> triangulation;
-        try
-        {
-            triangulation.reset(source->ConstrainedDelaunayTriangulation());
-        }
-        catch (const std::bad_alloc&)
-        {
-            throw;
-        }
-        catch (const std::exception& error)
-        {
-            throw CoreError(std::string("Polygon triangulation failed: ") + error.what());
-        }
-        scope.RethrowCaptureException();
-        if (triangulation == nullptr)
-        {
-            std::string message = "Polygon triangulation failed";
-            const std::string detail = scope.DetailedErrorMessage();
-            if (!detail.empty())
+            const diagnostics::PerformanceScope triangulationScope(
+                diagnostics::PerformanceOperation::PolygonTriangulation);
+            try
             {
-                message += ": " + detail;
+                meshed = TryTriangulateWithEarcut(polygon, mesh);
             }
-            throw CoreError(message);
+            catch (const InvalidArgument&)
+            {
+                throw;
+            }
+            catch (const std::bad_alloc&)
+            {
+                throw;
+            }
+            catch (const std::exception&)
+            {
+                meshed = false;
+            }
+            catch (...)
+            {
+                meshed = false;
+            }
+            if (!meshed)
+            {
+                mesh = TriangulateWithGeos(polygon);
+            }
         }
 
-        MeshBuilder builder;
-        AppendTriangles(*triangulation, builder);
-        TriangleMesh mesh = builder.TakeResult();
-        if (mesh.indices.empty())
-        {
-            throw CoreError("Polygon triangulation produced no triangles");
-        }
         diagnostics::PerformanceDiagnostics::IncrementCounter(
             diagnostics::PerformanceCounter::PolygonsTriangulated);
         diagnostics::PerformanceDiagnostics::IncrementCounter(

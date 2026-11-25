@@ -101,7 +101,7 @@ TEST_F(PerformanceDiagnosticsTest, RecordsRequestedFillPreparationStages)
     EXPECT_EQ(snapshot.Timing(PerformanceOperation::FeatureGeometryRead).callCount, 2);
     EXPECT_EQ(snapshot.Timing(PerformanceOperation::GeometryConversion).callCount, 1);
     EXPECT_EQ(snapshot.Timing(PerformanceOperation::SceneBuild).callCount, 1);
-    EXPECT_EQ(snapshot.Timing(PerformanceOperation::GeometryValidation).callCount, 1);
+    EXPECT_EQ(snapshot.Timing(PerformanceOperation::GeometryValidation).callCount, 0);
     EXPECT_EQ(snapshot.Timing(PerformanceOperation::PolygonTriangulation).callCount, 1);
     EXPECT_EQ(snapshot.Counter(PerformanceCounter::FeaturesProcessed), 1);
     EXPECT_EQ(snapshot.Counter(PerformanceCounter::GeometriesLoaded), 1);
@@ -172,7 +172,7 @@ TEST_F(PerformanceDiagnosticsTest, RecordsSceneCacheMissesAndHits)
     EXPECT_EQ(snapshot.Counter(PerformanceCounter::SceneCacheHits), 1);
 }
 
-TEST_F(PerformanceDiagnosticsTest, RecordsInvalidAndFailedTriangulation)
+TEST_F(PerformanceDiagnosticsTest, RecordsFailedTriangulationWithoutValidation)
 {
     const rendering::Polygon bowTie{{
         {0, 0}, {2, 2}, {0, 2}, {2, 0}, {0, 0}}};
@@ -185,7 +185,7 @@ TEST_F(PerformanceDiagnosticsTest, RecordsInvalidAndFailedTriangulation)
     }
 
     const PerformanceSnapshot snapshot = PerformanceDiagnostics::Snapshot();
-    EXPECT_EQ(snapshot.Counter(PerformanceCounter::InvalidGeometries), 1);
+    EXPECT_EQ(snapshot.Counter(PerformanceCounter::InvalidGeometries), 0);
     EXPECT_EQ(snapshot.Counter(PerformanceCounter::TriangulationFailures), 1);
     EXPECT_EQ(snapshot.Counter(PerformanceCounter::PolygonsTriangulated), 0);
 }

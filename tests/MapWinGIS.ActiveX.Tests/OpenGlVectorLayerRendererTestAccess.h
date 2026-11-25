@@ -2,7 +2,7 @@
 
 /**
  * @file OpenGlVectorLayerRendererTestAccess.h
- * @brief Provides test-only access to OpenGL recovery and retained buffers.
+ * @brief Provides test-only access to OpenGL recovery, meshes, and retained buffers.
  */
 #pragma once
 
@@ -116,6 +116,38 @@ namespace mwg::activex::testing
             const rendering::MapRenderScene& scene) noexcept
         {
             return renderer.PruneFillMeshCache(scene);
+        }
+
+        static void PrepareFillMeshesInBackground(
+            OpenGlVectorLayerRenderer& renderer,
+            const rendering::MapRenderScene& scene) noexcept
+        {
+            renderer.PrepareFillMeshesInBackground(scene);
+        }
+
+        [[nodiscard]] static bool PublishPreparedFillMeshes(
+            OpenGlVectorLayerRenderer& renderer) noexcept
+        {
+            return renderer.PublishPreparedFillMeshes();
+        }
+
+        [[nodiscard]] static bool WaitForFillMeshPreparation(
+            OpenGlVectorLayerRenderer& renderer,
+            const std::chrono::milliseconds timeout =
+                std::chrono::milliseconds(5000)) noexcept
+        {
+            return renderer.WaitForFillMeshPreparation(timeout);
+        }
+
+        [[nodiscard]] static
+        OpenGlVectorLayerRenderer::FillMeshPreparationState
+        FillMeshPreparationState(
+            const OpenGlVectorLayerRenderer& renderer,
+            const rendering::LayerRenderScene& layer) noexcept
+        {
+            return renderer.GetFillMeshPreparationState(
+                layer.layerId,
+                layer.scene);
         }
     };
 }

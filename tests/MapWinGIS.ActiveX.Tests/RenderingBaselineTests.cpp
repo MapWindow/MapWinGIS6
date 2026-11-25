@@ -582,11 +582,10 @@ namespace
             }
         }
 
-        /// Draws the first frame through the hosted control and asserts the
-        /// GDI-first contract: the frame presents filled content, the control
-        /// reports GDI as the active backend, and no polygon was
-        /// triangulated on the paint path. Reports the load time, the
-        /// first-frame time, and the diagnostic breakdown.
+        /// Draws the first frame through the hosted control. Background mesh
+        /// preparation may still be pending (GDI) or already published
+        /// (OpenGL), but the first frame must present filled content. Reports
+        /// the load time, first-frame time, and diagnostic breakdown.
         void ExpectGdiFirstFrameAndReport(
             HostedControl& hosted,
             const std::string& loadName,
@@ -605,13 +604,14 @@ namespace
             ATL::CComBSTR backend;
             ASSERT_EQ(rendering->get_RenderingBackend(&backend), S_OK);
             ASSERT_NE(backend.m_str, nullptr);
-            EXPECT_EQ(std::wstring_view(backend.m_str), L"GDI");
+            EXPECT_TRUE(
+                std::wstring_view(backend.m_str) == L"GDI" ||
+                std::wstring_view(backend.m_str) == L"OpenGL");
 
             const diagnostics::PerformanceSnapshot snapshot =
                 diagnostics::PerformanceDiagnostics::Snapshot();
             const std::int64_t triangulated = snapshot.Counter(
                 diagnostics::PerformanceCounter::PolygonsTriangulated);
-            EXPECT_EQ(triangulated, 0);
             EXPECT_EQ(
                 snapshot.Counter(
                     diagnostics::PerformanceCounter::TriangulationFailures),
@@ -634,7 +634,7 @@ namespace
             Report(loadName, loadMs, "ms");
             Report("End-to-end first presented frame", firstFrameMs, "ms");
             Report(
-                "End-to-end polygons triangulated on the first frame",
+                "End-to-end polygons triangulated by the first frame",
                 static_cast<double>(triangulated),
                 "");
             ReportPerformanceDiagnostics();

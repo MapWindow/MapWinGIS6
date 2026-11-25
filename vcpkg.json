@@ -24,6 +24,7 @@
         "zstd"
       ]
     },
+    "earcut-hpp",
     "geos"
   ],
   "default-features": [],

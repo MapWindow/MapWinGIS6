@@ -343,19 +343,25 @@ rings and has no mesh. `ViewTransform` captures the `Viewport` once
 per frame so both backends transform every vertex of every layer with the
 same arithmetic as `Viewport::MapToScreen`; GDI draws a screen position in
 the pixel that contains it (`ToPixel`). One backend draws the whole frame.
-For an OpenGL fill draw, the backend accepts a mesh-free source scene and
-triangulates each polygon that has no prepared fill mesh.
+Triangulation uses the internal earcut.hpp dependency first; an area-mismatch
+or rejected polygon falls back to GEOS constrained Delaunay triangulation and,
+if that also fails, retains the source rings for GDI. Earcut consumes the ring
+coordinates without constructing OGR geometries and does not perform the
+previous `IsValid` precheck. Large mesh jobs are split across at most four
+workers.
 The generated meshes remain associated with that immutable scene and are
 reused by later draws; they do not mutate the Core scene. OpenGL outline
 mode draws the source rings without requiring fill meshes. With the
 `Automatic` preference, the coordinator instead paints a Fill-mode frame
 whose layers have no fill meshes yet with the GDI backend, so the paint
-path never blocks on triangulation. Nothing prepares those meshes during
-`Automatic` drawing today — they exist only when a scene supplies them or
-an explicit `OpenGL` draw caches them — so under the control's default
-settings Fill stays on GDI until background preparation (planned) fills
-the cache and the frame is redrawn. Only an explicit `OpenGL`
-preference keeps lazy on-draw triangulation. GDI checks each
+path never blocks on triangulation. The control queues mesh generation for
+the immutable scene on its owner thread. A background coordinator reads only
+the scene snapshot, and a posted message publishes completed meshes on the
+control thread and invalidates the layer frame. The next frame can switch to
+OpenGL. Replaced, removed, and explicitly invalidated scene identities cancel
+their queued tokens, so stale results are never published. An explicit
+`OpenGL` preference still supports synchronous lazy preparation when a caller
+draws a mesh-free scene directly. GDI checks each
 layer before drawing it; a layer with non-finite or out-of-range device coordinates is
 skipped and reported (`GetFailedLayers`, `RenderingStatus`) while the other
 layers are still drawn.
@@ -512,12 +518,13 @@ shares cached coordinates and meshes instead of copying them. An automatically
 built layer holds its selected geometry once, and a prepared layer holds its
 complete geometry once. Rebuilding a selection temporarily retains both the old
 scene and the new selection until the assembled snapshot is replaced.
-OpenGL's lazily generated fill meshes have a second, backend-owned cache keyed
+OpenGL's generated fill meshes have a second, backend-owned cache keyed
 by stable `LayerId` and the immutable scene identity. Reordering, hiding,
 redrawing, viewport changes, and backend selection retain valid entries.
 Replacing one layer scene invalidates only that layer's entry; removed layers
-and explicit invalidation release their generated mesh storage. A parallel
-context-owned GPU buffer cache uses the same layer and scene identity. Scene
+and explicit invalidation cancel pending work and release their generated mesh
+storage. Pending, ready, and failed states remain distinct in the cache. A
+parallel context-owned GPU buffer cache uses the same layer and scene identity. Scene
 replacement, context recreation, and coordinator invalidation release or queue
 the affected vertex and index buffers; viewport changes do not.
 When a driver cannot provide a fast extent, scene preparation computes bounds
@@ -537,8 +544,9 @@ and `Ring` types remain available for caller-created triangulation input.
 There is no tiling or paging. GDI skips a layer whose device coordinates
 exceed its range. It clips drawing to the requested target rectangle and the
 host's existing clip region, then restores the device context. Fill
-triangulation runs when scene preparation explicitly requests it or when
-OpenGL first needs a missing mesh. View changes inside the scene's processing
+triangulation runs when scene preparation explicitly requests it, during
+background preparation for the control, or when an explicit OpenGL draw first
+needs a missing mesh. View changes inside the scene's processing
 margin and redraws reuse retained meshes; changes outside the margin replace
 the affected scene and its backend mesh entry. The opt-in
 rendering baseline (see [TESTING.md](TESTING.md#rendering-performance-baseline))

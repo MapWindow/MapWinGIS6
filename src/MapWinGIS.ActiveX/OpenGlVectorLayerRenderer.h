@@ -7,17 +7,20 @@
  * The backend owns a reusable OpenGL context, created on a hidden window that
  * is never presented. Immutable scene geometry is cached in GPU buffers, then
  * rendered into a framebuffer object before the required pixels are copied to
- * the host device context.
+ * the host device context. Missing fill meshes can be prepared on a background
+ * worker and published without giving that worker access to the cache.
  */
 #pragma once
 
 #include <Windows.h>
 
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "VectorRenderBackend.h"
@@ -97,8 +100,33 @@ namespace mwg::activex
             Failed
         };
 
+        /// Background-preparation state for one layer/scene pair.
+        enum class FillMeshPreparationState : int
+        {
+            NotStarted,
+            Pending,
+            Ready,
+            Failed
+        };
+
+        using FillMeshPreparationWakeCallback = bool(*)(void*) noexcept;
+
         [[nodiscard]] FillMeshReadiness GetFillMeshReadiness(
             const rendering::MapRenderScene& scene) const noexcept;
+
+        void ConfigureFillMeshPreparation(
+            FillMeshPreparationWakeCallback wakeCallback,
+            void* wakeContext) noexcept;
+
+        /// Queues missing meshes without doing triangulation on the caller.
+        /// Cached scene entries and an earlier preparation for the same
+        /// immutable scene are reused.
+        void PrepareFillMeshesInBackground(
+            const rendering::MapRenderScene& scene) noexcept;
+
+        /// Publishes completed worker results from the control's owner thread.
+        /// Returns true when a pending state changed.
+        [[nodiscard]] bool PublishPreparedFillMeshes() noexcept;
 
         /// Returns why the scene cannot be drawn in the requested mode
         /// without generating geometry, or nullopt when it is drawable.
@@ -170,6 +198,10 @@ namespace mwg::activex
             GetFillMeshes(
                 LayerId layerId,
                 const rendering::VectorRenderScene& scene) const noexcept;
+        [[nodiscard]] FillMeshPreparationState GetFillMeshPreparationState(
+            LayerId layerId,
+            const std::shared_ptr<const rendering::VectorRenderScene>& scene)
+            const noexcept;
         [[nodiscard]] bool PruneFillMeshCache(
             const rendering::MapRenderScene& scene) noexcept;
         void ClearFillMeshCache() noexcept;
@@ -177,6 +209,14 @@ namespace mwg::activex
         [[nodiscard]] std::size_t FillMeshCacheSize() const noexcept;
         [[nodiscard]] std::size_t CachedGeneratedMeshStorage() const noexcept;
         [[nodiscard]] std::size_t CachedGeneratedMeshStorageBytes() const noexcept;
+        [[nodiscard]] bool WaitForFillMeshPreparation(
+            std::chrono::milliseconds timeout) noexcept;
+        void CancelLayerFillMeshPreparation(LayerId layerId) noexcept;
+        void CancelAllFillMeshPreparation() noexcept;
+        void StopFillMeshPreparation() noexcept;
+        struct FillMeshPreparation;
+        static void RunFillMeshPreparation(
+            const std::shared_ptr<FillMeshPreparation>& preparation) noexcept;
         [[nodiscard]] HRESULT RenderScene(
             const rendering::MapRenderScene& scene,
             const Viewport& viewport,
@@ -207,6 +247,10 @@ namespace mwg::activex
         std::vector<unsigned char> _pixelBuffer;
         struct FillMeshCache;
         std::shared_ptr<FillMeshCache> _fillMeshCache;
+        std::shared_ptr<FillMeshPreparation> _fillMeshPreparation;
+        std::thread _fillMeshPreparationWorker;
+        FillMeshPreparationWakeCallback _fillMeshWakeCallback = nullptr;
+        void* _fillMeshWakeContext = nullptr;
         struct GpuBufferCache;
         std::unique_ptr<GpuBufferCache> _gpuBufferCache;
         std::size_t _gpuBufferUploadCount = 0;

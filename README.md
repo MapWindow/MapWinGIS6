@@ -40,10 +40,12 @@ release the loaded datasets before switching or refreshing them.
 
 Core stores polygon coordinates in flat buffers and caches prepared geometry
 per map layer. Visibility changes reuse that geometry without rereading
-datasets or triangulating polygons again. OpenGL generates missing fill
-meshes on the first fill draw and caches them per stable map layer. Viewport
-changes, backend selection, layer reordering, and temporary draws reuse valid
-entries; changed or removed layers release or replace only their own meshes.
+datasets or triangulating polygons again. The control paints a pending
+`Automatic` frame with GDI while bounded background workers prepare missing
+fill meshes with earcut; a later frame switches to OpenGL. The meshes are
+cached per stable map layer. Viewport changes, backend selection, layer
+reordering, and temporary draws reuse valid entries; changed or removed layers
+cancel pending work and release or replace only their own meshes.
 The screen OpenGL renderer uploads immutable fill and outline geometry to
 reusable GPU buffers, then changes only its viewport transform on pan and zoom.
 Systems without buffer-object support keep the client-array fallback.
