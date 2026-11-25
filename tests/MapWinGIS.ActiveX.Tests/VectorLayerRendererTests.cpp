@@ -434,6 +434,20 @@ TEST(VectorLayerRenderer, AutomaticFillWithSceneMeshesUsesOpenGl)
     const mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
     const mwg::Viewport viewport = FitViewport(bounds);
 
+    // Run the probe through the coordinator itself so the assertion only
+    // applies where OpenGL can actually present a frame.
+    mwg::activex::VectorLayerRenderer probe;
+    probe.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
+    const HRESULT probeResult =
+        probe.Draw(surface.Get(), bounds, scene, viewport);
+    if (probeResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(probeResult, S_OK);
+    ASSERT_EQ(
+        probe.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
+
     mwg::activex::VectorLayerRenderer renderer;
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(
