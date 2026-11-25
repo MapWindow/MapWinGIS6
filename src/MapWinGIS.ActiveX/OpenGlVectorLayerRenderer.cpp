@@ -1663,14 +1663,6 @@ namespace mwg::activex
             return E_FAIL;
         }
 
-        if (!ResizeFramebuffer(target.width, target.height))
-        {
-            _lastFailureReason =
-                L"OpenGL could not allocate a complete framebuffer for this target.";
-            OutputDebugStringW(L"MapWinGIS: no complete OpenGL framebuffer for this size.\n");
-            return S_FALSE;
-        }
-
         if (_contextInvalid)
         {
             _lastFailureReason =
@@ -1967,6 +1959,26 @@ namespace mwg::activex
                 target.pixelWidth * target.pixelHeight * kBytesPerPixel;
             if (!EnsureStaging(stagingBytes))
             {
+                return S_FALSE;
+            }
+
+            const ScopedCurrentContext currentContext(
+                _deviceContext, _renderingContext);
+            if (!currentContext.IsValid())
+            {
+                _lastFailureReason =
+                    L"OpenGL could not activate its rendering context.";
+                OutputDebugStringW(
+                    L"MapWinGIS: could not activate the OpenGL rendering context.\n");
+                _contextInvalid = true;
+                return E_FAIL;
+            }
+            if (!ResizeFramebuffer(target.width, target.height))
+            {
+                _lastFailureReason =
+                    L"OpenGL could not allocate a complete framebuffer for this target.";
+                OutputDebugStringW(
+                    L"MapWinGIS: no complete OpenGL framebuffer for this size.\n");
                 return S_FALSE;
             }
         }
