@@ -401,6 +401,7 @@ namespace mwg
     Projection Projection::FromWkt(const std::string_view wkt)
     {
         GdalEnvironment::Initialize();
+        CPLErrorReset();
         const auto parsed = TryFromWkt(wkt);
         if (!parsed.has_value())
         {
@@ -412,6 +413,7 @@ namespace mwg
     Projection Projection::FromProj4(const std::string_view proj4)
     {
         GdalEnvironment::Initialize();
+        CPLErrorReset();
         const auto parsed = TryFromProj4(proj4);
         if (!parsed.has_value())
         {
