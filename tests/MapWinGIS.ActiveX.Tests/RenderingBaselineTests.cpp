@@ -612,6 +612,11 @@ namespace
                 diagnostics::PerformanceDiagnostics::Snapshot();
             const std::int64_t triangulated = snapshot.Counter(
                 diagnostics::PerformanceCounter::PolygonsTriangulated);
+            if (std::wstring_view(backend.m_str) == L"OpenGL")
+            {
+                EXPECT_GT(triangulated, 0)
+                    << "OpenGL fill rendering requires a prepared mesh";
+            }
             EXPECT_EQ(
                 snapshot.Counter(
                     diagnostics::PerformanceCounter::TriangulationFailures),

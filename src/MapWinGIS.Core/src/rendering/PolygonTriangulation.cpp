@@ -257,25 +257,39 @@ namespace mwg::rendering
                 }
 
                 std::vector<std::array<double, 2>> converted;
+                std::vector<Point> convertedPoints;
                 converted.reserve(ring.size());
-                const std::size_t ringStart = flattenedPoints.size();
+                convertedPoints.reserve(ring.size());
                 for (const Point& point : ring)
                 {
-                    if (flattenedPoints.size() > ringStart &&
-                        flattenedPoints.back().x == point.x &&
-                        flattenedPoints.back().y == point.y)
+                    if (!convertedPoints.empty() &&
+                        convertedPoints.back().x == point.x &&
+                        convertedPoints.back().y == point.y)
                     {
                         continue;
                     }
                     converted.push_back({point.x, point.y});
-                    flattenedPoints.push_back(point);
+                    convertedPoints.push_back(point);
                 }
                 if (converted.size() > 1 &&
                     converted.front() == converted.back())
                 {
                     converted.pop_back();
-                    flattenedPoints.pop_back();
+                    convertedPoints.pop_back();
                 }
+                if (converted.size() < 3)
+                {
+                    if (ringIndex == 0)
+                    {
+                        throw InvalidArgument(
+                            "Polygon exterior ring has fewer than three distinct points");
+                    }
+                    continue;
+                }
+                flattenedPoints.insert(
+                    flattenedPoints.end(),
+                    convertedPoints.begin(),
+                    convertedPoints.end());
                 result.push_back(std::move(converted));
             }
             return result;
@@ -292,6 +306,7 @@ namespace mwg::rendering
                 {
                     continue;
                 }
+                const Point& origin = ring.front();
                 double twiceArea = 0.0;
                 for (std::size_t pointIndex = 0;
                      pointIndex < ring.size();
@@ -299,7 +314,9 @@ namespace mwg::rendering
                 {
                     const Point& point = ring[pointIndex];
                     const Point& next = ring[(pointIndex + 1U) % ring.size()];
-                    twiceArea += point.x * next.y - next.x * point.y;
+                    twiceArea +=
+                        (point.x - origin.x) * (next.y - origin.y) -
+                        (next.x - origin.x) * (point.y - origin.y);
                 }
                 const double area = std::abs(twiceArea) * 0.5;
                 total += ringIndex == 0 ? area : -area;
@@ -339,6 +356,7 @@ namespace mwg::rendering
                 return false;
             }
 
+            MeshBuilder builder;
             for (std::size_t index = 0; index < indices.size(); index += 3U)
             {
                 const std::uint32_t a = indices[index];
@@ -346,24 +364,23 @@ namespace mwg::rendering
                 const std::uint32_t c = indices[index + 2U];
                 if (a >= flattenedPoints.size() ||
                     b >= flattenedPoints.size() ||
-                    c >= flattenedPoints.size() ||
-                    TwiceSignedArea(
-                        flattenedPoints[a],
-                        flattenedPoints[b],
-                        flattenedPoints[c]) == 0.0)
+                    c >= flattenedPoints.size())
                 {
                     return false;
                 }
                 if (TwiceSignedArea(
                         flattenedPoints[a],
                         flattenedPoints[b],
-                        flattenedPoints[c]) < 0.0)
+                        flattenedPoints[c]) == 0.0)
                 {
-                    std::swap(indices[index + 1U], indices[index + 2U]);
+                    continue;
                 }
+                builder.AddTriangle(
+                    flattenedPoints[a],
+                    flattenedPoints[b],
+                    flattenedPoints[c]);
             }
-            mesh.vertices = std::move(flattenedPoints);
-            mesh.indices = std::move(indices);
+            mesh = builder.TakeResult();
             if (mesh.indices.empty())
             {
                 return false;

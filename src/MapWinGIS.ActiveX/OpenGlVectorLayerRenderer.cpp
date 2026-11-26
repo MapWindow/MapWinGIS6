@@ -321,7 +321,7 @@ namespace mwg::activex
                     {4U, polygonCount, std::max(1U, hardwareThreads)});
             }
 
-            std::vector<std::thread> workers;
+            std::vector<std::jthread> workers;
             workers.reserve(workerCount - 1U);
             for (std::size_t index = 1; index < workerCount; ++index)
             {
@@ -335,7 +335,7 @@ namespace mwg::activex
                 }
             }
             run();
-            for (std::thread& worker : workers)
+            for (std::jthread& worker : workers)
             {
                 worker.join();
             }
@@ -564,6 +564,7 @@ namespace mwg::activex
         {
             LayerId layerId;
             std::shared_ptr<const rendering::VectorRenderScene> scene;
+            std::shared_ptr<std::atomic_bool> cancelled;
             std::uint64_t token = 0;
             FillMeshPreparationWakeCallback wakeCallback = nullptr;
             void* wakeContext = nullptr;
@@ -591,6 +592,7 @@ namespace mwg::activex
         std::condition_variable completionChanged;
         std::deque<Job> jobs;
         std::map<LayerId, std::uint64_t> activeTokens;
+        std::map<LayerId, std::shared_ptr<std::atomic_bool>> cancellationFlags;
         std::vector<Result> completed;
         bool wakePending = false;
         bool stopping = false;
@@ -753,6 +755,10 @@ namespace mwg::activex
     {
         try
         {
+            if (_initializationFailed)
+            {
+                return;
+            }
             if (_fillMeshCache == nullptr)
             {
                 _fillMeshCache = std::make_shared<FillMeshCache>();
@@ -784,6 +790,7 @@ namespace mwg::activex
                     {
                         CancelLayerFillMeshPreparation(layer.layerId);
                         cached = _fillMeshCache->layers.erase(cached);
+                        cached = _fillMeshCache->layers.end();
                     }
                     else if (
                         cached->second.state == FillMeshPreparationState::Pending ||
@@ -809,6 +816,7 @@ namespace mwg::activex
                 FillMeshPreparation::Job job;
                 job.layerId = layer.layerId;
                 job.scene = layer.scene;
+                job.cancelled = std::make_shared<std::atomic_bool>(false);
                 job.token = cached->second.preparationToken;
                 job.wakeCallback = _fillMeshWakeCallback;
                 job.wakeContext = _fillMeshWakeContext;
@@ -817,6 +825,9 @@ namespace mwg::activex
                 _fillMeshPreparation->activeTokens.insert_or_assign(
                     layer.layerId,
                     job.token);
+                _fillMeshPreparation->cancellationFlags.insert_or_assign(
+                    layer.layerId,
+                    job.cancelled);
                 try
                 {
                     _fillMeshPreparation->jobs.push_back(std::move(job));
@@ -824,6 +835,7 @@ namespace mwg::activex
                 catch (...)
                 {
                     _fillMeshPreparation->activeTokens.erase(layer.layerId);
+                    _fillMeshPreparation->cancellationFlags.erase(layer.layerId);
                     cached->second.state = FillMeshPreparationState::Failed;
                     throw;
                 }
@@ -889,10 +901,9 @@ namespace mwg::activex
                 const FillMeshPreparationResult preparationResult =
                     TriangulateFillMeshes(
                         *job.scene,
-                        [&preparation, &job]() noexcept
+                        [&job]() noexcept
                         {
-                            std::lock_guard lock(preparation->mutex);
-                            return !preparation->IsCurrent(job);
+                            return job.cancelled->load(std::memory_order_relaxed);
                         },
                         result.meshes);
                 if (preparationResult ==
@@ -923,7 +934,8 @@ namespace mwg::activex
                 result.meshes.clear();
             }
 
-            bool wakeOwner = false;
+            bool wakeAttempted = false;
+            bool wakePosted = false;
             {
                 std::lock_guard lock(preparation->mutex);
                 if (!preparation->IsCurrent(job))
@@ -932,6 +944,7 @@ namespace mwg::activex
                     continue;
                 }
                 preparation->activeTokens.erase(job.layerId);
+                preparation->cancellationFlags.erase(job.layerId);
                 if (result.failed)
                 {
                     std::vector<std::optional<rendering::TriangleMesh>>()
@@ -940,8 +953,14 @@ namespace mwg::activex
                 try
                 {
                     preparation->completed.push_back(std::move(result));
-                    wakeOwner = !preparation->wakePending;
-                    preparation->wakePending = true;
+                    if (!preparation->wakePending &&
+                        job.wakeCallback != nullptr)
+                    {
+                        wakeAttempted = true;
+                        wakePosted =
+                            job.wakeCallback(job.wakeContext);
+                        preparation->wakePending = wakePosted;
+                    }
                 }
                 catch (const std::bad_alloc&)
                 {
@@ -955,9 +974,7 @@ namespace mwg::activex
                 }
                 preparation->completionChanged.notify_all();
             }
-            if (wakeOwner &&
-                job.wakeCallback != nullptr &&
-                !job.wakeCallback(job.wakeContext))
+            if (wakeAttempted && !wakePosted)
             {
                 ::OutputDebugStringW(
                     L"MapWinGIS: unable to post background fill-mesh completion.\n");
@@ -2084,8 +2101,7 @@ namespace mwg::activex
             timeout,
             [this]()
             {
-                return !_fillMeshPreparation->completed.empty() ||
-                    _fillMeshPreparation->activeTokens.empty();
+                return _fillMeshPreparation->activeTokens.empty();
             });
     }
 
@@ -2097,7 +2113,14 @@ namespace mwg::activex
             return;
         }
         std::lock_guard lock(_fillMeshPreparation->mutex);
+        const auto cancellation =
+            _fillMeshPreparation->cancellationFlags.find(layerId);
+        if (cancellation != _fillMeshPreparation->cancellationFlags.end())
+        {
+            cancellation->second->store(true, std::memory_order_relaxed);
+        }
         (void)_fillMeshPreparation->activeTokens.erase(layerId);
+        (void)_fillMeshPreparation->cancellationFlags.erase(layerId);
         (void)std::erase_if(
             _fillMeshPreparation->completed,
             [layerId](const FillMeshPreparation::Result& result)
@@ -2124,7 +2147,14 @@ namespace mwg::activex
             return;
         }
         std::lock_guard lock(_fillMeshPreparation->mutex);
+        for (const auto& [layerId, cancellation] :
+             _fillMeshPreparation->cancellationFlags)
+        {
+            static_cast<void>(layerId);
+            cancellation->store(true, std::memory_order_relaxed);
+        }
         _fillMeshPreparation->activeTokens.clear();
+        _fillMeshPreparation->cancellationFlags.clear();
         _fillMeshPreparation->completed.clear();
         _fillMeshPreparation->jobs.clear();
         _fillMeshPreparation->wakePending = false;
@@ -2140,7 +2170,14 @@ namespace mwg::activex
         {
             std::lock_guard lock(_fillMeshPreparation->mutex);
             _fillMeshPreparation->stopping = true;
+            for (const auto& [layerId, cancellation] :
+                 _fillMeshPreparation->cancellationFlags)
+            {
+                static_cast<void>(layerId);
+                cancellation->store(true, std::memory_order_relaxed);
+            }
             _fillMeshPreparation->activeTokens.clear();
+            _fillMeshPreparation->cancellationFlags.clear();
             _fillMeshPreparation->completed.clear();
             _fillMeshPreparation->jobs.clear();
             _fillMeshPreparation->wakePending = false;

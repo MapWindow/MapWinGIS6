@@ -324,6 +324,34 @@ TEST(PolygonTriangulation, TriangulatesConvexPolygonWithSeveralVertices)
     EXPECT_GE(mesh.indices.size(), 12u);
 }
 
+TEST(PolygonTriangulation, KeepsLargeProjectedCoordinatesStable)
+{
+    constexpr double offsetX = 600000.1;
+    constexpr double offsetY = 5000000.2;
+    const rendering::Polygon polygon = MakePolygon({
+        {offsetX, offsetY},
+        {offsetX + 10.2, offsetY},
+        {offsetX + 10.2, offsetY + 7.3},
+        {offsetX, offsetY + 7.3}});
+
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(MeshArea(mesh), 10.2 * 7.3, 1e-8);
+}
+
+TEST(PolygonTriangulation, IgnoresZeroAreaTriangles)
+{
+    const rendering::Polygon polygon =
+        MakePolygon({{0, 0}, {1, 0}, {2, 0}, {2, 1}, {0, 1}});
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(MeshArea(mesh), 2.0, 1e-12);
+}
+
 // --- Concave polygons ---
 
 TEST(PolygonTriangulation, TriangulatesSimpleConcavePolygon)
@@ -393,13 +421,26 @@ TEST(PolygonTriangulation, TriangulatesHoleThatTouchesExteriorRing)
 {
     const rendering::Polygon polygon =
         MakePolygon(
-            {{0, 0}, {5, 0}, {5, 5}, {0, 5}},
+            {{0, 0}, {1, 0}, {5, 0}, {5, 5}, {0, 5}},
             {{{1, 0}, {2, 0}, {2, 1}, {1, 1}}});
     const rendering::TriangleMesh mesh =
         rendering::TriangulatePolygon(polygon);
 
     ExpectValidMesh(mesh);
     EXPECT_NEAR(MeshArea(mesh), 24.0, 1e-9);
+}
+
+TEST(PolygonTriangulation, IgnoresInteriorRingThatCollapsesAfterDeduplication)
+{
+    const rendering::Polygon polygon =
+        MakePolygon(
+            {{0, 0}, {4, 0}, {4, 4}, {0, 4}},
+            {{{1, 1}, {1, 1}, {1, 1}}});
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(MeshArea(mesh), 16.0, 1e-12);
 }
 
 // --- Input validation ---
@@ -413,6 +454,14 @@ TEST(PolygonTriangulation, RejectsDegenerateExteriorRing)
 {
     EXPECT_THROW(
         (void)rendering::TriangulatePolygon(MakePolygon({{0, 0}, {1, 0}})),
+        InvalidArgument);
+}
+
+TEST(PolygonTriangulation, RejectsExteriorRingThatCollapsesAfterDeduplication)
+{
+    EXPECT_THROW(
+        (void)rendering::TriangulatePolygon(
+            MakePolygon({{0, 0}, {1, 0}, {1, 0}, {1, 0}})),
         InvalidArgument);
 }
 

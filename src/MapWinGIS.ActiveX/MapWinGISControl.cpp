@@ -1642,6 +1642,8 @@ LRESULT CMapWinGISControl::OnCreate(UINT, WPARAM, LPARAM, BOOL& handled)
         ::OutputDebugStringW(L"MapWinGIS: unable to reactivate GDAL operations.\n");
     }
     _gdalEvents.OnSize();
+    InvalidateLayerCache();
+    PrepareFillMeshesInBackground();
     handled = FALSE;
     return 0;
 }
@@ -1835,6 +1837,8 @@ STDMETHODIMP CMapWinGISControl::SetClientSite(IOleClientSite* const clientSite)
         const HRESULT reset = _gdalEvents.Reactivate();
         if (FAILED(reset))
             return SetControlComErrorInfo("The GDAL operation source could not be reactivated.", IID_IMapWinGISControlGdal, reset);
+        InvalidateLayerCache();
+        PrepareFillMeshesInBackground();
     }
     return FAILED(result)
         ? SetControlComErrorInfo("The ActiveX client site could not be changed.", IID_IMapWinGISControl4, result)
