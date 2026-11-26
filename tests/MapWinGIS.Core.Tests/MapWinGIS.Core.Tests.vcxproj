@@ -71,6 +71,7 @@
     <ClCompile Include="MapViewTests.cpp" />
     <ClCompile Include="PerformanceDiagnosticsTests.cpp" />
     <ClCompile Include="PolygonTriangulationTests.cpp" />
+    <ClCompile Include="ProjectionTests.cpp" />
     <ClCompile Include="ViewportTests.cpp" />
     <ClCompile Include="TestData.cpp" />
     <ClCompile Include="VectorDatasetTests.cpp" />

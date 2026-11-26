@@ -24,6 +24,10 @@ and GeoPackage. The ActiveX layer supports COM activation, vector loading,
 polygon rendering, and asynchronous generic GDAL algorithms with progress and
 cancellation events.
 
+Core exposes an immutable projection value for EPSG, WKT, and PROJ4 coordinate
+reference systems. Vector layers report that value, and a map adopts and keeps
+the first available layer projection until a host explicitly changes it.
+
 The core also supports a shared map viewport with pan, center zoom, anchored
 zoom, and fitting to the visible map or a named layer. These navigation calls
 do not depend on a window. `IMapWinGISControl5` exposes this programmatic

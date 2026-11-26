@@ -18,6 +18,7 @@
 
 #include <cpl_conv.h>
 #include <cpl_error.h>
+#include <cpl_vsi.h>
 #include <gdal_priv.h>
 #include <ogr_api.h>
 #include <ogrsf_frmts.h>
@@ -139,6 +140,91 @@ namespace mwg
         }
 
         constexpr std::size_t kMaxWktExcerptBytes = 200;
+
+        bool GeoJsonDeclaresCrs(GDALDataset& dataset)
+        {
+            const GDALDriver* driver = dataset.GetDriver();
+            if (driver == nullptr ||
+                std::string_view(driver->GetDescription()) != "GeoJSON")
+            {
+                return true;
+            }
+
+            VSILFILE* file = VSIFOpenL(dataset.GetDescription(), "rb");
+            if (file == nullptr)
+            {
+                return true;
+            }
+
+            bool declaresCrs = false;
+            bool inString = false;
+            bool escaped = false;
+            bool possibleCrsKey = false;
+            int depth = 0;
+            std::string token;
+            char buffer[4096];
+            while (const std::size_t read = VSIFReadL(
+                       buffer, 1, std::size(buffer), file))
+            {
+                for (std::size_t index = 0; index < read; ++index)
+                {
+                    const char character = buffer[index];
+                    if (inString)
+                    {
+                        if (escaped)
+                        {
+                            token.push_back(character);
+                            escaped = false;
+                        }
+                        else if (character == '\\')
+                        {
+                            escaped = true;
+                        }
+                        else if (character == '"')
+                        {
+                            inString = false;
+                            possibleCrsKey = depth == 1 && token == "crs";
+                        }
+                        else
+                        {
+                            token.push_back(character);
+                        }
+                        continue;
+                    }
+
+                    if (possibleCrsKey &&
+                        character != ' ' && character != '\t' &&
+                        character != '\r' && character != '\n')
+                    {
+                        declaresCrs = character == ':';
+                        possibleCrsKey = false;
+                    }
+                    if (declaresCrs)
+                    {
+                        break;
+                    }
+                    if (character == '"')
+                    {
+                        token.clear();
+                        inString = true;
+                    }
+                    else if (character == '{' || character == '[')
+                    {
+                        ++depth;
+                    }
+                    else if (character == '}' || character == ']')
+                    {
+                        --depth;
+                    }
+                }
+                if (declaresCrs)
+                {
+                    break;
+                }
+            }
+            VSIFCloseL(file);
+            return declaresCrs;
+        }
 
         std::string WktExcerpt(const std::string_view wkt)
         {
@@ -716,21 +802,30 @@ namespace mwg
         return -1;
     }
 
-    std::string VectorLayer::ProjectionWkt() const
+    Projection VectorLayer::Projection() const
     {
         const OGRSpatialReference* srs = _impl->_layer->GetSpatialRef();
-        if (srs == nullptr) return {};
+        if (srs == nullptr || !GeoJsonDeclaresCrs(_impl->_dataset))
+        {
+            return {};
+        }
 
         char* wkt = nullptr;
         if (srs->exportToWkt(&wkt) != OGRERR_NONE || wkt == nullptr)
         {
             CPLFree(wkt);
-            return {};
+            throw CoreError("Cannot export vector layer projection");
         }
 
         std::string result(wkt);
         CPLFree(wkt);
-        return result;
+        const std::optional<mwg::Projection> projection =
+            mwg::Projection::TryFromWkt(result);
+        if (!projection.has_value())
+        {
+            throw CoreError("Cannot read vector layer projection");
+        }
+        return *projection;
     }
 
     bool VectorLayer::IsCellNull(const int fieldIndex, const std::int64_t featureIndex) const

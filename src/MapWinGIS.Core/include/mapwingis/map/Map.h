@@ -5,8 +5,8 @@
  * @brief Declares the map model: an ordered collection of map layers.
  *
  * The map owns its layer collection and map-level layer state, such as
- * visibility, and calculates the combined extent of its layers. It holds no
- * windowing, COM, or rendering-backend state.
+ * visibility, coordinate reference system, and calculates the combined
+ * extent of its layers. It holds no windowing, COM, or rendering-backend state.
  *
  * Layer coordinates are used as stored in their source. The map assumes all
  * layers use compatible coordinates; it does not reproject, so layers in
@@ -21,6 +21,7 @@
 
 #include "mapwingis/core/Api.h"
 #include "mapwingis/core/Extent.h"
+#include "mapwingis/projection/Projection.h"
 
 namespace mwg
 {
@@ -106,6 +107,10 @@ namespace mwg
     /// Positions shift when layers are removed, so use LayerId to refer to a
     /// layer over time.
     ///
+    /// Projection: the first added layer with a CRS sets the map projection.
+    /// It persists after layers are removed or cleared until explicitly
+    /// changed with SetProjection or ClearProjection.
+    ///
     /// Duplicates: the same source layer may be added more than once. Each
     /// addition is a separate map layer with its own identity and state.
     ///
@@ -140,6 +145,10 @@ namespace mwg
 
         /// Removes all layers. Identities of removed layers are not reused.
         void Clear() noexcept;
+
+        [[nodiscard]] const std::optional<mwg::Projection>& Projection() const noexcept;
+        void SetProjection(mwg::Projection projection);
+        void ClearProjection() noexcept;
 
         [[nodiscard]] int LayerCount() const noexcept;
 

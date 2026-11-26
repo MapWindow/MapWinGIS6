@@ -480,6 +480,42 @@ namespace mwg::test
         return path;
     }
 
+    std::filesystem::path MakeProjectionlessGeoJson(
+        const std::filesystem::path& directory,
+        const std::string& fileName)
+    {
+        GdalEnvironment::Initialize();
+
+        const std::filesystem::path path = directory / fileName;
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GeoJSON");
+        if (driver == nullptr) throw std::runtime_error("GeoJSON driver is not available");
+
+        GDALDatasetUniquePtr dataset(
+            driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+        if (!dataset) throw std::runtime_error("Cannot create " + ToUtf8(path));
+
+        OGRLayer* layer = dataset->CreateLayer("projectionless", nullptr, wkbPolygon);
+        if (layer == nullptr) throw std::runtime_error("Cannot create projectionless layer");
+
+        OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
+        OGRPolygon polygon;
+        OGRLinearRing ring;
+        ring.addPoint(0.0, 0.0);
+        ring.addPoint(1.0, 0.0);
+        ring.addPoint(1.0, 1.0);
+        ring.addPoint(0.0, 1.0);
+        ring.closeRings();
+        polygon.addRing(&ring);
+        feature->SetGeometry(&polygon);
+        if (layer->CreateFeature(feature.get()) != OGRERR_NONE)
+        {
+            throw std::runtime_error("Cannot write projectionless feature");
+        }
+
+        dataset.reset();
+        return path;
+    }
+
     std::filesystem::path MakeSampleShapefile(const std::filesystem::path& directory,
                                               const std::string& baseName)
     {

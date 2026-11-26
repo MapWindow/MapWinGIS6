@@ -28,6 +28,21 @@ The standalone `Polygon` and `Ring` types and their triangulation overload
 remain available. This design reduces per-ring allocations and makes
 geometry copies contiguous.
 
+## Projection model
+
+MapWinGIS6 replaces the MapWinGIS 5 `GeoProjection` COM design with the
+immutable Core value `mwg::Projection`. EPSG, WKT, and PROJ4 input and EPSG
+autodetection are supported, but `.prj` file I/O and mutable transformation
+state are not part of the value type. Coordinate transforms are stateless
+objects created with `Projection::TransformTo`.
+
+`VectorLayer::Projection()` replaces the v6-only
+`ProjectionWkt()` string accessor. Callers that need WKT use
+`Projection::ExportToWkt()`. There is intentionally no compatibility alias:
+the string property had not established a MapWinGIS 5 automation contract.
+The map adopts its first available layer projection and retains it when layers
+are removed or cleared.
+
 ## What "port" means here
 
 1. **Understand the legacy behavior.** Inspect v5 sources and tests to learn

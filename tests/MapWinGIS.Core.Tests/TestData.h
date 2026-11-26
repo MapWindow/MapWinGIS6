@@ -136,6 +136,11 @@ namespace mwg::test
     std::filesystem::path MakeTwoLayerDataset(const std::filesystem::path& directory,
                                               const std::string& fileName);
 
+    /// Writes a polygon GeoJSON dataset without a CRS member.
+    std::filesystem::path MakeProjectionlessGeoJson(
+        const std::filesystem::path& directory,
+        const std::string& fileName);
+
     /// Creates a directory that is deleted when the object goes out of scope.
     class TempDirectory
     {

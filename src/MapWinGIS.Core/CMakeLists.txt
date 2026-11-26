@@ -24,6 +24,7 @@ set(MWG_CORE_PUBLIC_HEADERS
     include/mapwingis/map/Map.h
     include/mapwingis/map/MapView.h
     include/mapwingis/map/Viewport.h
+    include/mapwingis/projection/Projection.h
     include/mapwingis/rendering/MapRenderScene.h
     include/mapwingis/rendering/PolygonTriangulation.h
     include/mapwingis/rendering/VectorRenderScene.h
@@ -52,6 +53,7 @@ set(MWG_CORE_SOURCES
     src/map/Map.cpp
     src/map/MapView.cpp
     src/map/Viewport.cpp
+    src/projection/Projection.cpp
     src/rendering/MapRenderScene.cpp
     src/rendering/PolygonTriangulation.cpp
     src/rendering/VectorRenderScene.cpp

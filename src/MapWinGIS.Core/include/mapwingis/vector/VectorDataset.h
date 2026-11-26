@@ -20,6 +20,7 @@
 #include "mapwingis/core/Api.h"
 #include "mapwingis/core/Enums.h"
 #include "mapwingis/core/Extent.h"
+#include "mapwingis/projection/Projection.h"
 #include "mapwingis/vector/FieldInfo.h"
 
 namespace mwg
@@ -85,8 +86,11 @@ namespace mwg
         /// -1 when there is no field with that name (case-insensitive).
         [[nodiscard]] int FieldIndex(const std::string& name) const;
 
-        /// Layer projection as WKT, or "" when the layer has none.
-        [[nodiscard]] std::string ProjectionWkt() const;
+        /// Coordinate reference system reported by the layer, or empty when
+        /// the source does not define one.
+        /// \throws CoreError when GDAL cannot export the layer's reference
+        ///         system.
+        [[nodiscard]] Projection Projection() const;
 
         [[nodiscard]] bool IsCellNull(int fieldIndex, std::int64_t featureIndex) const;
         /// Attribute formatted as text, which is what MapWinGIS 5 CellValue yields

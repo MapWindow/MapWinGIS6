@@ -92,6 +92,7 @@ namespace mwg
         // vector reorders or reallocates.
         std::vector<std::unique_ptr<MapLayer>> _layers;
         std::uint64_t _lastId = 0;
+        std::optional<mwg::Projection> _projection;
     };
 
     Map::Map()
@@ -117,10 +118,15 @@ namespace mwg
         }
 
         const LayerId id{_impl->_lastId + 1};
+        mwg::Projection layerProjection = dataset->Layer(layerIndex).Projection();
         auto layer = std::unique_ptr<MapLayer>(
             new MapLayer(std::make_unique<MapLayer::Impl>(id, std::move(dataset), layerIndex)));
         _impl->_layers.push_back(std::move(layer));
         _impl->_lastId = id.value;
+        if (!_impl->_projection.has_value() && !layerProjection.IsEmpty())
+        {
+            _impl->_projection = std::move(layerProjection);
+        }
         return id;
     }
 
@@ -139,6 +145,25 @@ namespace mwg
     void Map::Clear() noexcept
     {
         _impl->_layers.clear();
+    }
+
+    const std::optional<mwg::Projection>& Map::Projection() const noexcept
+    {
+        return _impl->_projection;
+    }
+
+    void Map::SetProjection(mwg::Projection projection)
+    {
+        if (projection.IsEmpty())
+        {
+            throw InvalidArgument("Cannot set an empty map projection");
+        }
+        _impl->_projection = std::move(projection);
+    }
+
+    void Map::ClearProjection() noexcept
+    {
+        _impl->_projection.reset();
     }
 
     int Map::LayerCount() const noexcept

@@ -168,9 +168,20 @@ TEST_F(VectorDatasetTest, ReportsPerFeatureExtents)
 
 TEST_F(VectorDatasetTest, ReportsTheProjection)
 {
-    const std::string wkt = _layer->ProjectionWkt();
-    ASSERT_FALSE(wkt.empty());
-    EXPECT_NE(wkt.find("Amersfoort"), std::string::npos) << wkt;
+    const Projection projection = _layer->Projection();
+    EXPECT_FALSE(projection.IsEmpty());
+    EXPECT_EQ(projection.Epsg(), Provinces::kEpsg);
+    EXPECT_NE(projection.ExportToWkt().find("Amersfoort"), std::string::npos);
+}
+
+TEST(VectorDataset, ReportsAnEmptyProjectionForProjectionlessLayer)
+{
+    const TempDirectory dir;
+    const std::unique_ptr<VectorDataset> dataset =
+        VectorDataset::Open(MakeProjectionlessGeoJson(dir.Path(), "projectionless.geojson"));
+
+    ASSERT_EQ(dataset->LayerCount(), 1);
+    EXPECT_TRUE(dataset->Layer(0).Projection().IsEmpty());
 }
 
 TEST(VectorDataset, ReportsMissingFiles)
