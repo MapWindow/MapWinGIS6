@@ -42,6 +42,19 @@ namespace
             1, std::memory_order_relaxed) != 0;
     }
 
+    struct ControlledWake final
+    {
+        std::atomic_size_t attempts{0};
+        std::atomic_bool succeeds{false};
+    };
+
+    bool PostControlledWake(void* const context) noexcept
+    {
+        auto* const wake = static_cast<ControlledWake*>(context);
+        wake->attempts.fetch_add(1, std::memory_order_relaxed);
+        return wake->succeeds.load(std::memory_order_relaxed);
+    }
+
     class BitmapSurface final
     {
     public:
@@ -895,6 +908,34 @@ TEST(VectorLayerRenderer, BackgroundPreparationRetriesWakeAfterEachFailedPost)
 
     EXPECT_GE(wakeAttempts.load(std::memory_order_relaxed), 2U);
     EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+}
+
+TEST(VectorLayerRenderer, BackgroundPreparationStopsWakeRetryAfterCancellation)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeRectangleLayer({0.0, 0.0, 10.0, 10.0})});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    ControlledWake wake;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    renderer.ConfigureFillMeshPreparation(PostControlledWake, &wake);
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    Access::InvalidateLayerSceneCache(renderer, scene.layers.front().layerId);
+
+    scene.layers.front().scene =
+        Share(MakeRectangleLayer({20.0, 0.0, 30.0, 10.0}));
+    Edit(scene.layers.front()).fillMeshes.clear();
+    wake.succeeds.store(true, std::memory_order_relaxed);
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Ready);
+    EXPECT_GE(wake.attempts.load(std::memory_order_relaxed), 2U);
 }
 
 TEST(VectorLayerRenderer, BackgroundPreparationContinuesDuringOpenGlRecovery)

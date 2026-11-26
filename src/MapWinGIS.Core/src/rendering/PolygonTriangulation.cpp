@@ -110,11 +110,9 @@ namespace mwg::rendering
                 auto polygon = std::make_unique<OGRPolygon>();
                 polygon->addRingDirectly(MakeRing(exterior).release());
                 _geometry =
-                    polygon->exportToGEOS(_context, true);
+                    polygon->exportToGEOS(_context.get(), true);
                 if (_geometry == nullptr)
                 {
-                    OGRGeometry::freeGEOSContext(_context);
-                    _context = nullptr;
                     throw CoreError("Cannot convert the exterior ring for validation");
                 }
             }
@@ -126,9 +124,8 @@ namespace mwg::rendering
             {
                 if (_geometry != nullptr)
                 {
-                    GEOSGeom_destroy_r(_context, _geometry);
+                    GEOSGeom_destroy_r(_context.get(), _geometry);
                 }
-                OGRGeometry::freeGEOSContext(_context);
             }
 
             [[nodiscard]] bool Covers(const std::span<const Point> ring)
@@ -144,15 +141,15 @@ namespace mwg::rendering
                     }
                 }
                 GEOSGeom geometry =
-                    points.exportToGEOS(_context, true);
+                    points.exportToGEOS(_context.get(), true);
                 if (geometry == nullptr)
                 {
                     throw CoreError(
                         "Cannot convert an interior ring for validation");
                 }
                 const char result =
-                    GEOSCovers_r(_context, _geometry, geometry);
-                GEOSGeom_destroy_r(_context, geometry);
+                    GEOSCovers_r(_context.get(), _geometry, geometry);
+                GEOSGeom_destroy_r(_context.get(), geometry);
                 if (result == 2)
                 {
                     throw CoreError("Cannot validate an interior ring");
@@ -161,7 +158,17 @@ namespace mwg::rendering
             }
 
         private:
-            GEOSContextHandle_t _context;
+            struct ContextDeleter final
+            {
+                void operator()(GEOSContextHandle_t context) const noexcept
+                {
+                    OGRGeometry::freeGEOSContext(context);
+                }
+            };
+
+            std::unique_ptr<
+                std::remove_pointer_t<GEOSContextHandle_t>,
+                ContextDeleter> _context;
             GEOSGeom _geometry = nullptr;
         };
 

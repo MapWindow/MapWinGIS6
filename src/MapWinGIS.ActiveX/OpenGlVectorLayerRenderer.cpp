@@ -967,7 +967,6 @@ namespace mwg::activex
                     continue;
                 }
                 preparation->activeTokens.erase(job.layerId);
-                preparation->cancellationFlags.erase(job.layerId);
                 if (result.failed)
                 {
                     std::vector<std::optional<rendering::TriangleMesh>>()
@@ -990,17 +989,24 @@ namespace mwg::activex
                     L"MapWinGIS: unable to post background fill-mesh completion.\n");
                 while (!wakePosted)
                 {
+                    if (job.cancelled->load(std::memory_order_relaxed))
                     {
-                        std::lock_guard lock(preparation->mutex);
-                        if (preparation->stopping)
-                        {
-                            break;
-                        }
+                        break;
                     }
                     std::this_thread::sleep_for(
                         std::chrono::milliseconds(10));
                     wakePosted =
                         job.wakeCallback(job.wakeContext);
+                }
+            }
+            {
+                std::lock_guard lock(preparation->mutex);
+                const auto cancellation =
+                    preparation->cancellationFlags.find(job.layerId);
+                if (cancellation != preparation->cancellationFlags.end() &&
+                    cancellation->second == job.cancelled)
+                {
+                    preparation->cancellationFlags.erase(cancellation);
                 }
             }
         }
