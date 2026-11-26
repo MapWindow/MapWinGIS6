@@ -50,6 +50,20 @@ TEST(ProjectionTest, RejectsInvalidInputsAndSupportsTryFactories)
     EXPECT_FALSE(Projection::TryFromProj4("not proj4").has_value());
 }
 
+TEST(ProjectionTest, RejectsEmbeddedNullsInTextDefinitions)
+{
+    const Projection projection = Projection::FromEpsg(4326);
+    std::string wkt = projection.ExportToWkt();
+    wkt.append("\0invalid", 8);
+    std::string proj4 = projection.ExportToProj4();
+    proj4.append("\0invalid", 8);
+
+    EXPECT_FALSE(Projection::TryFromWkt(wkt).has_value());
+    EXPECT_FALSE(Projection::TryFromProj4(proj4).has_value());
+    EXPECT_THROW((void)Projection::FromWkt(wkt), InvalidArgument);
+    EXPECT_THROW((void)Projection::FromProj4(proj4), InvalidArgument);
+}
+
 TEST(ProjectionTest, AutodetectsEpsgFromEsriAmersfoortWkt)
 {
     const Projection projection = Projection::FromWkt(kAmersfoortEsriWkt);

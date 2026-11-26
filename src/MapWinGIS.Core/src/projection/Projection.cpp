@@ -200,24 +200,23 @@ namespace mwg
                 return false;
             }
 
-            char* firstText = nullptr;
-            char* secondText = nullptr;
-            const OGRErr firstResult = first.exportToProj4(&firstText);
-            const OGRErr secondResult = second.exportToProj4(&secondText);
-            std::string firstProj4(firstText != nullptr ? firstText : "");
-            std::string secondProj4(secondText != nullptr ? secondText : "");
-            CPLFree(firstText);
-            CPLFree(secondText);
+            char* text = nullptr;
+            const OGRErr firstResult = first.exportToProj4(&text);
+            const GdalString firstProj4(text);
+            text = nullptr;
+            const OGRErr secondResult = second.exportToProj4(&text);
+            const GdalString secondProj4(text);
             if (firstResult != OGRERR_NONE || secondResult != OGRERR_NONE ||
-                firstProj4.empty() || secondProj4.empty())
+                !firstProj4 || !secondProj4 || *firstProj4.get() == '\0' ||
+                *secondProj4.get() == '\0')
             {
                 return false;
             }
 
             OGRSpatialReference firstNormalized;
             OGRSpatialReference secondNormalized;
-            return firstNormalized.importFromProj4(firstProj4.c_str()) == OGRERR_NONE &&
-                   secondNormalized.importFromProj4(secondProj4.c_str()) == OGRERR_NONE &&
+            return firstNormalized.importFromProj4(firstProj4.get()) == OGRERR_NONE &&
+                   secondNormalized.importFromProj4(secondProj4.get()) == OGRERR_NONE &&
                    firstNormalized.IsSame(&secondNormalized) == TRUE;
         }
 
@@ -298,14 +297,17 @@ namespace mwg
 
             int count = 0;
             int* confidence = nullptr;
-            OGRSpatialReferenceH* matches = OSRFindMatches(
-                OGRSpatialReference::ToHandle(candidate.get()),
-                nullptr, &count, &confidence);
+            const std::unique_ptr<OGRSpatialReferenceH[], decltype(&OSRFreeSRSArray)> matches(
+                OSRFindMatches(OGRSpatialReference::ToHandle(candidate.get()),
+                               nullptr, &count, &confidence),
+                OSRFreeSRSArray);
+            const std::unique_ptr<int[], decltype([](int* values) { CPLFree(values); })>
+                ownedConfidence(confidence);
             if (matches != nullptr)
             {
                 for (int index = 0; index < count && !_epsg.has_value(); ++index)
                 {
-                    if (confidence == nullptr || confidence[index] < 80)
+                    if (ownedConfidence == nullptr || ownedConfidence[index] < 80)
                     {
                         continue;
                     }
@@ -317,9 +319,7 @@ namespace mwg
                         _epsg = EpsgAuthorityCode(*matched);
                     }
                 }
-                OSRFreeSRSArray(matches);
             }
-            CPLFree(confidence);
             _epsgResolved = true;
             return _epsg;
         }
@@ -423,7 +423,7 @@ namespace mwg
     std::optional<Projection> Projection::TryFromWkt(const std::string_view wkt)
     {
         GdalEnvironment::Initialize();
-        if (wkt.empty())
+        if (wkt.empty() || wkt.find('\0') != std::string_view::npos)
         {
             return std::nullopt;
         }
@@ -452,7 +452,7 @@ namespace mwg
     std::optional<Projection> Projection::TryFromProj4(const std::string_view proj4)
     {
         GdalEnvironment::Initialize();
-        if (proj4.empty())
+        if (proj4.empty() || proj4.find('\0') != std::string_view::npos)
         {
             return std::nullopt;
         }
