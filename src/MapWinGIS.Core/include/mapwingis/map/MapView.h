@@ -97,6 +97,12 @@ namespace mwg
         /// Removes a layer; see Map::RemoveLayer. The view is kept.
         bool RemoveLayer(LayerId id) noexcept;
 
+        /// Rolls back a layer add after a post-add operation fails. Removes the
+        /// layer and restores the projection that existed before the add.
+        /// Returns false when the layer no longer exists.
+        [[nodiscard]] bool RollbackLayerAdd(
+            LayerId id, const std::optional<mwg::Projection>& previousProjection);
+
         /// Removes all layers and returns true when there were any. The view
         /// is kept.
         bool ClearLayers() noexcept;

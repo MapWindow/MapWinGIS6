@@ -52,6 +52,14 @@ namespace mwg::test
                 _definition->AddFieldDefn(&nameField);
                 OGRFieldDefn valueField("VALUE", OFTInteger);
                 _definition->AddFieldDefn(&valueField);
+                if (state.projectionEpsg > 0)
+                {
+                    _spatialRef = std::make_unique<OGRSpatialReference>();
+                    if (_spatialRef->importFromEPSG(state.projectionEpsg) != OGRERR_NONE)
+                    {
+                        throw std::runtime_error("Cannot create synthetic test projection");
+                    }
+                }
             }
 
             ~VectorReadTestLayer() override
@@ -138,6 +146,11 @@ namespace mwg::test
                 return _definition;
             }
 
+            const OGRSpatialReference* GetSpatialRef() const override
+            {
+                return _spatialRef.get();
+            }
+
             int TestCapability(const char* capability) const override
             {
                 if (capability != nullptr && std::string_view(capability) == OLCFastGetExtent)
@@ -213,6 +226,7 @@ namespace mwg::test
         private:
             VectorReadTestDriver& _state;
             OGRFeatureDefn* _definition;
+            std::unique_ptr<OGRSpatialReference> _spatialRef;
         };
 
         class VectorReadTestDataset final : public GDALDataset

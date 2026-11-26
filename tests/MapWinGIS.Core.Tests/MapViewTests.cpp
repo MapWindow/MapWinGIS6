@@ -274,6 +274,29 @@ TEST_F(MapViewTest, DegenerateExtentsCompleteTheInitialFit)
     }
 }
 
+TEST_F(MapViewTest, FailedInitialAddRestoresProjectionForTheNextLayer)
+{
+    VectorReadTestDriver driver;
+    driver.projectionEpsg = 3857;
+    driver.failExtent = true;
+    MapView view;
+    ASSERT_TRUE(view.Resize(200, 100));
+
+    const GdalEnvironment::QuietScope quiet;
+    EXPECT_THROW(
+        (void)view.AddLayer(
+            VectorDataset::Open(VectorReadTestDriver::kPath)),
+        CoreError);
+    EXPECT_EQ(view.GetMap().LayerCount(), 0);
+    EXPECT_FALSE(view.GetMap().Projection().has_value());
+
+    const std::shared_ptr<VectorDataset> projected =
+        VectorDataset::Open(MakeSampleShapefile(_directory.Path()));
+    (void)view.AddLayer(projected);
+    ASSERT_TRUE(view.GetMap().Projection().has_value());
+    EXPECT_EQ(view.GetMap().Projection()->Epsg(), 28992);
+}
+
 TEST_F(MapViewTest, MapChangesRebuildTheSceneAndReportARedraw)
 {
     const LayerId first = _view.AddLayer(OpenRectangles({{0.0, 0.0, 1.0, 1.0}}));

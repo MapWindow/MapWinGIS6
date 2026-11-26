@@ -927,13 +927,15 @@ void CMapWinGISControl::CompleteVectorLoad(
         {
             throw mwg::CoreError("Map feature count is out of range");
         }
+        const std::optional<mwg::Projection> previousProjection =
+            _view.GetMap().Projection();
         const mwg::LayerId id = _view.AddLayer(
             std::move(state->dataset),
             std::move(state->scene));
         LONGLONG convertedId = 0;
         if (FAILED(CopyLayerId(id, &convertedId)))
         {
-            (void)_view.RemoveLayer(id);
+            (void)_view.RollbackLayerAdd(id, previousProjection);
             throw mwg::CoreError("The layer ID could not be represented as a COM integer.");
         }
         try
@@ -942,7 +944,7 @@ void CMapWinGISControl::CompleteVectorLoad(
         }
         catch (...)
         {
-            (void)_view.RemoveLayer(id);
+            (void)_view.RollbackLayerAdd(id, previousProjection);
             throw;
         }
 
@@ -1071,13 +1073,15 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
             throw mwg::CoreError("Map feature count is out of range");
         }
 
+        const std::optional<mwg::Projection> previousProjection =
+            _view.GetMap().Projection();
         const mwg::LayerId id = _view.AddLayer(
             std::move(prepared.dataset),
             std::move(prepared.scene));
         LONGLONG convertedId = 0;
         if (layerId != nullptr && FAILED(CopyLayerId(id, &convertedId)))
         {
-            (void)_view.RemoveLayer(id);
+            (void)_view.RollbackLayerAdd(id, previousProjection);
             return SetControlComErrorInfo("The layer ID could not be represented as a COM integer.", sourceIid, E_UNEXPECTED);
         }
         try
@@ -1087,7 +1091,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
         }
         catch (...)
         {
-            (void)_view.RemoveLayer(id);
+            (void)_view.RollbackLayerAdd(id, previousProjection);
             throw;
         }
 

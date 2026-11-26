@@ -49,6 +49,7 @@ namespace mwg::test
         bool fastSpatialFilter = false;
         bool failSpatialFilter = false;
         bool failExtentCapabilityAllocation = false;
+        int projectionEpsg = 0;
         bool ignoredFields = false;
         bool ignoredGeometry = false;
         OGRLayer* openedLayer = nullptr;

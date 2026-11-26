@@ -151,6 +151,8 @@ namespace mwg
 
     LayerId MapView::AddLayer(std::shared_ptr<VectorDataset> dataset, const int layerIndex)
     {
+        const std::optional<mwg::Projection> previousProjection =
+            _impl->_map.Projection();
         const LayerId id = _impl->_map.AddLayer(std::move(dataset), layerIndex);
         _impl->_sceneStale = true;
         if (!_impl->_viewport.HasView())
@@ -162,7 +164,7 @@ namespace mwg
             catch (...)
             {
                 // Reading the extent failed; leave the map as it was.
-                (void)_impl->_map.RemoveLayer(id);
+                (void)RollbackLayerAdd(id, previousProjection);
                 throw;
             }
         }
@@ -248,6 +250,26 @@ namespace mwg
         }
         _impl->_layerScenes.erase(id);
         _impl->_sceneStale = true;
+        return true;
+    }
+
+    bool MapView::RollbackLayerAdd(
+        const LayerId id,
+        const std::optional<mwg::Projection>& previousProjection)
+    {
+        if (!RemoveLayer(id))
+        {
+            return false;
+        }
+
+        if (previousProjection.has_value())
+        {
+            _impl->_map.SetProjection(*previousProjection);
+        }
+        else
+        {
+            _impl->_map.ClearProjection();
+        }
         return true;
     }
 
