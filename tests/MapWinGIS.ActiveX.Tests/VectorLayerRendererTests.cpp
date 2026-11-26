@@ -897,7 +897,7 @@ TEST(VectorLayerRenderer, BackgroundPreparationRetriesWakeAfterEachFailedPost)
     EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
 }
 
-TEST(VectorLayerRenderer, BackgroundPreparationSkipsKnownOpenGlInitializationFailure)
+TEST(VectorLayerRenderer, BackgroundPreparationContinuesDuringOpenGlRecovery)
 {
     using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
     mwg::rendering::MapRenderScene scene =
@@ -910,8 +910,12 @@ TEST(VectorLayerRenderer, BackgroundPreparationSkipsKnownOpenGlInitializationFai
 
     EXPECT_EQ(
         Access::FillMeshPreparationState(renderer, scene.layers.front()),
-        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::NotStarted);
-    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 0U);
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Pending);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Ready);
 }
 
 TEST(VectorLayerRenderer, OpenGlCachesLazyMeshesPerLayerAcrossSceneChanges)

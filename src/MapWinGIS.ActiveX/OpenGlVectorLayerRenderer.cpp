@@ -755,10 +755,6 @@ namespace mwg::activex
     {
         try
         {
-            if (_initializationFailed)
-            {
-                return;
-            }
             if (_fillMeshCache == nullptr)
             {
                 _fillMeshCache = std::make_shared<FillMeshCache>();
@@ -783,6 +779,8 @@ namespace mwg::activex
                     continue;
                 }
 
+                const auto cancellation =
+                    std::make_shared<std::atomic_bool>(false);
                 auto cached = _fillMeshCache->layers.find(layer.layerId);
                 if (cached != _fillMeshCache->layers.end())
                 {
@@ -807,40 +805,57 @@ namespace mwg::activex
                         .try_emplace(layer.layerId)
                         .first;
                 }
-                cached->second.scene = layer.scene;
-                cached->second.generatedMeshes.clear();
-                cached->second.state = FillMeshPreparationState::Pending;
-                cached->second.preparationToken =
-                    ++_fillMeshCache->nextPreparationToken;
 
                 FillMeshPreparation::Job job;
                 job.layerId = layer.layerId;
                 job.scene = layer.scene;
-                job.cancelled = std::make_shared<std::atomic_bool>(false);
-                job.token = cached->second.preparationToken;
+                job.cancelled = cancellation;
+                job.token = _fillMeshCache->nextPreparationToken + 1U;
                 job.wakeCallback = _fillMeshWakeCallback;
                 job.wakeContext = _fillMeshWakeContext;
 
-                std::lock_guard lock(_fillMeshPreparation->mutex);
-                _fillMeshPreparation->activeTokens.insert_or_assign(
-                    layer.layerId,
-                    job.token);
-                _fillMeshPreparation->cancellationFlags.insert_or_assign(
-                    layer.layerId,
-                    job.cancelled);
                 try
                 {
-                    _fillMeshPreparation->jobs.push_back(std::move(job));
+                    std::lock_guard lock(_fillMeshPreparation->mutex);
+                    _fillMeshPreparation->activeTokens.insert_or_assign(
+                        layer.layerId,
+                        job.token);
+                    try
+                    {
+                        _fillMeshPreparation->cancellationFlags.insert_or_assign(
+                            layer.layerId,
+                            job.cancelled);
+                        try
+                        {
+                            _fillMeshPreparation->jobs.push_back(std::move(job));
+                        }
+                        catch (...)
+                        {
+                            _fillMeshPreparation->cancellationFlags.erase(layer.layerId);
+                            throw;
+                        }
+                    }
+                    catch (...)
+                    {
+                        _fillMeshPreparation->activeTokens.erase(layer.layerId);
+                        throw;
+                    }
                 }
                 catch (...)
                 {
-                    _fillMeshPreparation->activeTokens.erase(layer.layerId);
-                    _fillMeshPreparation->cancellationFlags.erase(layer.layerId);
-                    cached->second.state = FillMeshPreparationState::Failed;
+                    cached->second.scene.reset();
+                    cached->second.generatedMeshes.clear();
+                    cached->second.state = FillMeshPreparationState::NotStarted;
                     throw;
                 }
+
+                cached->second.scene = layer.scene;
+                cached->second.generatedMeshes.clear();
+                cached->second.state = FillMeshPreparationState::Pending;
+                cached->second.preparationToken = job.token;
+                ++_fillMeshCache->nextPreparationToken;
+                _fillMeshPreparation->queueChanged.notify_one();
             }
-            _fillMeshPreparation->queueChanged.notify_all();
         }
         catch (const std::bad_alloc&)
         {
