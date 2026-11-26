@@ -160,12 +160,14 @@ state; hosts and renderers read from it.
   imports EPSG, WKT, and PROJ4 definitions, prefers EPSG identity, and provides
   stateless coordinate transformations in traditional GIS axis order.
   `VectorLayer::Projection()` reads the layer CRS; WKT export remains available
-  from the value type rather than through a parallel string property. GeoJSON
-  without an explicit top-level `crs` member is treated as having no known CRS.
+  from the value type rather than through a parallel string property.
+  For RFC 7946 GeoJSON without a `crs` member, GDAL supplies WGS 84 (EPSG:4326).
+  A layer with no defined CRS returns an empty projection.
 - **Map projection.** When `Map` has no projection, adding the first layer with
-  a known CRS adopts that CRS. A host can call `SetProjection` or
-  `ClearProjection` explicitly. Removing layers and `Clear()` do not change the
-  map projection.
+  a readable CRS sets the map projection. If the map cannot read the layer's
+  CRS, it logs a warning and still adds the layer. A host can call
+  `SetProjection` or `ClearProjection` explicitly. Removing layers and
+  `Clear()` do not change the map projection.
 - **Coordinates.** Layers are assumed to share compatible source coordinates.
   Phase 1 records CRS state but does not reproject; layers in different
   coordinate reference systems do not align until display-time coordinate

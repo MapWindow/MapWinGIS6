@@ -26,30 +26,6 @@ using namespace mwg::test;
 
 namespace
 {
-    std::string ToUtf8(const std::filesystem::path& path)
-    {
-        const std::u8string utf8 = path.u8string();
-        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
-    }
-
-    void SetGeoPackageSrsId(const std::filesystem::path& path, const int srsId)
-    {
-        GDALDatasetUniquePtr dataset(GDALDataset::Open(
-            ToUtf8(path).c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE));
-        ASSERT_NE(dataset, nullptr);
-
-        const std::string updateGeometryColumns =
-            "UPDATE gpkg_geometry_columns SET srs_id = " + std::to_string(srsId);
-        const std::string updateContents =
-            "UPDATE gpkg_contents SET srs_id = " + std::to_string(srsId);
-        CPLErrorReset();
-        EXPECT_EQ(dataset->ExecuteSQL(updateGeometryColumns.c_str(),
-                                      nullptr, nullptr), nullptr);
-        EXPECT_EQ(dataset->ExecuteSQL(updateContents.c_str(),
-                                      nullptr, nullptr), nullptr);
-        EXPECT_LT(CPLGetLastErrorType(), CE_Failure);
-    }
-
     class FlushFailureDataset : public GDALDataset
     {
     public:
@@ -90,6 +66,23 @@ TEST_F(VectorDatasetTest, ReportsTheDriverAndPath)
 {
     EXPECT_EQ(_dataset->DriverName(), "ESRI Shapefile");
     EXPECT_EQ(_dataset->Path(), _shp);
+}
+
+TEST(VectorDataset, ReadsLayerProjectionOnlyOnceEvenWhenUndefined)
+{
+    for (const int epsg : {0, 4326})
+    {
+        SCOPED_TRACE(epsg);
+        VectorReadTestDriver driver;
+        driver.projectionEpsg = epsg;
+        const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+        const VectorLayer& layer = dataset->Layer(0);
+        const int initialReads = driver.projectionReads;
+
+        EXPECT_EQ(layer.Projection().Epsg().value_or(0), epsg);
+        EXPECT_EQ(layer.Projection().Epsg().value_or(0), epsg);
+        EXPECT_EQ(driver.projectionReads, initialReads + 1);
+    }
 }
 
 TEST_F(VectorDatasetTest, HasOneLayer)

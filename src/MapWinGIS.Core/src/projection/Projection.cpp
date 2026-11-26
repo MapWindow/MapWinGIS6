@@ -22,6 +22,7 @@
 #include <ogr_api.h>
 #include <ogr_spatialref.h>
 
+#include "internal/CoordinateMetadata.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
@@ -185,28 +186,6 @@ namespace mwg
                 Trimmed(wkt.substr(innerStart, separator - innerStart)), epoch};
         }
 
-        std::string AddCoordinateMetadata(
-            std::string wkt, const OGRSpatialReference& reference)
-        {
-            const double epoch = reference.GetCoordinateEpoch();
-            if (!std::isfinite(epoch) || epoch == 0.0 || wkt.empty())
-            {
-                return wkt;
-            }
-
-            char buffer[32];
-            const auto formatted = std::to_chars(
-                std::begin(buffer), std::end(buffer), epoch,
-                std::chars_format::general,
-                std::numeric_limits<double>::max_digits10);
-            if (formatted.ec != std::errc{})
-            {
-                return wkt;
-            }
-            return "COORDINATEMETADATA[" + wkt + ",EPOCH[" +
-                   std::string(std::begin(buffer), formatted.ptr) + "]]";
-        }
-
         bool IsSameViaProj4(
             const OGRSpatialReference& first, const OGRSpatialReference& second)
         {
@@ -300,7 +279,6 @@ namespace mwg
                 return _epsg;
             }
 
-            _epsgResolved = true;
             std::unique_ptr<OGRSpatialReference> candidate(_reference->Clone());
             if (candidate == nullptr)
             {
@@ -313,6 +291,7 @@ namespace mwg
 
             if (_epsg.has_value())
             {
+                _epsgResolved = true;
                 return _epsg;
             }
 
@@ -340,6 +319,7 @@ namespace mwg
                 OSRFreeSRSArray(matches);
             }
             CPLFree(confidence);
+            _epsgResolved = true;
             return _epsg;
         }
 
@@ -531,7 +511,8 @@ namespace mwg
             CPLFree(text);
             throw CoreError(FailureMessage("Cannot export coordinate reference system to WKT"));
         }
-        return AddCoordinateMetadata(ExportedString(text), *_impl->_reference);
+        return detail::AddCoordinateMetadata(
+            ExportedString(text), _impl->_reference->GetCoordinateEpoch());
     }
 
     std::string Projection::ExportToProj4() const

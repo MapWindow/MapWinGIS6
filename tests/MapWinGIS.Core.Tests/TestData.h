@@ -50,6 +50,8 @@ namespace mwg::test
         bool failSpatialFilter = false;
         bool failExtentCapabilityAllocation = false;
         int projectionEpsg = 0;
+        bool unreadableProjection = false;
+        int projectionReads = 0;
         bool ignoredFields = false;
         bool ignoredGeometry = false;
         OGRLayer* openedLayer = nullptr;
@@ -132,6 +134,12 @@ namespace mwg::test
     std::filesystem::path MakeRectanglesDataset(const std::filesystem::path& directory,
                                                 const std::string& fileName,
                                                 std::span<const Extent> rectangles);
+
+    /// Sets the SRS ID in both metadata tables of a generated GeoPackage.
+    void SetGeoPackageSrsId(const std::filesystem::path& path, int srsId);
+
+    /// Converts a fixture path to the UTF-8 string that GDAL expects.
+    std::string ToUtf8(const std::filesystem::path& path);
 
     /// Writes a GeoPackage with two empty polygon layers named "first" and "second".
     std::filesystem::path MakeTwoLayerDataset(const std::filesystem::path& directory,

@@ -23,14 +23,14 @@
 
 namespace mwg::test
 {
+    std::string ToUtf8(const std::filesystem::path& path)
+    {
+        const std::u8string utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
     namespace
     {
-        std::string ToUtf8(const std::filesystem::path& path)
-        {
-            const std::u8string utf8 = path.u8string();
-            return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
-        }
-
         std::string RandomName()
         {
             static std::mt19937_64 engine{std::random_device{}()};
@@ -52,7 +52,12 @@ namespace mwg::test
                 _definition->AddFieldDefn(&nameField);
                 OGRFieldDefn valueField("VALUE", OFTInteger);
                 _definition->AddFieldDefn(&valueField);
-                if (state.projectionEpsg > 0)
+                if (state.unreadableProjection)
+                {
+                    // A non-null SRS without a CRS definition cannot be imported.
+                    _spatialRef = std::make_unique<OGRSpatialReference>();
+                }
+                else if (state.projectionEpsg > 0)
                 {
                     _spatialRef = std::make_unique<OGRSpatialReference>();
                     if (_spatialRef->importFromEPSG(state.projectionEpsg) != OGRERR_NONE)
@@ -148,6 +153,7 @@ namespace mwg::test
 
             const OGRSpatialReference* GetSpatialRef() const override
             {
+                ++_state.projectionReads;
                 return _spatialRef.get();
             }
 
@@ -469,6 +475,33 @@ namespace mwg::test
 
         dataset.reset();
         return path;
+    }
+
+    void SetGeoPackageSrsId(const std::filesystem::path& path, const int srsId)
+    {
+        const GDALDatasetUniquePtr dataset(GDALDataset::Open(
+            ToUtf8(path).c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE));
+        if (!dataset)
+        {
+            throw std::runtime_error("Cannot open GeoPackage fixture for SRS update");
+        }
+
+        for (const char* table : {"gpkg_geometry_columns", "gpkg_contents"})
+        {
+            const std::string sql = std::string("UPDATE ") + table +
+                                    " SET srs_id = " + std::to_string(srsId);
+            CPLErrorReset();
+            if (OGRLayer* result = dataset->ExecuteSQL(sql.c_str(), nullptr, nullptr))
+            {
+                dataset->ReleaseResultSet(result);
+                throw std::runtime_error("Unexpected result from " + sql);
+            }
+            if (CPLGetLastErrorType() >= CE_Failure)
+            {
+                throw std::runtime_error("Cannot update GeoPackage fixture: " +
+                                         std::string(CPLGetLastErrorMsg()));
+            }
+        }
     }
 
     std::filesystem::path MakeTwoLayerDataset(const std::filesystem::path& directory,

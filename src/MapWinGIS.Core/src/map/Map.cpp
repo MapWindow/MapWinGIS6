@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "mapwingis/core/Error.h"
+#include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 namespace mwg
@@ -121,7 +122,17 @@ namespace mwg
         mwg::Projection layerProjection;
         if (!_impl->_projection.has_value())
         {
-            layerProjection = dataset->Layer(layerIndex).Projection();
+            const VectorLayer& source = dataset->Layer(layerIndex);
+            try
+            {
+                layerProjection = source.Projection();
+            }
+            catch (const CoreError& error)
+            {
+                GdalEnvironment::ReportDiagnostic(
+                    LogLevel::Warning,
+                    std::string("Cannot adopt vector layer projection: ") + error.what());
+            }
         }
         auto layer = std::unique_ptr<MapLayer>(
             new MapLayer(std::make_unique<MapLayer::Impl>(id, std::move(dataset), layerIndex)));

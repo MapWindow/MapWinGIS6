@@ -107,7 +107,7 @@ namespace mwg
     /// Positions shift when layers are removed, so use LayerId to refer to a
     /// layer over time.
     ///
-    /// Projection: the first added layer with a CRS sets the map projection.
+    /// Projection: the first added layer with a readable CRS sets the map projection.
     /// It persists after layers are removed or cleared until explicitly
     /// changed with SetProjection or ClearProjection.
     ///
@@ -134,6 +134,8 @@ namespace mwg
         /// new identity. The map shares ownership of the dataset; the dataset
         /// is released when its last map layer is removed and no other owner
         /// remains.
+        /// When the map has no projection, it tries to adopt the layer's CRS.
+        /// An unreadable CRS is reported as a warning and is not adopted.
         /// \throws InvalidArgument when dataset is null or layerIndex is out of
         ///         range.
         /// \throws CoreError when the map has exhausted its layer identity space.
@@ -146,8 +148,15 @@ namespace mwg
         /// Removes all layers. Identities of removed layers are not reused.
         void Clear() noexcept;
 
+        /// The current map projection, or std::nullopt if none was set or adopted.
         [[nodiscard]] const std::optional<mwg::Projection>& Projection() const noexcept;
+
+        /// Replaces the map projection without transforming layer coordinates.
+        /// \throws InvalidArgument when projection is empty.
         void SetProjection(mwg::Projection projection);
+
+        /// Clears the map projection. The next added layer with a readable
+        /// CRS can set it again. Existing layers are not consulted.
         void ClearProjection() noexcept;
 
         [[nodiscard]] int LayerCount() const noexcept;

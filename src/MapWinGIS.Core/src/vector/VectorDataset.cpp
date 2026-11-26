@@ -10,9 +10,7 @@
 #include "mapwingis/vector/VectorDataset.h"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
-#include <cmath>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -20,11 +18,11 @@
 
 #include <cpl_conv.h>
 #include <cpl_error.h>
-#include <cpl_vsi.h>
 #include <gdal_priv.h>
 #include <ogr_api.h>
 #include <ogrsf_frmts.h>
 
+#include "internal/CoordinateMetadata.h"
 #include "internal/Utf8.h"
 #include "internal/VectorLayerAccess.h"
 #include "mapwingis/core/Error.h"
@@ -176,13 +174,20 @@ namespace mwg
                     dataset.ReleaseResultSet(result);
                 }
             };
+            CPLErrorReset();
             std::unique_ptr<OGRLayer, decltype(release)> result(
                 dataset.ExecuteSQL(sql.c_str(), nullptr, nullptr), release);
-            if (result == nullptr)
+            GdalEnvironment::RethrowLogException();
+            if (result == nullptr || CPLGetLastErrorType() >= CE_Failure)
             {
-                return false;
+                throw CoreError("Cannot read GeoPackage layer SRS ID");
             }
             const OGRFeatureUniquePtr feature(result->GetNextFeature());
+            GdalEnvironment::RethrowLogException();
+            if (CPLGetLastErrorType() >= CE_Failure)
+            {
+                throw CoreError("Cannot read GeoPackage layer SRS ID");
+            }
             if (feature == nullptr)
             {
                 return false;
@@ -223,6 +228,15 @@ namespace mwg
                 for (int i = 0; i < defn->GetFieldCount(); ++i)
                     _fields.push_back(ToFieldInfo(*defn->GetFieldDefn(i)));
             }
+        }
+
+        [[nodiscard]] mwg::Projection GetProjection() const
+        {
+            if (!_projection.has_value())
+            {
+                _projection = ReadProjection();
+            }
+            return *_projection;
         }
 
         /// Borrowed pointer, valid until the next call. Throws when the index is
@@ -510,6 +524,8 @@ namespace mwg
         mutable std::int64_t _cachedIndex = -1;
         mutable std::optional<std::int64_t> _featureCount;
         mutable std::optional<Extent> _extent;
+        [[nodiscard]] mwg::Projection ReadProjection() const;
+        mutable std::optional<mwg::Projection> _projection;
         mutable bool _extentNeedsExactRecalculation = false;
         mutable bool _storedExtentDirty = false;
     };
@@ -767,47 +783,44 @@ namespace mwg
         return -1;
     }
 
-    Projection VectorLayer::Projection() const
+    Projection VectorLayer::Impl::ReadProjection() const
     {
-        const OGRSpatialReference* srs = _impl->_layer->GetSpatialRef();
+        CPLErrorReset();
+        const OGRSpatialReference* srs = _layer->GetSpatialRef();
+        GdalEnvironment::RethrowLogException();
+        if (CPLGetLastErrorType() >= CE_Failure)
+        {
+            throw CoreError("Cannot read vector layer spatial reference");
+        }
         if (srs == nullptr ||
-            IsUndefinedGeoPackageSrs(_impl->_dataset, *_impl->_layer))
+            IsUndefinedGeoPackageSrs(_dataset, *_layer))
         {
             return {};
         }
 
         char* wkt = nullptr;
         static constexpr const char* options[] = {"FORMAT=WKT2_2019", nullptr};
-        if (srs->exportToWkt(&wkt, options) != OGRERR_NONE || wkt == nullptr)
+        const OGRErr exported = srs->exportToWkt(&wkt, options);
+        const std::unique_ptr<char, decltype([](char* text) { CPLFree(text); })> text(wkt);
+        GdalEnvironment::RethrowLogException();
+        if (exported != OGRERR_NONE || text == nullptr)
         {
-            CPLFree(wkt);
             throw CoreError("Cannot export vector layer projection");
         }
 
-        std::string result(wkt);
-        CPLFree(wkt);
-        const double epoch = srs->GetCoordinateEpoch();
-        if (std::isfinite(epoch) && epoch != 0.0 &&
-            !result.empty())
-        {
-            char buffer[32];
-            const auto formatted = std::to_chars(
-                std::begin(buffer), std::end(buffer), epoch,
-                std::chars_format::general,
-                std::numeric_limits<double>::max_digits10);
-            if (formatted.ec == std::errc{})
-            {
-                result = "COORDINATEMETADATA[" + result + ",EPOCH[" +
-                         std::string(std::begin(buffer), formatted.ptr) + "]]";
-            }
-        }
         const std::optional<mwg::Projection> projection =
-            mwg::Projection::TryFromWkt(result);
+            mwg::Projection::TryFromWkt(
+                detail::AddCoordinateMetadata(text.get(), srs->GetCoordinateEpoch()));
         if (!projection.has_value())
         {
             throw CoreError("Cannot read vector layer projection");
         }
         return *projection;
+    }
+
+    Projection VectorLayer::Projection() const
+    {
+        return _impl->GetProjection();
     }
 
     bool VectorLayer::IsCellNull(const int fieldIndex, const std::int64_t featureIndex) const
