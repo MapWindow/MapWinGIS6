@@ -367,6 +367,18 @@ TEST(PolygonTriangulation, RejectsTinyExteriorMeshThatIgnoresInteriorRing)
         CoreError);
 }
 
+TEST(PolygonTriangulation, RejectsOverlappingInteriorRings)
+{
+    const rendering::Polygon polygon = MakePolygon(
+        {{0, 0}, {10, 0}, {10, 10}, {0, 10}},
+        {{{1, 1}, {6, 1}, {6, 6}, {1, 6}},
+         {{4, 4}, {9, 4}, {9, 9}, {4, 9}}});
+
+    EXPECT_THROW(
+        (void)rendering::TriangulatePolygon(polygon),
+        InvalidArgument);
+}
+
 // --- Concave polygons ---
 
 TEST(PolygonTriangulation, TriangulatesSimpleConcavePolygon)

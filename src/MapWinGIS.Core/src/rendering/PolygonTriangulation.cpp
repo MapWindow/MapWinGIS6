@@ -122,39 +122,65 @@ namespace mwg::rendering
 
             ~ExteriorCoverage()
             {
+                for (GEOSGeom hole : _holes)
+                {
+                    GEOSGeom_destroy_r(_context.get(), hole);
+                }
                 if (_geometry != nullptr)
                 {
                     GEOSGeom_destroy_r(_context.get(), _geometry);
                 }
             }
 
-            [[nodiscard]] bool Covers(const std::span<const Point> ring)
+            [[nodiscard]] bool AddHole(const std::span<const Point> ring)
             {
-                OGRMultiPoint points;
-                for (const Point& point : ring)
-                {
-                    auto vertex = std::make_unique<OGRPoint>(point.x, point.y);
-                    if (points.addGeometryDirectly(vertex.release()) != OGRERR_NONE)
-                    {
-                        throw CoreError(
-                            "Cannot represent an interior ring for validation");
-                    }
-                }
+                auto polygon = std::make_unique<OGRPolygon>();
+                polygon->addRingDirectly(MakeRing(ring).release());
                 GEOSGeom geometry =
-                    points.exportToGEOS(_context.get(), true);
+                    polygon->exportToGEOS(_context.get(), true);
                 if (geometry == nullptr)
                 {
                     throw CoreError(
                         "Cannot convert an interior ring for validation");
                 }
-                const char result =
+                const char covered =
                     GEOSCovers_r(_context.get(), _geometry, geometry);
-                GEOSGeom_destroy_r(_context.get(), geometry);
-                if (result == 2)
+                if (covered == 2)
                 {
+                    GEOSGeom_destroy_r(_context.get(), geometry);
                     throw CoreError("Cannot validate an interior ring");
                 }
-                return result == 1;
+                if (covered == 0)
+                {
+                    GEOSGeom_destroy_r(_context.get(), geometry);
+                    return false;
+                }
+                for (GEOSGeom hole : _holes)
+                {
+                    const char overlaps = GEOSRelatePattern_r(
+                        _context.get(), hole, geometry, "T********");
+                    if (overlaps == 2)
+                    {
+                        GEOSGeom_destroy_r(_context.get(), geometry);
+                        throw CoreError(
+                            "Cannot compare interior rings for validation");
+                    }
+                    if (overlaps == 1)
+                    {
+                        GEOSGeom_destroy_r(_context.get(), geometry);
+                        return false;
+                    }
+                }
+                try
+                {
+                    _holes.push_back(geometry);
+                }
+                catch (...)
+                {
+                    GEOSGeom_destroy_r(_context.get(), geometry);
+                    throw;
+                }
+                return true;
             }
 
         private:
@@ -170,6 +196,7 @@ namespace mwg::rendering
                 std::remove_pointer_t<GEOSContextHandle_t>,
                 ContextDeleter> _context;
             GEOSGeom _geometry = nullptr;
+            std::vector<GEOSGeom> _holes;
         };
 
         // Exact coordinate equality: triangulation reuses input vertices bit for bit, and
@@ -319,6 +346,10 @@ namespace mwg::rendering
             }
 
             ValidateRing(polygon.front(), "exterior");
+            if (polygon.size() > 1)
+            {
+                GdalEnvironment::Initialize();
+            }
             const std::unique_ptr<ExteriorCoverage> exterior =
                 polygon.size() > 1
                     ? std::make_unique<ExteriorCoverage>(polygon.front())
@@ -335,7 +366,7 @@ namespace mwg::rendering
                 if (ringIndex != 0)
                 {
                     ValidateRing(ring, "interior");
-                    if (!exterior->Covers(ring))
+                    if (!exterior->AddHole(ring))
                     {
                         throw InvalidArgument(
                             "Polygon interior ring lies outside the exterior ring");
