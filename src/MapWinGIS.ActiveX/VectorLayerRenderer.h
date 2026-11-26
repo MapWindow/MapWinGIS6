@@ -85,17 +85,35 @@ namespace mwg::activex
             _openGlRenderer.ClearLayerFillMeshCache(layerId);
         }
 
+        /// Sets the callback that wakes the owner thread after background mesh
+        /// preparation. While a callback is configured, Automatic Fill draws
+        /// leave publication to the owner so it can warm the OpenGL target
+        /// off the paint path; explicit OpenGL draws still publish.
         void ConfigureFillMeshPreparation(
             OpenGlVectorLayerRenderer::FillMeshPreparationWakeCallback wakeCallback,
             void* wakeContext) noexcept
         {
             _openGlRenderer.ConfigureFillMeshPreparation(wakeCallback, wakeContext);
+            _ownerPublishesFillMeshes = wakeCallback != nullptr;
         }
 
         void PrepareFillMeshesInBackground(
             const rendering::MapRenderScene& scene) noexcept
         {
             _openGlRenderer.PrepareFillMeshesInBackground(scene);
+        }
+
+        void WarmUpOpenGl(
+            const rendering::MapRenderScene& scene,
+            const int width,
+            const int height) noexcept
+        {
+            if (_preference != VectorRenderBackendPreference::Gdi &&
+                _openGlRenderer.GetFillMeshReadiness(scene) ==
+                    OpenGlVectorLayerRenderer::FillMeshReadiness::Ready)
+            {
+                (void)_openGlRenderer.WarmUp(width, height);
+            }
         }
 
         [[nodiscard]] bool PublishPreparedFillMeshes() noexcept
@@ -117,5 +135,6 @@ namespace mwg::activex
             VectorRenderBackendPreference::Automatic;
         std::optional<VectorRenderBackendKind> _activeBackend;
         std::wstring_view _diagnostic = L"Rendering has not been attempted.";
+        bool _ownerPublishesFillMeshes = false;
     };
 }

@@ -215,7 +215,12 @@ triangulates on that draw and reuses those backend-owned meshes on later
 draws. With the default `Automatic` preference the coordinator instead paints a
 mesh-pending Fill frame with GDI. Missing meshes are prepared from immutable
 scenes on bounded background workers, then published to the control thread.
-The next frame selects OpenGL once every layer is ready.
+The owner-thread publication warms the OpenGL context, staging buffer, and
+framebuffer for the current viewport before invalidating the frame. If the
+completion arrives before the first frame of a new layer set, publication and
+warm-up wait until that GDI frame has been presented. The next
+frame selects OpenGL once every layer is ready without allocating the target
+inside that paint.
 `MeasuresLazyOpenGlFillCosts` measures
 that production path separately and verifies that scene preparation creates no
 meshes and later steady, pan, and zoom draws do not triangulate again. The
@@ -393,7 +398,8 @@ spent 1,797 ms in the OpenGL lazy-fill first frame before the first-frame plan
 88 ms excluding triangulation; eight `glReadPixels` calls 36 ms total), and
 Debug builds of GDAL/GEOS inflate triangulation roughly six-fold. The scene
 read dominates the remaining load time (about 165 ms Release / one second
-Debug for the 2,459 features); Phase 3 of the first-frame plan addresses it.
+Debug for the 2,459 features); Phase 3 moved this read to the host's async
+entry point rather than replacing the driver's sequential read semantics.
 
 Phase 2 (2026-11-25) replaced the normal fill-mesh path with earcut.hpp and
 added bounded parallel background preparation for the ActiveX control. On the
@@ -406,6 +412,28 @@ existing hole, concavity, multipart, touching-ring, and pixel tests stayed
 green. The default load-to-first-GDI-frame run measured 102.5 ms load plus
 20.3 ms first paint; the async entry point measured 118.9 ms plus 21.2 ms.
 Those values are diagnostic single runs, not timing thresholds.
+
+Phase 3 moved the remaining user-visible setup off the OpenGL transition.
+The ActiveX control now warms its context and framebuffer while publishing
+completed background meshes, and the C# test host's interactive Open and drag
+paths use `BeginLoadVectorDataset` and `GdalOperationCompleted` instead of
+blocking on `LoadVectorDatasetEx`. The host reports the asynchronous load
+duration up to the completion event and measures the first repaint inside that
+event, so a later cached blit cannot be reported as the first frame.
+On 2026-11-26, the real-dataset Release run measured 93.4 ms load plus 21.6 ms
+first paint for `LoadVectorDatasetEx`, and 194.4 ms load plus 20.4 ms first
+paint for `BeginLoadVectorDataset`/`EndLoadVectorDataset`. Both runs reported
+GDI for the first frame and stayed below the 250 ms end-to-end target.
+
+The Phase 3 measurements did not justify changing geometry semantics. Release
+load and first paint were already within the 250 ms end-to-end target, and
+steady pan and zoom were 2-3 ms. Display-resolution vertex reduction remains
+deferred because it would add viewport-dependent CPU caches or repeated
+transform work to the reusable immutable scene. OGR Arrow/batch reading also
+remains deferred: the existing sequential scene read is about 80-165 ms on
+the recorded Release runs, so a driver-specific alternative needs a benchmark
+that demonstrates a meaningful win without weakening read-error detection or
+the current GDAL abstraction.
 
 Scene preparation reads geometries sequentially through OGR and copies
 their coordinates directly, avoiding indexed lookups, WKT serialization, and

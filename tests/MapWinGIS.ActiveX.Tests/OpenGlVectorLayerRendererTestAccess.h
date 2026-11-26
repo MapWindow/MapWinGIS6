@@ -25,6 +25,21 @@ namespace mwg::activex::testing
             return renderer._pixelBuffer.data();
         }
 
+        [[nodiscard]] static bool IsWarmedUp(
+            const OpenGlVectorLayerRenderer& renderer,
+            const int width,
+            const int height) noexcept
+        {
+            return renderer._renderingContext != nullptr &&
+                renderer._framebuffer != 0 &&
+                renderer._renderbuffer != 0 &&
+                renderer._framebufferWidth == width &&
+                renderer._framebufferHeight == height &&
+                renderer._pixelBuffer.size() ==
+                    static_cast<std::size_t>(width) *
+                    static_cast<std::size_t>(height) * 4;
+        }
+
         static void SimulateFailedRecovery(
             OpenGlVectorLayerRenderer& renderer, const int width, const int height) noexcept
         {

@@ -42,6 +42,7 @@ internal sealed class MainForm : Form
     private double? _lastLoadMilliseconds;
     private double? _firstPaintMilliseconds;
     private bool _awaitingFirstPaint;
+    private bool _loadingDatasets;
     private readonly List<CheckResult> _results = [];
     private readonly object _resultsLock = new();
     private readonly object _reportLock = new();
@@ -276,7 +277,9 @@ internal sealed class MainForm : Form
             RecordCheck("Navigation after resizing", VerifyNavigationAfterResize);
             RecordCheck("Clear and reload layers", VerifyClearAndReload);
             RecordCheck("Navigation on an empty map", VerifyEmptyMapNavigation);
-            RecordCheck("Interactive load rendering status", VerifyInteractiveLoadStatus);
+            await RecordCheckAsync(
+                "Interactive load rendering status",
+                VerifyInteractiveLoadStatusAsync);
             RecordCheck("Final dispose", VerifyDispose);
 
             if (_reportWriteError is not null)
@@ -533,6 +536,96 @@ internal sealed class MainForm : Form
         return layer;
     }
 
+    private async Task<LoadedLayer> AddVectorDatasetAsync(
+        string path,
+        List<string> warnings)
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException(
+                "The ActiveX automation object is unavailable.");
+        }
+
+        dynamic automation = automationObject;
+        int previousLayerCount = (int)automation.LayerCount;
+        long previousFeatureCount = (long)automation.FeatureCount;
+        var loadWatch = Stopwatch.StartNew();
+        double? loadMilliseconds = null;
+        double? firstPaintMilliseconds = null;
+        // Measure inside the completion event: the control has committed the
+        // layer, and no later cached blit can be mistaken for the first frame.
+        VectorLoadResult result = await VectorLoadClient.LoadAsync(
+            automationObject,
+            path,
+            CancellationToken.None,
+            () =>
+            {
+                loadMilliseconds = loadWatch.Elapsed.TotalMilliseconds;
+                var paintWatch = Stopwatch.StartNew();
+                _host?.Invalidate(true);
+                _host?.Update();
+                firstPaintMilliseconds = paintWatch.Elapsed.TotalMilliseconds;
+            });
+        loadWatch.Stop();
+        if (result.CompletedOperationId is null)
+        {
+            throw new InvalidOperationException(
+                "The vector load completion event was not observed.");
+        }
+        if (result.CompletedOperationId != result.OperationId ||
+            result.Cancelled ||
+            !result.Succeeded)
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(result.Diagnostics)
+                    ? result.Summary
+                    : result.Diagnostics);
+        }
+
+        _lastLoadMilliseconds = loadMilliseconds ?? loadWatch.Elapsed.TotalMilliseconds;
+        _awaitingFirstPaint = false;
+        _firstPaintMilliseconds = firstPaintMilliseconds;
+        UpdateTimingLabel();
+        var layer = new LoadedLayer(
+            result.LayerId,
+            Path.GetFileNameWithoutExtension(path),
+            null,
+            path);
+        ListViewItem item = AddLayerListItem(layer);
+
+        try
+        {
+            int currentLayerCount = (int)automation.LayerCount;
+            long currentFeatureCount = (long)automation.FeatureCount;
+            if (result.LayerId <= 0 ||
+                currentLayerCount != previousLayerCount + 1 ||
+                currentFeatureCount < previousFeatureCount)
+            {
+                throw new InvalidOperationException(
+                    "The control returned inconsistent layer information.");
+            }
+
+            long featureCount = currentFeatureCount - previousFeatureCount;
+            layer = layer with { FeatureCount = featureCount };
+            item.Tag = layer;
+            item.SubItems[1].Text = featureCount.ToString();
+            long indexedLayerId =
+                (long)automation.GetLayerId(previousLayerCount);
+            if (indexedLayerId != result.LayerId)
+            {
+                throw new InvalidOperationException(
+                    $"The control returned layer ID {result.LayerId}, but index {previousLayerCount} reports ID {indexedLayerId}.");
+            }
+        }
+        catch (Exception exception)
+        {
+            warnings.Add(
+                $"{path}: loaded as layer {result.LayerId}, but metadata could not be verified. {ExplainOperationFailure(exception)}");
+        }
+
+        return layer;
+    }
+
     private ListViewItem AddLayerListItem(LoadedLayer layer)
     {
         var item = new ListViewItem(layer.Name)
@@ -546,7 +639,7 @@ internal sealed class MainForm : Form
         return item;
     }
 
-    private void OpenVectorDatasets()
+    private async void OpenVectorDatasets()
     {
         using var dialog = new OpenFileDialog
         {
@@ -560,40 +653,67 @@ internal sealed class MainForm : Form
         };
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
-            LoadDatasetsInteractively(dialog.FileNames);
+            await LoadDatasetsInteractivelyAsync(dialog.FileNames);
         }
     }
 
-    private void LoadDatasetsInteractively(IEnumerable<string> paths)
+    /// <summary>
+    /// Loads datasets and reports failures to the user.
+    /// </summary>
+    /// <returns>
+    /// The combined failure and warning message in automated mode, or
+    /// <see langword="null"/>. Returning the message instead of throwing keeps
+    /// async-void UI callers from raising unhandled exceptions.
+    /// </returns>
+    private async Task<string?> LoadDatasetsInteractivelyAsync(IEnumerable<string> paths)
     {
+        if (_loadingDatasets)
+        {
+            _renderingStatusLabel.Text =
+                "Rendering: a vector dataset load is already in progress.";
+            return null;
+        }
+
+        _loadingDatasets = true;
         List<string> failures = [];
         List<string> warnings = [];
-        foreach (string path in paths)
+        try
         {
+            foreach (string path in paths)
+            {
+                try
+                {
+                    await AddVectorDatasetAsync(path, warnings);
+                }
+                catch (Exception exception)
+                {
+                    failures.Add($"{path}: {ExplainOperationFailure(exception)}");
+                }
+            }
+
             try
             {
-                AddVectorDataset(path, warnings);
+                RepaintHost();
+                RefreshStatus();
             }
             catch (Exception exception)
             {
-                failures.Add($"{path}: {ExplainOperationFailure(exception)}");
+                warnings.Add($"Could not refresh the control status: {ExplainOperationFailure(exception)}");
             }
         }
-
-        try
+        finally
         {
-            RepaintHost();
-            RefreshStatus();
-        }
-        catch (Exception exception)
-        {
-            warnings.Add($"Could not refresh the control status: {ExplainOperationFailure(exception)}");
+            _loadingDatasets = false;
         }
 
         if (failures.Count > 0 || warnings.Count > 0)
         {
             string message = string.Join(Environment.NewLine, failures.Concat(warnings));
             _renderingStatusLabel.Text = $"Rendering: {message}";
+            if (_options.Automated)
+            {
+                return message;
+            }
             MessageBox.Show(
                 this,
                 message,
@@ -601,6 +721,7 @@ internal sealed class MainForm : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
+        return null;
     }
 
     private void ClearLayers()
@@ -880,7 +1001,7 @@ internal sealed class MainForm : Form
         throw new InvalidOperationException($"The {operationName} unexpectedly succeeded.");
     }
 
-    private void VerifyInteractiveLoadStatus()
+    private async Task VerifyInteractiveLoadStatusAsync()
     {
         ClearLoadedLayers();
         dynamic automation = GetAutomation();
@@ -888,7 +1009,10 @@ internal sealed class MainForm : Form
         try
         {
             automation.RenderingBackendPreference = "GDI";
-            LoadDatasetsInteractively([TestDatasetPath]);
+            if (await LoadDatasetsInteractivelyAsync([TestDatasetPath]) is { } failure)
+            {
+                throw new InvalidOperationException(failure);
+            }
             if ((int)automation.LayerCount != 1 || _layerList.Items.Count != 1 ||
                 _backendLabel.Text != "Backend: GDI" ||
                 _renderingStatusLabel.Text != $"Rendering: {(string)automation.RenderingStatus}")
@@ -1006,7 +1130,9 @@ internal sealed class MainForm : Form
             {
                 string[] droppedPaths = paths.ToArray();
                 // Return from the OLE drop before loading or showing a modal dialog.
-                BeginInvoke(new Action(() => LoadDatasetsInteractively(droppedPaths)));
+                BeginInvoke(new Action(
+                    async () => await LoadDatasetsInteractivelyAsync(
+                        droppedPaths)));
             }
         };
     }

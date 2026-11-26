@@ -7,7 +7,7 @@ complete when its acceptance criteria have been met and its PR is ready.
 
 - [x] **Phase 1 – End-to-end benchmark + keep triangulation off the paint path** (PR 1)
 - [x] **Phase 2 – Fast triangulation + background mesh preparation** (PR 2)
-- [ ] **Phase 3 – Remaining costs + documentation** (PR 3)
+- [x] **Phase 3 – Remaining costs + documentation** (PR 3)
 
 **Target branch:** `development`
 
@@ -264,6 +264,39 @@ Do this work only where the Phase 1 measurements justify it.
   paint path is the first consumer" and "measure Debug and Release
   separately"). Keep benchmarks opt-in and threshold-free; regressions are
   caught by structural assertions.
+
+### Status after Phase 3
+
+Completed the context/FBO warm-up when background meshes are published, before
+the Automatic backend-switch repaint. Publication and warm-up wait until the
+first frame of a new layer set has been presented, because the posted
+completion can otherwise run before the initial `WM_PAINT`. Draw does not
+publish owner-dispatched meshes. The interactive C# host Open and
+drag-and-drop paths now use `BeginLoadVectorDataset` and completion events, so
+scene construction does not block the host UI.
+
+On 2026-11-26, the real 2,459-feature dataset completed the Release
+`LoadVectorDatasetEx` path in 93.4 ms plus a 21.6 ms first GDI frame. The
+asynchronous path completed in 194.4 ms plus a 20.4 ms first frame. Both
+stay below the 250 ms target and the first frames reported GDI. These are
+diagnostic single runs, not CI thresholds. The complete Debug CTest preset
+passed 507 tests, the automated ActiveX host checks passed, and the Debug and
+Release CMake builds reported no new code-level Level 4 warnings. The existing
+MSVC `D9025` command-line override notices remain in the build configuration.
+
+Remaining limitations:
+
+- Display-resolution vertex reduction was not adopted. The measured Release
+  first frame and steady pan/zoom already meet the target, and viewport-specific
+  reduction would complicate or invalidate the reusable immutable-scene and
+  GPU-buffer caches.
+- OGR Arrow/batch reads were not adopted. The sequential Release read remains
+  within the overall target and retains existing error-detection and driver
+  abstractions; a future change needs an equivalent benchmark that proves a
+  material improvement.
+- OpenGL target warm-up moves context/FBO allocation before the backend-switch
+  repaint, but the owner-thread warm-up still depends on the driver's cost and
+  is not a timing threshold. Systems without usable OpenGL continue to use GDI.
 
 ---
 

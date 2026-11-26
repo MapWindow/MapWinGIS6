@@ -220,6 +220,10 @@ private:
     /// into the cache. Called when layers, the view (except a drag pan), the
     /// viewport size, or the backend preference changes.
     void InvalidateLayerCache() noexcept;
+
+    /// Records that a client-sized frame was drawn after the last layer
+    /// change and resumes fill-mesh publication deferred until then.
+    void OnLayerFramePresented() noexcept;
     bool EnsureFillMeshPreparationDispatch() noexcept;
     void PrepareFillMeshesInBackground() noexcept;
     static bool WakeFillMeshPreparation(void* context) noexcept;
@@ -253,6 +257,12 @@ private:
     COLORREF _layerCacheBackground = 0;
 
     bool _layerCacheValid = false;
+
+    /// A layer change has not been presented by a client-sized draw yet.
+    bool _layerFramePending = false;
+
+    /// Fill-mesh publication and OpenGL warm-up wait for the pending frame.
+    bool _fillMeshPublicationDeferred = false;
     std::shared_ptr<mwg::activex::GdalDispatchWindow>
         _fillMeshPreparationDispatch;
     mwg::activex::VectorLayerRenderer _renderer;
