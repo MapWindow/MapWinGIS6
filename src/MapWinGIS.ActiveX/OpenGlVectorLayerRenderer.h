@@ -58,6 +58,10 @@ namespace mwg::activex
             int maximumWidth,
             int maximumHeight) noexcept;
 
+        /// Initializes the rendering context, staging buffer, and framebuffer
+        /// before the first scene draw. Returns S_OK when the target is ready.
+        [[nodiscard]] HRESULT WarmUp(int width, int height) noexcept;
+
         /**
          * @brief Draws polygon fills or outlines through OpenGL.
          *
@@ -157,8 +161,6 @@ namespace mwg::activex
         {
             int width = 0;
             int height = 0;
-            std::size_t pixelWidth = 0;
-            std::size_t pixelHeight = 0;
         };
         struct TargetValidation final
         {
@@ -169,6 +171,7 @@ namespace mwg::activex
         [[nodiscard]] bool Initialize() noexcept;
         [[nodiscard]] bool InitializeFramebuffer() noexcept;
         [[nodiscard]] bool ResizeFramebuffer(int width, int height) noexcept;
+        [[nodiscard]] HRESULT InitializeTarget(int width, int height) noexcept;
         void Release() noexcept;
         void QueueDeletedGpuBuffer(unsigned int buffer) noexcept;
         void FlushDeletedGpuBuffers() noexcept;

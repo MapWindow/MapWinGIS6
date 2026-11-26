@@ -98,6 +98,19 @@ namespace mwg::activex
             _openGlRenderer.PrepareFillMeshesInBackground(scene);
         }
 
+        void WarmUpOpenGl(
+            const rendering::MapRenderScene& scene,
+            const int width,
+            const int height) noexcept
+        {
+            if (_preference != VectorRenderBackendPreference::Gdi &&
+                _openGlRenderer.GetFillMeshReadiness(scene) ==
+                    OpenGlVectorLayerRenderer::FillMeshReadiness::Ready)
+            {
+                (void)_openGlRenderer.WarmUp(width, height);
+            }
+        }
+
         [[nodiscard]] bool PublishPreparedFillMeshes() noexcept
         {
             return _openGlRenderer.PublishPreparedFillMeshes();

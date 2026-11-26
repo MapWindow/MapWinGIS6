@@ -32,6 +32,33 @@ See [GdalOperationResult.h](../../../src/MapWinGIS.Core/include/mapwingis/gdal/G
 [GdalAlgorithmRunner.cpp](../../../src/MapWinGIS.Core/src/gdal/GdalAlgorithmRunner.cpp),
 and [GdalAlgorithmRunnerTests.cpp](../../../tests/MapWinGIS.Core.Tests/GdalAlgorithmRunnerTests.cpp).
 
+## Lazy work must not move the dominant cost to first paint
+
+Removing triangulation from scene creation alone was not enough. The first
+Automatic Fill paint became the first consumer and synchronously generated the
+same meshes before presenting any pixels. The rendering path must keep the
+paint operation bounded: use a complete GDI frame while immutable scenes are
+prepared in the background, then publish the result and invalidate on the
+owner thread. When backend target allocation is also expensive, warm that
+target before the backend-switch repaint rather than moving the stall into the
+next frame. Direct explicit-OpenGL draws retain the documented lazy fallback.
+
+See [MapWinGISControl.cpp](../../../src/MapWinGIS.ActiveX/MapWinGISControl.cpp),
+[VectorLayerRenderer.cpp](../../../src/MapWinGIS.ActiveX/VectorLayerRenderer.cpp),
+and [OpenGlVectorLayerRenderer.cpp](../../../src/MapWinGIS.ActiveX/OpenGlVectorLayerRenderer.cpp).
+
+## Measure Debug and Release rendering costs separately
+
+Debug GDAL/GEOS builds can change the ranking and magnitude of costs. During the
+first-frame work, triangulation was roughly six times slower in Debug on one
+workstation, while Release users experienced a different bottleneck profile.
+Collect structural assertions and threshold-free diagnostics in every build,
+but make Release measurements before accepting or rejecting a performance
+optimization. Keep optional real datasets and workstation-specific numbers
+explicitly labeled rather than turning them into CI timing requirements.
+
+See [the rendering performance baseline](../../../docs/TESTING.md#rendering-performance-baseline).
+
 ## A feature count may require a checked scan
 
 **Problem:** Some OGR drivers cannot report a feature count. An indexed

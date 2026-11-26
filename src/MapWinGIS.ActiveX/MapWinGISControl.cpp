@@ -1740,6 +1740,9 @@ void CMapWinGISControl::DispatchFillMeshPreparation(
         }
         if (instance->_renderer.PublishPreparedFillMeshes())
         {
+            const mwg::Viewport& viewport = instance->_view.GetViewport();
+            instance->_renderer.WarmUpOpenGl(
+                instance->_view.Scene(), viewport.Width(), viewport.Height());
             instance->InvalidateLayerCache();
             instance->FireViewChange();
         }

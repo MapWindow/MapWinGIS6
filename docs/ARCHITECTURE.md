@@ -371,7 +371,11 @@ uploads each layer's immutable, scene-localized fill and outline coordinates
 once to a reusable vertex buffer and indices to an element buffer. Pan and zoom
 change the fixed-function model-view transform without rebuilding the source
 coordinates. The client-side transformed-array path remains as a compatibility
-fallback. Drawing uses a framebuffer object (OpenGL 3.0 or
+fallback. When background fill meshes become ready, the control initializes
+the context, staging buffer, and framebuffer for its current viewport before
+invalidating the GDI frame. The following OpenGL draw then reuses those target
+resources instead of performing their one-time allocation on the paint path.
+Drawing uses a framebuffer object (OpenGL 3.0 or
 `GL_EXT_framebuffer_object`) and reads pixels back in bottom-up BGRA order into
 a CPU buffer before copying them to the host device context.
 BGRA stores blue, green, red, and alpha bytes in that order.

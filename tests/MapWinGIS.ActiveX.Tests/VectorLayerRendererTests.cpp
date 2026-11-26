@@ -701,6 +701,20 @@ TEST(VectorLayerRenderer, OpenGlRecreatesLostContextOnLaterDraw)
     EXPECT_EQ(GetPixel(surface.Get(), 5, 5), GetSysColor(COLOR_WINDOW));
 }
 
+TEST(VectorLayerRenderer, OpenGlWarmUpCreatesTheTargetBeforeDrawing)
+{
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const HRESULT warmUpResult = renderer.WarmUp(120, 100);
+    if (warmUpResult == S_FALSE)
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    ASSERT_EQ(warmUpResult, S_OK);
+    EXPECT_TRUE(
+        mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::
+            IsWarmedUp(renderer, 120, 100));
+}
+
 TEST(VectorLayerRenderer, OpenGlRendersConcavePolygonWithDuplicateVertex)
 {
     BitmapSurface surface(120, 100);

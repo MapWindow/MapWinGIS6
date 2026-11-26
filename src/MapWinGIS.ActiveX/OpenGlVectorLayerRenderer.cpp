@@ -1108,6 +1108,15 @@ namespace mwg::activex
         return std::nullopt;
     }
 
+    HRESULT OpenGlVectorLayerRenderer::WarmUp(
+        const int width,
+        const int height) noexcept
+    {
+        const diagnostics::PerformanceScope scope(
+            diagnostics::PerformanceOperation::OpenGlContextInitialization);
+        return InitializeTarget(width, height);
+    }
+
     bool OpenGlVectorLayerRenderer::Initialize() noexcept
     {
         if (_renderingContext != nullptr)
@@ -1295,6 +1304,93 @@ namespace mwg::activex
         }
 
         return _framebufferFunctions->checkFramebufferStatus(kFramebuffer) == kFramebufferComplete;
+    }
+
+    HRESULT OpenGlVectorLayerRenderer::InitializeTarget(
+        const int width,
+        const int height) noexcept
+    {
+        if (width <= 0 || height <= 0)
+        {
+            _lastFailureReason =
+                L"The OpenGL target dimensions must be positive.";
+            return S_FALSE;
+        }
+
+        if (_contextInvalid)
+        {
+            Release();
+            _contextInvalid = false;
+        }
+
+        if (_initializationFailed &&
+            (width != _retryTargetWidth || height != _retryTargetHeight))
+        {
+            Release();
+            _initializationFailed = false;
+            _initializationFailureReason = {};
+            _initializationRetryDrawsRemaining = 0;
+        }
+        if (_initializationFailed)
+        {
+            if (_initializationRetryDrawsRemaining > 0)
+            {
+                --_initializationRetryDrawsRemaining;
+                _lastFailureReason = _initializationFailureReason;
+                return S_FALSE;
+            }
+            _initializationFailed = false;
+            _initializationFailureReason = {};
+        }
+        if (!Initialize())
+        {
+            _retryTargetWidth = width;
+            _retryTargetHeight = height;
+            _initializationRetryDrawsRemaining = kInitializationRetryDraws;
+            return S_FALSE;
+        }
+        _contextInvalid = false;
+
+        const auto rejectionReason = GetTargetRejectionReason(
+            width,
+            height,
+            _maximumTargetWidth,
+            _maximumTargetHeight);
+        if (rejectionReason.has_value())
+        {
+            _lastFailureReason = *rejectionReason;
+            return S_FALSE;
+        }
+
+        const std::size_t pixelWidth = static_cast<std::size_t>(width);
+        const std::size_t pixelHeight = static_cast<std::size_t>(height);
+        const std::size_t stagingBytes =
+            pixelWidth * pixelHeight * kBytesPerPixel;
+        if (!EnsureStaging(stagingBytes))
+        {
+            return S_FALSE;
+        }
+
+        const ScopedCurrentContext currentContext(
+            _deviceContext, _renderingContext);
+        if (!currentContext.IsValid())
+        {
+            _lastFailureReason =
+                L"OpenGL could not activate its rendering context.";
+            OutputDebugStringW(
+                L"MapWinGIS: could not activate the OpenGL rendering context.\n");
+            _contextInvalid = true;
+            return E_FAIL;
+        }
+        if (!ResizeFramebuffer(width, height))
+        {
+            _lastFailureReason =
+                L"OpenGL could not allocate a complete framebuffer for this target.";
+            OutputDebugStringW(
+                L"MapWinGIS: no complete OpenGL framebuffer for this size.\n");
+            return S_FALSE;
+        }
+        return S_OK;
     }
 
     void OpenGlVectorLayerRenderer::Release() noexcept
@@ -1803,9 +1899,7 @@ namespace mwg::activex
             S_OK,
             Target{
                 static_cast<int>(width),
-                static_cast<int>(height),
-                static_cast<std::size_t>(width),
-                static_cast<std::size_t>(height)}};
+                static_cast<int>(height)}};
     }
 
     bool OpenGlVectorLayerRenderer::EnsureStaging(
@@ -2516,80 +2610,11 @@ namespace mwg::activex
             const diagnostics::PerformanceScope contextScope(
                 diagnostics::PerformanceOperation::OpenGlContextInitialization);
 
-            // Release a lost context once. If replacement initialization fails,
-            // preserve its failure state so later draws respect the retry delay.
-            if (_contextInvalid)
+            const HRESULT initializationResult =
+                InitializeTarget(target.width, target.height);
+            if (initializationResult != S_OK)
             {
-                Release();
-                _contextInvalid = false;
-            }
-
-            if (_initializationFailed &&
-                (target.width != _retryTargetWidth || target.height != _retryTargetHeight))
-            {
-                // A resize is a useful retry boundary: drivers can reject one
-                // context/target combination yet support a later target.
-                Release();
-                _initializationFailed = false;
-                _initializationFailureReason = {};
-                _initializationRetryDrawsRemaining = 0;
-            }
-            if (_initializationFailed)
-            {
-                if (_initializationRetryDrawsRemaining > 0)
-                {
-                    --_initializationRetryDrawsRemaining;
-                    _lastFailureReason = _initializationFailureReason;
-                    return S_FALSE;
-                }
-                _initializationFailed = false;
-                _initializationFailureReason = {};
-            }
-            if (!Initialize())
-            {
-                _retryTargetWidth = target.width;
-                _retryTargetHeight = target.height;
-                _initializationRetryDrawsRemaining = kInitializationRetryDraws;
-                return S_FALSE;
-            }
-            _contextInvalid = false;
-
-            const auto rejectionReason = GetTargetRejectionReason(
-                target.width,
-                target.height,
-                _maximumTargetWidth,
-                _maximumTargetHeight);
-            if (rejectionReason.has_value())
-            {
-                _lastFailureReason = *rejectionReason;
-                return S_FALSE;
-            }
-
-            const std::size_t stagingBytes =
-                target.pixelWidth * target.pixelHeight * kBytesPerPixel;
-            if (!EnsureStaging(stagingBytes))
-            {
-                return S_FALSE;
-            }
-
-            const ScopedCurrentContext currentContext(
-                _deviceContext, _renderingContext);
-            if (!currentContext.IsValid())
-            {
-                _lastFailureReason =
-                    L"OpenGL could not activate its rendering context.";
-                OutputDebugStringW(
-                    L"MapWinGIS: could not activate the OpenGL rendering context.\n");
-                _contextInvalid = true;
-                return E_FAIL;
-            }
-            if (!ResizeFramebuffer(target.width, target.height))
-            {
-                _lastFailureReason =
-                    L"OpenGL could not allocate a complete framebuffer for this target.";
-                OutputDebugStringW(
-                    L"MapWinGIS: no complete OpenGL framebuffer for this size.\n");
-                return S_FALSE;
+                return initializationResult;
             }
         }
 
