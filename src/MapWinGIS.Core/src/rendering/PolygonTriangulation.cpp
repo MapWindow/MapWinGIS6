@@ -122,9 +122,9 @@ namespace mwg::rendering
 
             ~ExteriorCoverage()
             {
-                for (GEOSGeom hole : _holes)
+                for (const std::unique_ptr<Hole>& hole : _holes)
                 {
-                    GEOSGeom_destroy_r(_context.get(), hole);
+                    GEOSGeom_destroy_r(_context.get(), hole->geometry);
                 }
                 if (_geometry != nullptr)
                 {
@@ -155,25 +155,12 @@ namespace mwg::rendering
                     GEOSGeom_destroy_r(_context.get(), geometry);
                     return false;
                 }
-                for (GEOSGeom hole : _holes)
-                {
-                    const char overlaps = GEOSRelatePattern_r(
-                        _context.get(), hole, geometry, "T********");
-                    if (overlaps == 2)
-                    {
-                        GEOSGeom_destroy_r(_context.get(), geometry);
-                        throw CoreError(
-                            "Cannot compare interior rings for validation");
-                    }
-                    if (overlaps == 1)
-                    {
-                        GEOSGeom_destroy_r(_context.get(), geometry);
-                        return false;
-                    }
-                }
                 try
                 {
-                    _holes.push_back(geometry);
+                    auto hole = std::make_unique<Hole>();
+                    hole->geometry = geometry;
+                    hole->index = _holes.size();
+                    _holes.push_back(std::move(hole));
                 }
                 catch (...)
                 {
@@ -183,7 +170,78 @@ namespace mwg::rendering
                 return true;
             }
 
+            [[nodiscard]] bool ValidateHoles()
+            {
+                if (_holes.size() < 2)
+                {
+                    return true;
+                }
+
+                GEOSSTRtree* const tree =
+                    GEOSSTRtree_create_r(_context.get(), 10);
+                if (tree == nullptr)
+                {
+                    throw CoreError(
+                        "Cannot create a spatial index for interior ring validation");
+                }
+                try
+                {
+                    for (const std::unique_ptr<Hole>& hole : _holes)
+                    {
+                        GEOSSTRtree_insert_r(
+                            _context.get(), tree, hole->geometry, hole.get());
+                    }
+                    if (GEOSSTRtree_build_r(_context.get(), tree) == 0)
+                    {
+                        throw CoreError(
+                            "Cannot build the spatial index for interior ring validation");
+                    }
+
+                    for (const std::unique_ptr<Hole>& hole : _holes)
+                    {
+                        HoleQuery query{_context.get(), hole.get()};
+                        GEOSSTRtree_query_r(
+                            _context.get(),
+                            tree,
+                            hole->geometry,
+                            &QueryHole,
+                            &query);
+                        if (query.validationFailed)
+                        {
+                            throw CoreError(
+                                "Cannot compare interior rings for validation");
+                        }
+                        if (query.overlaps)
+                        {
+                            GEOSSTRtree_destroy_r(_context.get(), tree);
+                            return false;
+                        }
+                    }
+                }
+                catch (...)
+                {
+                    GEOSSTRtree_destroy_r(_context.get(), tree);
+                    throw;
+                }
+                GEOSSTRtree_destroy_r(_context.get(), tree);
+                return true;
+            }
+
         private:
+            struct Hole final
+            {
+                GEOSGeom geometry = nullptr;
+                std::size_t index = 0;
+            };
+
+            struct HoleQuery final
+            {
+                GEOSContextHandle_t context = nullptr;
+                const Hole* source = nullptr;
+                bool overlaps = false;
+                bool validationFailed = false;
+            };
+
             struct ContextDeleter final
             {
                 void operator()(GEOSContextHandle_t context) const noexcept
@@ -192,11 +250,36 @@ namespace mwg::rendering
                 }
             };
 
+            static void QueryHole(void* item, void* data)
+            {
+                auto& query = *static_cast<HoleQuery*>(data);
+                const Hole& candidate = *static_cast<Hole*>(item);
+                if (query.overlaps || query.validationFailed ||
+                    candidate.index <= query.source->index)
+                {
+                    return;
+                }
+
+                const char overlaps = GEOSRelatePattern_r(
+                    query.context,
+                    query.source->geometry,
+                    candidate.geometry,
+                    "T********");
+                if (overlaps == 2)
+                {
+                    query.validationFailed = true;
+                }
+                else if (overlaps == 1)
+                {
+                    query.overlaps = true;
+                }
+            }
+
             std::unique_ptr<
                 std::remove_pointer_t<GEOSContextHandle_t>,
                 ContextDeleter> _context;
             GEOSGeom _geometry = nullptr;
-            std::vector<GEOSGeom> _holes;
+            std::vector<std::unique_ptr<Hole>> _holes;
         };
 
         // Exact coordinate equality: triangulation reuses input vertices bit for bit, and
@@ -366,11 +449,6 @@ namespace mwg::rendering
                 if (ringIndex != 0)
                 {
                     ValidateRing(ring, "interior");
-                    if (!exterior->AddHole(ring))
-                    {
-                        throw InvalidArgument(
-                            "Polygon interior ring lies outside the exterior ring");
-                    }
                 }
 
                 std::vector<std::array<double, 2>> converted;
@@ -403,11 +481,21 @@ namespace mwg::rendering
                     }
                     continue;
                 }
+                if (ringIndex != 0 && !exterior->AddHole(convertedPoints))
+                {
+                    throw InvalidArgument(
+                        "Polygon interior ring lies outside the exterior ring");
+                }
                 flattenedPoints.insert(
                     flattenedPoints.end(),
                     convertedPoints.begin(),
                     convertedPoints.end());
                 result.push_back(std::move(converted));
+            }
+            if (exterior != nullptr && !exterior->ValidateHoles())
+            {
+                throw InvalidArgument(
+                    "Polygon interior rings overlap");
             }
             return result;
         }

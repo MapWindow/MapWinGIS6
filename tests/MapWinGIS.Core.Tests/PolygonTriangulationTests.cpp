@@ -434,6 +434,32 @@ TEST(PolygonTriangulation, TriangulatesPolygonWithMultipleHoles)
     EXPECT_NEAR(MeshArea(mesh), 18.0, 1e-9);
 }
 
+TEST(PolygonTriangulation, TriangulatesPolygonWithManyDisjointHoles)
+{
+    rendering::Polygon polygon =
+        MakePolygon({{0, 0}, {18, 0}, {18, 18}, {0, 18}});
+    constexpr std::size_t holesPerAxis = 8;
+    for (std::size_t row = 0; row < holesPerAxis; ++row)
+    {
+        for (std::size_t column = 0; column < holesPerAxis; ++column)
+        {
+            const double x = static_cast<double>(column * 2 + 1);
+            const double y = static_cast<double>(row * 2 + 1);
+            polygon.push_back(
+                MakeRing({{x, y}, {x + 1, y}, {x + 1, y + 1}, {x, y + 1}}));
+        }
+    }
+
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(
+        MeshArea(mesh),
+        18.0 * 18.0 - static_cast<double>(holesPerAxis * holesPerAxis),
+        1e-9);
+}
+
 TEST(PolygonTriangulation, TriangulatesConcavePolygonWithHole)
 {
     const rendering::Polygon polygon = MakePolygon(
