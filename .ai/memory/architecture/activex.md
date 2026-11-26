@@ -26,13 +26,17 @@ The ActiveX rendering coordinator selects a backend for a Core render scene.
 GDI is the CPU fallback; OpenGL has a narrower supported-scene range and can
 fall back to GDI. With the `Automatic` preference, a Fill-mode frame whose
 layers have no fill meshes yet is painted with GDI (reported via
-`RenderingBackend`/`RenderingStatus`) so the paint path never triangulates;
-OpenGL is retried on later frames once meshes exist. Nothing prepares those
-meshes during `Automatic` drawing today (Phase 2 adds background
-preparation), so default Fill stays on GDI until an explicit `OpenGL` draw
-caches the meshes or a scene supplies them. Only the explicit
-`OpenGL` preference triangulates lazily on the drawing thread. Backends consume Core-produced geometry and do not own
-datasets or view state. The OCX owns the host-specific rendering resources.
+`RenderingBackend`/`RenderingStatus`) so the paint path never triangulates.
+The control queues immutable layer scenes to the OpenGL renderer's background
+coordinator, which uses bounded parallel polygon preparation. A posted
+message publishes results on the owner thread and invalidates the layer
+frame; the next Automatic frame can select OpenGL. Cache publication checks
+the stable layer ID, scene identity, and generation token, so cancellation or
+replacement discards stale work. Only direct draws with an explicit `OpenGL`
+preference retain the synchronous lazy fallback for callers that have not
+queued background preparation. Backends consume Core-produced geometry and
+do not own datasets or view state. The OCX owns the host-specific rendering
+resources.
 The control composes ordinary screen frames in an offscreen DIB-section
 `FrameBuffer` and presents them with a single `BitBlt`; alternate-size
 printing/scaled draws use temporary buffers. During a drag, the cached layer
@@ -48,12 +52,12 @@ replacement initialization must retain its failure state for the 60-draw
 retry delay. A size change bypasses the delay.
 See `OpenGlVectorLayerRenderer::Draw` and the renderer/control regression tests.
 
-The OpenGL lazy fill-mesh cache belongs to the renderer and is shared with
+The OpenGL fill-mesh cache belongs to the renderer and is shared with
 temporary renderers. It is keyed by `LayerId` and the immutable scene identity:
 reordering, hiding, viewport changes, and backend selection preserve entries,
 while a changed scene for one layer invalidates only that entry. The coordinator
 prunes removed IDs before every backend choice, and explicit layer or scene
-invalidation releases the retained CPU mesh storage.
+invalidation cancels pending work and releases the retained CPU mesh storage.
 
 The screen OpenGL renderer also caches context-local vertex and index buffers
 for immutable layer geometry when OpenGL 1.5 or

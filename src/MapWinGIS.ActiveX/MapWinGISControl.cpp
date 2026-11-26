@@ -7,8 +7,10 @@
  *
  * Redraws: every map or view change made through the control goes through
  * its MapView; the control calls FireViewChange when the MapView reports
- * that the frame changed. OnDraw composes the MapView's render scene through
- * its viewport into an offscreen frame buffer and presents the finished
+ * that the frame changed. Loaded scenes queue background fill-mesh work and
+ * publish completion through a message-only dispatch window. OnDraw composes
+ * the MapView's render scene through its viewport into an offscreen frame
+ * buffer and presents the finished
  * frame with a single blit, so every layer uses the same transformation and
  * the visible surface never shows a partially drawn frame.
  *
@@ -946,6 +948,7 @@ void CMapWinGISControl::CompleteVectorLoad(
         state->layerId = convertedId;
         state->committed = true;
         state->featureCount = 0;
+        PrepareFillMeshesInBackground();
         InvalidateLayerCache();
         FireViewChange();
     }
@@ -1091,6 +1094,7 @@ HRESULT CMapWinGISControl::LoadVectorDatasetImpl(
         {
             *layerId = convertedId;
         }
+        PrepareFillMeshesInBackground();
         InvalidateLayerCache();
         FireViewChange();
         return S_OK;
@@ -1204,6 +1208,11 @@ STDMETHODIMP CMapWinGISControl::put_RenderingBackendPreference(BSTR preference)
     if (_renderer.GetPreference() != previousPreference)
     {
         SetDirty(TRUE);
+    }
+    if (_renderer.GetPreference() !=
+        mwg::activex::VectorRenderBackendPreference::Gdi)
+    {
+        PrepareFillMeshesInBackground();
     }
     InvalidateLayerCache();
     FireViewChange();
@@ -1633,6 +1642,8 @@ LRESULT CMapWinGISControl::OnCreate(UINT, WPARAM, LPARAM, BOOL& handled)
         ::OutputDebugStringW(L"MapWinGIS: unable to reactivate GDAL operations.\n");
     }
     _gdalEvents.OnSize();
+    InvalidateLayerCache();
+    PrepareFillMeshesInBackground();
     handled = FALSE;
     return 0;
 }
@@ -1669,6 +1680,13 @@ LRESULT CMapWinGISControl::OnDestroy(
     BOOL& handled)
 {
     CancelMousePan();
+    _renderer.InvalidateSceneCache();
+    _renderer.ConfigureFillMeshPreparation(nullptr, nullptr);
+    if (_fillMeshPreparationDispatch != nullptr)
+    {
+        _fillMeshPreparationDispatch->Destroy();
+        _fillMeshPreparationDispatch.reset();
+    }
     _gdalEvents.OnDestroy();
     handled = FALSE;
     return 0;
@@ -1699,9 +1717,129 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
     }
 }
 
+bool CMapWinGISControl::WakeFillMeshPreparation(
+    void* const context) noexcept
+{
+    return ::PostMessageW(
+        static_cast<HWND>(context),
+        mwg::activex::kGdalDispatchMessage,
+        0,
+        0) != FALSE;
+}
+
+void CMapWinGISControl::DispatchFillMeshPreparation(
+    void* const control) noexcept
+{
+    auto* const instance = static_cast<CMapWinGISControl*>(control);
+    ATL::CComPtr<CMapWinGISControl> lifetime(instance);
+    try
+    {
+        if (instance->_fillMeshPreparationDispatch != nullptr)
+        {
+            instance->_fillMeshPreparationDispatch->StopRetryTimer();
+        }
+        if (instance->_renderer.PublishPreparedFillMeshes())
+        {
+            instance->InvalidateLayerCache();
+            instance->FireViewChange();
+        }
+        if (instance->_fillMeshPreparationDispatch != nullptr)
+        {
+            if (instance->_renderer.HasCompletedFillMeshPreparation())
+            {
+                if (!instance->_fillMeshPreparationDispatch->StartRetryTimer())
+                {
+                    ::OutputDebugStringW(
+                        L"MapWinGIS: unable to arm the fill-mesh retry timer.\n");
+                }
+            }
+            else
+            {
+                instance->_fillMeshPreparationDispatch->StopRetryTimer();
+            }
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        ::OutputDebugStringA(exception.what());
+    }
+    catch (...)
+    {
+        ::OutputDebugStringW(
+            L"MapWinGIS: unexpected exception while publishing fill meshes.\n");
+    }
+}
+
+bool CMapWinGISControl::EnsureFillMeshPreparationDispatch() noexcept
+{
+    if (_fillMeshPreparationDispatch != nullptr)
+    {
+        return true;
+    }
+    try
+    {
+        auto dispatch = std::make_shared<mwg::activex::GdalDispatchWindow>();
+        const HWND window = dispatch->Create(
+            &CMapWinGISControl::DispatchFillMeshPreparation,
+            this);
+        if (window == nullptr)
+        {
+            ::OutputDebugStringW(
+                L"MapWinGIS: unable to create the fill-mesh dispatch window.\n");
+            return false;
+        }
+        _fillMeshPreparationDispatch = std::move(dispatch);
+        _renderer.ConfigureFillMeshPreparation(
+            &CMapWinGISControl::WakeFillMeshPreparation,
+            static_cast<void*>(window));
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        ::OutputDebugStringA(exception.what());
+        return false;
+    }
+    catch (...)
+    {
+        ::OutputDebugStringW(
+            L"MapWinGIS: unable to initialize background fill-mesh preparation.\n");
+        return false;
+    }
+}
+
+void CMapWinGISControl::PrepareFillMeshesInBackground() noexcept
+{
+    if (_renderer.GetPreference() ==
+            mwg::activex::VectorRenderBackendPreference::Gdi ||
+        !EnsureFillMeshPreparationDispatch())
+    {
+        return;
+    }
+    try
+    {
+        _renderer.PrepareFillMeshesInBackground(_view.Scene());
+    }
+    catch (const std::exception& exception)
+    {
+        ::OutputDebugStringA(exception.what());
+    }
+    catch (...)
+    {
+        ::OutputDebugStringW(
+            L"MapWinGIS: unable to queue background fill-mesh preparation.\n");
+    }
+}
+
 STDMETHODIMP CMapWinGISControl::Close(const DWORD saveOption)
 {
     CancelMousePan();
+    _renderer.InvalidateSceneCache();
+    _renderer.ConfigureFillMeshPreparation(nullptr, nullptr);
+    if (_fillMeshPreparationDispatch != nullptr)
+    {
+        _fillMeshPreparationDispatch->Destroy();
+        _fillMeshPreparationDispatch.reset();
+    }
     _gdalEvents.Close();
     _vectorLoadOperations.clear();
     const HRESULT result = ATL::IOleObjectImpl<CMapWinGISControl>::Close(saveOption);
@@ -1718,6 +1856,8 @@ STDMETHODIMP CMapWinGISControl::SetClientSite(IOleClientSite* const clientSite)
         const HRESULT reset = _gdalEvents.Reactivate();
         if (FAILED(reset))
             return SetControlComErrorInfo("The GDAL operation source could not be reactivated.", IID_IMapWinGISControlGdal, reset);
+        InvalidateLayerCache();
+        PrepareFillMeshesInBackground();
     }
     return FAILED(result)
         ? SetControlComErrorInfo("The ActiveX client site could not be changed.", IID_IMapWinGISControl4, result)
@@ -2049,5 +2189,11 @@ LRESULT CMapWinGISControl::OnEraseBkgnd(
 CMapWinGISControl::~CMapWinGISControl()
 {
     CancelMousePan();
+    _renderer.InvalidateSceneCache();
+    _renderer.ConfigureFillMeshPreparation(nullptr, nullptr);
+    if (_fillMeshPreparationDispatch != nullptr)
+    {
+        _fillMeshPreparationDispatch->Destroy();
+    }
     _gdalEvents.Shutdown();
 }

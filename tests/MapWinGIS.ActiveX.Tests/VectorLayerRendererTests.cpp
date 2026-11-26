@@ -5,12 +5,14 @@
  * @brief Tests OpenGL rendering and the GDI fallback for vector scenes.
  *
  * Also verifies that multi-layer scenes are drawn through one shared
- * viewport and that a layer that cannot be drawn does not stop the others.
+ * viewport and that background mesh states transition without publishing
+ * stale or cancelled scenes.
  */
 #include <Windows.h>
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -33,6 +35,26 @@
 
 namespace
 {
+    bool CountFailedWake(void* const context) noexcept
+    {
+        auto* const calls = static_cast<std::atomic_size_t*>(context);
+        return calls->fetch_add(
+            1, std::memory_order_relaxed) != 0;
+    }
+
+    struct ControlledWake final
+    {
+        std::atomic_size_t attempts{0};
+        std::atomic_bool succeeds{false};
+    };
+
+    bool PostControlledWake(void* const context) noexcept
+    {
+        auto* const wake = static_cast<ControlledWake*>(context);
+        wake->attempts.fetch_add(1, std::memory_order_relaxed);
+        return wake->succeeds.load(std::memory_order_relaxed);
+    }
+
     class BitmapSurface final
     {
     public:
@@ -175,16 +197,16 @@ namespace
         return MakeMapScene({MakeRectangleLayer({1.0, 1.0, 9.0, 9.0})});
     }
 
-    /// A self-intersecting polygon that Core triangulation rejects, used to
-    /// force a cached triangulation failure.
+    /// A collinear polygon that both earcut and the GEOS fallback reject,
+    /// used to force a cached triangulation failure.
     [[nodiscard]] mwg::rendering::VectorRenderScene MakeFailingPolygonLayer()
     {
         return {
             mwg::Extent{-3.0, -3.0, 3.0, 3.0},
             1,
             0,
-            {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0},
-               {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}};
+            {{{{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0},
+               {0.0, 0.0}}}}};
     }
 
     /// Rebuilds the single-polygon fixture with one additional interior ring.
@@ -379,6 +401,11 @@ TEST(VectorLayerRenderer, AutomaticFillPaintsGdiWhileFillMeshesArePending)
     const mwg::Viewport viewport = FitViewport(bounds);
     PerformanceCapture diagnostics;
 
+    mwg::activex::OpenGlVectorLayerRenderer readinessProbe;
+    ASSERT_EQ(
+        readinessProbe.GetFillMeshReadiness(scene),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshReadiness::Pending);
+
     mwg::activex::VectorLayerRenderer renderer;
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
 
@@ -389,10 +416,6 @@ TEST(VectorLayerRenderer, AutomaticFillPaintsGdiWhileFillMeshesArePending)
         renderer.GetDiagnostic(),
         L"GDI rendered the frame; the Automatic preference paints with GDI "
         L"until the OpenGL fill meshes are prepared.");
-    EXPECT_EQ(
-        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
-            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
-        0);
     EXPECT_EQ(MapPixel(surface.Get(), viewport, 5.0, 5.0), kFill);
     EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
 }
@@ -424,15 +447,15 @@ TEST(VectorLayerRenderer, AutomaticFillSwitchesToOpenGlOnceFillMeshesExist)
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
 
-    // Prime the fill-mesh cache with an explicit OpenGL draw; Automatic then
-    // reuses it on later frames.
-    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
-    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
-    EXPECT_EQ(
-        renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
-
-    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Automatic);
-    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    for (int attempt = 0;
+         attempt < 100 &&
+         renderer.GetActiveBackend() !=
+             mwg::activex::VectorRenderBackendKind::OpenGL;
+         ++attempt)
+    {
+        ::Sleep(1);
+        ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    }
     EXPECT_EQ(
         renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
     EXPECT_EQ(renderer.GetDiagnostic(), L"OpenGL rendered the frame successfully.");
@@ -472,20 +495,18 @@ TEST(VectorLayerRenderer, AutomaticFillWithSceneMeshesUsesOpenGl)
     EXPECT_EQ(renderer.GetDiagnostic(), L"OpenGL rendered the frame successfully.");
 }
 
-TEST(VectorLayerRenderer, AutomaticFillStaysOnGdiUntilMeshesArePrepared)
+TEST(VectorLayerRenderer, AutomaticFillStaysOnGdiAfterPreparationFails)
 {
     BitmapSurface surface(120, 100);
     ASSERT_TRUE(surface.IsValid());
     const RECT bounds{0, 0, 120, 100};
-    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeFailingPolygonLayer()});
     Edit(scene.layers.front()).fillMeshes.clear();
-    const mwg::Viewport viewport = FitViewport(bounds);
-    PerformanceCapture diagnostics;
+    const mwg::Viewport viewport =
+        FitViewport(bounds, {-3.0, -3.0, 3.0, 3.0});
     mwg::activex::VectorLayerRenderer renderer;
 
-    // Nothing prepares fill meshes during Automatic drawing today, so every
-    // Fill frame stays on GDI until meshes exist (Phase 2 adds background
-    // preparation). Pin that intended behaviour.
     for (int frame = 0; frame < 3; ++frame)
     {
         ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK)
@@ -495,14 +516,6 @@ TEST(VectorLayerRenderer, AutomaticFillStaysOnGdiUntilMeshesArePrepared)
             mwg::activex::VectorRenderBackendKind::Gdi)
             << "frame " << frame;
     }
-    EXPECT_EQ(
-        renderer.GetDiagnostic(),
-        L"GDI rendered the frame; the Automatic preference paints with GDI "
-        L"until the OpenGL fill meshes are prepared.");
-    EXPECT_EQ(
-        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
-            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
-        0);
 }
 
 TEST(VectorLayerRenderer, AutomaticFillTreatsAnEmptyLayerAsReady)
@@ -599,10 +612,6 @@ TEST(VectorLayerRenderer, AutomaticFillDoesNotTriangulateWhenAFailedLayerPrecede
         renderer.GetDiagnostic(),
         L"The OpenGL backend could not triangulate a polygon for fill "
         L"rendering; this frame was rendered with GDI.");
-    EXPECT_EQ(
-        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
-            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
-        primed);
 }
 
 TEST(VectorLayerRenderer, AutomaticFillDoesNotTriangulateAfterAFailedLayerSceneIsReplaced)
@@ -660,10 +669,6 @@ TEST(VectorLayerRenderer, AutomaticFillDoesNotTriangulateAfterAFailedLayerSceneI
         renderer.GetDiagnostic(),
         L"GDI rendered the frame; the Automatic preference paints with GDI "
         L"until the OpenGL fill meshes are prepared.");
-    EXPECT_EQ(
-        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
-            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
-        1);
 }
 
 
@@ -774,6 +779,208 @@ TEST(VectorLayerRenderer, OpenGlLazilyTriangulatesAndReusesFillMeshes)
     EXPECT_TRUE(scene.layers.front().scene->fillMeshes.empty());
 }
 
+TEST(VectorLayerRenderer, BackgroundPreparationPublishesReadyMeshes)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeRectangleLayer({0.0, 0.0, 10.0, 10.0})});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Pending);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Ready);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(renderer), 1U);
+}
+
+TEST(VectorLayerRenderer, BackgroundPreparationPublishesFailedState)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeFailingPolygonLayer()});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Failed);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(renderer), 0U);
+}
+
+TEST(VectorLayerRenderer, BackgroundPreparationDiscardsCancelledLayer)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeRectangleLayer({0.0, 0.0, 10.0, 10.0})});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Pending);
+    Access::InvalidateLayerSceneCache(renderer, scene.layers.front().layerId);
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::NotStarted);
+    EXPECT_FALSE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 0U);
+}
+
+TEST(VectorLayerRenderer, BackgroundPreparationDiscardsReplacedScene)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeRectangleLayer({0.0, 0.0, 10.0, 10.0})});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    const mwg::LayerId layerId = scene.layers.front().layerId;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    scene.layers.front().scene =
+        Share(MakeRectangleLayer({20.0, 0.0, 30.0, 10.0}));
+    Edit(scene.layers.front()).fillMeshes.clear();
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(scene.layers.front().layerId, layerId);
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Ready);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(renderer), 1U);
+}
+
+TEST(VectorLayerRenderer, BackgroundPreparationReplacesLowerIdWithoutOverwritingHigherId)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene = MakeMapScene({
+        MakeRectangleLayer({0.0, 0.0, 10.0, 10.0}),
+        MakeRectangleLayer({20.0, 0.0, 30.0, 10.0})});
+    Edit(scene.layers[0]).fillMeshes.clear();
+    Edit(scene.layers[1]).fillMeshes.clear();
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    ASSERT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+
+    scene.layers.resize(1);
+    scene.layers.front().scene =
+        Share(MakeRectangleLayer({40.0, 0.0, 50.0, 10.0}));
+    Edit(scene.layers.front()).fillMeshes.clear();
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Ready);
+    EXPECT_EQ(Access::FillMeshCacheSize(renderer), 2U);
+    EXPECT_EQ(Access::CachedGeneratedMeshStorage(renderer), 2U);
+}
+
+TEST(VectorLayerRenderer, BackgroundPreparationRetriesWakeAfterEachFailedPost)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene = MakeMapScene({
+        MakeRectangleLayer({0.0, 0.0, 10.0, 10.0}),
+        MakeRectangleLayer({20.0, 0.0, 30.0, 10.0})});
+    Edit(scene.layers[0]).fillMeshes.clear();
+    Edit(scene.layers[1]).fillMeshes.clear();
+    std::atomic_size_t wakeAttempts = 0;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    renderer.ConfigureFillMeshPreparation(
+        CountFailedWake,
+        &wakeAttempts);
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+
+    EXPECT_GE(wakeAttempts.load(std::memory_order_relaxed), 2U);
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+}
+
+TEST(VectorLayerRenderer, BackgroundPreparationStopsWakeRetryAfterCancellation)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeRectangleLayer({0.0, 0.0, 10.0, 10.0})});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    ControlledWake wake;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    renderer.ConfigureFillMeshPreparation(PostControlledWake, &wake);
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    Access::InvalidateLayerSceneCache(renderer, scene.layers.front().layerId);
+
+    scene.layers.front().scene =
+        Share(MakeRectangleLayer({20.0, 0.0, 30.0, 10.0}));
+    Edit(scene.layers.front()).fillMeshes.clear();
+    wake.succeeds.store(true, std::memory_order_relaxed);
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Ready);
+    EXPECT_GE(wake.attempts.load(std::memory_order_relaxed), 2U);
+}
+
+TEST(VectorLayerRenderer, BackgroundPreparationContinuesDuringOpenGlRecovery)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeRectangleLayer({0.0, 0.0, 10.0, 10.0})});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    Access::SimulateFailedRecovery(renderer, 120, 100);
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Pending);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Ready);
+}
+
+TEST(VectorLayerRenderer, ExplicitOpenGlDoesNotDuplicatePendingBackgroundPreparation)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeRectangleLayer({0.0, 0.0, 10.0, 10.0})});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    PerformanceCapture diagnostics;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Pending);
+    EXPECT_EQ(Access::PrepareFillMeshes(renderer, scene), S_FALSE);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        1);
+}
+
 TEST(VectorLayerRenderer, OpenGlCachesLazyMeshesPerLayerAcrossSceneChanges)
 {
     using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
@@ -842,12 +1049,7 @@ TEST(VectorLayerRenderer, OpenGlRejectsAnInvalidatedInFlightLayerWithoutClearing
 {
     using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
     mwg::rendering::MapRenderScene scene = MakeMapScene({
-        mwg::rendering::VectorRenderScene{
-            mwg::Extent{-3.0, -3.0, 3.0, 3.0},
-            1,
-            0,
-            {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0},
-               {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}},
+        MakeFailingPolygonLayer(),
         MakeRectangleLayer({10.0, 0.0, 20.0, 10.0}),
         MakeRectangleLayer({30.0, 0.0, 40.0, 10.0})});
     for (mwg::rendering::LayerRenderScene& layer : scene.layers)
@@ -965,11 +1167,8 @@ TEST(VectorLayerRenderer, OpenGlLazyTriangulationFailureFallsBackAndPreservesOut
     const RECT bounds{0, 0, 120, 100};
     ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
 
-    mwg::rendering::MapRenderScene scene = MakeMapScene({{
-        mwg::Extent{-3.0, -3.0, 3.0, 3.0},
-        0,
-        0,
-        {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}}});
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeFailingPolygonLayer()});
     Edit(scene.layers.front()).fillMeshes.clear();
     const auto viewport = FitViewport(bounds, {-3.0, -3.0, 3.0, 3.0});
     PerformanceCapture diagnostics;
@@ -1018,7 +1217,7 @@ TEST(VectorLayerRenderer, OpenGlLazyTriangulationFailureFallsBackAndPreservesOut
     EXPECT_EQ(
         renderer.GetActiveBackend(),
         mwg::activex::VectorRenderBackendKind::Gdi);
-    EXPECT_GT(CountPixels(surface.Get(), bounds, kFill), 0U);
+    EXPECT_GT(CountPixels(surface.Get(), bounds, kOutline), 0U);
 
     ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
     ASSERT_EQ(
@@ -1062,11 +1261,9 @@ TEST(VectorLayerRenderer, SnapshotsSceneAcrossReentrantTriangulationCallback)
     }
     ASSERT_EQ(probeResult, S_OK);
 
-    mwg::rendering::MapRenderScene scene = MakeMapScene({{
-        mwg::Extent{-3.0, -3.0, 3.0, 3.0},
-        0,
-        0,
-        {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}}});
+    mwg::rendering::MapRenderScene scene = MakeMapScene({
+        MakeFailingPolygonLayer(),
+        MakeRectangleLayer({-2.0, -2.0, -0.5, -0.5})});
     Edit(scene.layers.front()).fillMeshes.clear();
     bool callbackRan = false;
     mwg::activex::VectorLayerRenderer renderer;
@@ -1095,7 +1292,8 @@ TEST(VectorLayerRenderer, SnapshotsSceneAcrossReentrantTriangulationCallback)
     EXPECT_EQ(
         renderer.GetActiveBackend(),
         mwg::activex::VectorRenderBackendKind::Gdi);
-    EXPECT_GT(CountPixels(surface.Get(), bounds, kFill), 0U);
+    EXPECT_GT(CountPixels(surface.Get(), bounds, kFill), 0U)
+        << "The retained scene still paints the second polygon";
 }
 
 TEST(VectorLayerRenderer, OpenGlDrawsOutlinesWithoutFillMeshes)
@@ -1186,11 +1384,17 @@ TEST(VectorLayerRenderer, GdiDrawsOutlinesWithoutFillMeshes)
     EXPECT_GT(outlinePixels, 0U);
 }
 
-TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
+TEST(VectorLayerRenderer, SelfIntersectingRingUsesGdiFallback)
 {
     BitmapSurface surface(120, 100);
     ASSERT_TRUE(surface.IsValid());
     const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(
+        FillRect(
+            surface.Get(),
+            &bounds,
+            GetSysColorBrush(COLOR_WINDOW)),
+        0);
 
     const mwg::rendering::MapRenderScene scene = MakeMapScene({{
         mwg::Extent{-3.0, -3.0, 3.0, 3.0},
@@ -1198,14 +1402,20 @@ TEST(VectorLayerRenderer, OpenGlRejectsSelfIntersectingRing)
         0,
         {{{{0.0, 3.0}, {2.0, -3.0}, {-3.0, 1.0}, {3.0, 1.0}, {-2.0, -3.0}, {0.0, 3.0}}}}}});
 
-    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const auto viewport = FitViewport(bounds, {-3.0, -3.0, 3.0, 3.0});
+    mwg::activex::OpenGlVectorLayerRenderer openGlRenderer;
     EXPECT_EQ(
-        renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds, {-3.0, -3.0, 3.0, 3.0})),
+        openGlRenderer.Draw(surface.Get(), bounds, scene, viewport),
         S_FALSE);
+
+    mwg::activex::VectorLayerRenderer renderer;
+    renderer.SetPreference(
+        mwg::activex::VectorRenderBackendPreference::OpenGL);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(
-        renderer.GetLastFailureReason(),
-        L"The OpenGL backend requires a triangulated fill mesh for "
-        L"every polygon; this frame was rendered with GDI.");
+        renderer.GetActiveBackend(),
+        mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_GT(CountPixels(surface.Get(), bounds, kFill), 0U);
 }
 
 TEST(VectorLayerRenderer, OpenGlRejectsTheFrameWhenAnyLayerHasNoFillMesh)

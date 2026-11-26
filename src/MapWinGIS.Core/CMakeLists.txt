@@ -4,6 +4,7 @@
 
 find_package(GDAL CONFIG REQUIRED)
 find_package(GEOS CONFIG REQUIRED)
+find_package(earcut_hpp CONFIG REQUIRED)
 
 set(MWG_CORE_PUBLIC_HEADERS
     include/mapwingis/core/Api.h
@@ -119,7 +120,10 @@ set_target_properties(MapWinGIS.Core PROPERTIES DEFINE_SYMBOL MWG_CORE_BUILD)
 
 # No public header includes GDAL or GEOS, so both stay private. GEOS is used
 # directly: GdalEnvironment::GeosVersion() calls GEOSversion().
-target_link_libraries(MapWinGIS.Core PRIVATE GDAL::GDAL GEOS::geos_c)
+target_link_libraries(MapWinGIS.Core PRIVATE
+    GDAL::GDAL
+    GEOS::geos_c
+    earcut_hpp::earcut_hpp)
 
 mwg_apply_common_options(MapWinGIS.Core)
 

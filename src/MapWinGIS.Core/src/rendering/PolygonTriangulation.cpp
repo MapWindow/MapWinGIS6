@@ -2,14 +2,16 @@
 
 /**
  * @file PolygonTriangulation.cpp
- * @brief Implements polygon triangulation through OGR and GEOS.
+ * @brief Implements fast polygon triangulation with a GEOS fallback.
  *
- * Builds a temporary OGR polygon from the backend-neutral rings, validates
- * it, and converts the constrained Delaunay triangulation into an indexed
- * triangle mesh. All OGR geometry is owned through RAII handles.
+ * Converts backend-neutral ring coordinates directly with earcut. When that
+ * path cannot produce a mesh, it builds a temporary OGR polygon and converts
+ * its constrained Delaunay triangulation into an indexed triangle mesh.
  */
 #include "mapwingis/rendering/PolygonTriangulation.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +22,10 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
+#include <mapbox/earcut.hpp>
+#include <geos_c.h>
 #include <ogrsf_frmts.h>
 
 #include "mapwingis/core/Error.h"
@@ -91,6 +96,191 @@ namespace mwg::rendering
         {
             return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
         }
+
+        class ExteriorCoverage final
+        {
+        public:
+            explicit ExteriorCoverage(const std::span<const Point> exterior)
+                : _context(OGRGeometry::createGEOSContext())
+            {
+                if (_context == nullptr)
+                {
+                    throw CoreError("Cannot create a GEOS context for ring validation");
+                }
+                auto polygon = std::make_unique<OGRPolygon>();
+                polygon->addRingDirectly(MakeRing(exterior).release());
+                _geometry =
+                    polygon->exportToGEOS(_context.get(), true);
+                if (_geometry == nullptr)
+                {
+                    throw CoreError("Cannot convert the exterior ring for validation");
+                }
+            }
+
+            ExteriorCoverage(const ExteriorCoverage&) = delete;
+            ExteriorCoverage& operator=(const ExteriorCoverage&) = delete;
+
+            ~ExteriorCoverage()
+            {
+                for (const std::unique_ptr<Hole>& hole : _holes)
+                {
+                    GEOSGeom_destroy_r(_context.get(), hole->geometry);
+                }
+                if (_geometry != nullptr)
+                {
+                    GEOSGeom_destroy_r(_context.get(), _geometry);
+                }
+            }
+
+            [[nodiscard]] bool AddHole(const std::span<const Point> ring)
+            {
+                auto polygon = std::make_unique<OGRPolygon>();
+                polygon->addRingDirectly(MakeRing(ring).release());
+                GEOSGeom geometry =
+                    polygon->exportToGEOS(_context.get(), true);
+                if (geometry == nullptr)
+                {
+                    throw CoreError(
+                        "Cannot convert an interior ring for validation");
+                }
+                const char covered =
+                    GEOSCovers_r(_context.get(), _geometry, geometry);
+                if (covered == 2)
+                {
+                    GEOSGeom_destroy_r(_context.get(), geometry);
+                    throw CoreError("Cannot validate an interior ring");
+                }
+                if (covered == 0)
+                {
+                    GEOSGeom_destroy_r(_context.get(), geometry);
+                    return false;
+                }
+                try
+                {
+                    auto hole = std::make_unique<Hole>();
+                    hole->geometry = geometry;
+                    hole->index = _holes.size();
+                    _holes.push_back(std::move(hole));
+                }
+                catch (...)
+                {
+                    GEOSGeom_destroy_r(_context.get(), geometry);
+                    throw;
+                }
+                return true;
+            }
+
+            [[nodiscard]] bool ValidateHoles()
+            {
+                if (_holes.size() < 2)
+                {
+                    return true;
+                }
+
+                GEOSSTRtree* const tree =
+                    GEOSSTRtree_create_r(_context.get(), 10);
+                if (tree == nullptr)
+                {
+                    throw CoreError(
+                        "Cannot create a spatial index for interior ring validation");
+                }
+                try
+                {
+                    for (const std::unique_ptr<Hole>& hole : _holes)
+                    {
+                        GEOSSTRtree_insert_r(
+                            _context.get(), tree, hole->geometry, hole.get());
+                    }
+                    if (GEOSSTRtree_build_r(_context.get(), tree) == 0)
+                    {
+                        throw CoreError(
+                            "Cannot build the spatial index for interior ring validation");
+                    }
+
+                    for (const std::unique_ptr<Hole>& hole : _holes)
+                    {
+                        HoleQuery query{_context.get(), hole.get()};
+                        GEOSSTRtree_query_r(
+                            _context.get(),
+                            tree,
+                            hole->geometry,
+                            &QueryHole,
+                            &query);
+                        if (query.validationFailed)
+                        {
+                            throw CoreError(
+                                "Cannot compare interior rings for validation");
+                        }
+                        if (query.overlaps)
+                        {
+                            GEOSSTRtree_destroy_r(_context.get(), tree);
+                            return false;
+                        }
+                    }
+                }
+                catch (...)
+                {
+                    GEOSSTRtree_destroy_r(_context.get(), tree);
+                    throw;
+                }
+                GEOSSTRtree_destroy_r(_context.get(), tree);
+                return true;
+            }
+
+        private:
+            struct Hole final
+            {
+                GEOSGeom geometry = nullptr;
+                std::size_t index = 0;
+            };
+
+            struct HoleQuery final
+            {
+                GEOSContextHandle_t context = nullptr;
+                const Hole* source = nullptr;
+                bool overlaps = false;
+                bool validationFailed = false;
+            };
+
+            struct ContextDeleter final
+            {
+                void operator()(GEOSContextHandle_t context) const noexcept
+                {
+                    OGRGeometry::freeGEOSContext(context);
+                }
+            };
+
+            static void QueryHole(void* item, void* data)
+            {
+                auto& query = *static_cast<HoleQuery*>(data);
+                const Hole& candidate = *static_cast<Hole*>(item);
+                if (query.overlaps || query.validationFailed ||
+                    candidate.index <= query.source->index)
+                {
+                    return;
+                }
+
+                const char overlaps = GEOSRelatePattern_r(
+                    query.context,
+                    query.source->geometry,
+                    candidate.geometry,
+                    "T********");
+                if (overlaps == 2)
+                {
+                    query.validationFailed = true;
+                }
+                else if (overlaps == 1)
+                {
+                    query.overlaps = true;
+                }
+            }
+
+            std::unique_ptr<
+                std::remove_pointer_t<GEOSContextHandle_t>,
+                ContextDeleter> _context;
+            GEOSGeom _geometry = nullptr;
+            std::vector<std::unique_ptr<Hole>> _holes;
+        };
 
         // Exact coordinate equality: triangulation reuses input vertices bit for bit, and
         // std::hash<double> hashes 0.0 and -0.0 alike, consistent with operator==.
@@ -227,66 +417,264 @@ namespace mwg::rendering
         private:
             bool _succeeded = false;
         };
+
+        template <typename PolygonType>
+        std::vector<std::vector<std::array<double, 2>>> MakeEarcutPolygon(
+            const PolygonType& polygon,
+            std::vector<Point>& flattenedPoints)
+        {
+            if (polygon.empty())
+            {
+                throw InvalidArgument("Polygon has no rings");
+            }
+
+            ValidateRing(polygon.front(), "exterior");
+            if (polygon.size() > 1)
+            {
+                GdalEnvironment::Initialize();
+            }
+            const std::unique_ptr<ExteriorCoverage> exterior =
+                polygon.size() > 1
+                    ? std::make_unique<ExteriorCoverage>(polygon.front())
+                    : nullptr;
+            std::vector<std::vector<std::array<double, 2>>> result;
+            result.reserve(polygon.size());
+            for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
+            {
+                const auto& ring = polygon[ringIndex];
+                if (ringIndex != 0 && ring.size() < 3)
+                {
+                    continue;
+                }
+                if (ringIndex != 0)
+                {
+                    ValidateRing(ring, "interior");
+                }
+
+                std::vector<std::array<double, 2>> converted;
+                std::vector<Point> convertedPoints;
+                converted.reserve(ring.size());
+                convertedPoints.reserve(ring.size());
+                for (const Point& point : ring)
+                {
+                    if (!convertedPoints.empty() &&
+                        convertedPoints.back().x == point.x &&
+                        convertedPoints.back().y == point.y)
+                    {
+                        continue;
+                    }
+                    converted.push_back({point.x, point.y});
+                    convertedPoints.push_back(point);
+                }
+                if (converted.size() > 1 &&
+                    converted.front() == converted.back())
+                {
+                    converted.pop_back();
+                    convertedPoints.pop_back();
+                }
+                if (converted.size() < 3)
+                {
+                    if (ringIndex == 0)
+                    {
+                        throw InvalidArgument(
+                            "Polygon exterior ring has fewer than three distinct points");
+                    }
+                    continue;
+                }
+                if (ringIndex != 0 && !exterior->AddHole(convertedPoints))
+                {
+                    throw InvalidArgument(
+                        "Polygon interior ring lies outside the exterior ring");
+                }
+                flattenedPoints.insert(
+                    flattenedPoints.end(),
+                    convertedPoints.begin(),
+                    convertedPoints.end());
+                result.push_back(std::move(converted));
+            }
+            if (exterior != nullptr && !exterior->ValidateHoles())
+            {
+                throw InvalidArgument(
+                    "Polygon interior rings overlap");
+            }
+            return result;
+        }
+
+        template <typename PolygonType>
+        [[nodiscard]] double ExpectedFillArea(const PolygonType& polygon)
+        {
+            double total = 0.0;
+            for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
+            {
+                const auto& ring = polygon[ringIndex];
+                if (ringIndex != 0 && ring.size() < 3)
+                {
+                    continue;
+                }
+                const Point& origin = ring.front();
+                double twiceArea = 0.0;
+                for (std::size_t pointIndex = 0;
+                     pointIndex < ring.size();
+                     ++pointIndex)
+                {
+                    const Point& point = ring[pointIndex];
+                    const Point& next = ring[(pointIndex + 1U) % ring.size()];
+                    twiceArea +=
+                        (point.x - origin.x) * (next.y - origin.y) -
+                        (next.x - origin.x) * (point.y - origin.y);
+                }
+                const double area = std::abs(twiceArea) * 0.5;
+                total += ringIndex == 0 ? area : -area;
+            }
+            return total;
+        }
+
+        [[nodiscard]] double MeshArea(const TriangleMesh& mesh)
+        {
+            double result = 0.0;
+            for (std::size_t index = 0; index < mesh.indices.size(); index += 3U)
+            {
+                const Point& a = mesh.vertices[mesh.indices[index]];
+                const Point& b = mesh.vertices[mesh.indices[index + 1U]];
+                const Point& c = mesh.vertices[mesh.indices[index + 2U]];
+                result += std::abs(TwiceSignedArea(a, b, c)) * 0.5;
+            }
+            return result;
+        }
+
+        template <typename PolygonType>
+        [[nodiscard]] bool TryTriangulateWithEarcut(
+            const PolygonType& polygon,
+            TriangleMesh& mesh)
+        {
+            std::vector<Point> flattenedPoints;
+            flattenedPoints.reserve(polygon.empty() ? 0U : polygon.front().size());
+            const auto rings = MakeEarcutPolygon(polygon, flattenedPoints);
+            std::vector<std::uint32_t> indices =
+                mapbox::earcut<std::uint32_t>(rings);
+            if (indices.empty())
+            {
+                return false;
+            }
+            if (indices.size() % 3U != 0U)
+            {
+                return false;
+            }
+
+            MeshBuilder builder;
+            for (std::size_t index = 0; index < indices.size(); index += 3U)
+            {
+                const std::uint32_t a = indices[index];
+                const std::uint32_t b = indices[index + 1U];
+                const std::uint32_t c = indices[index + 2U];
+                if (a >= flattenedPoints.size() ||
+                    b >= flattenedPoints.size() ||
+                    c >= flattenedPoints.size())
+                {
+                    return false;
+                }
+                if (TwiceSignedArea(
+                        flattenedPoints[a],
+                        flattenedPoints[b],
+                        flattenedPoints[c]) == 0.0)
+                {
+                    continue;
+                }
+                builder.AddTriangle(
+                    flattenedPoints[a],
+                    flattenedPoints[b],
+                    flattenedPoints[c]);
+            }
+            mesh = builder.TakeResult();
+            if (mesh.indices.empty())
+            {
+                return false;
+            }
+            const double expectedArea = ExpectedFillArea(polygon);
+            const double meshArea = MeshArea(mesh);
+            const double tolerance =
+                std::abs(expectedArea) * 1e-9;
+            return expectedArea > 0.0 &&
+                std::abs(meshArea - expectedArea) <= tolerance;
+        }
+
+        template <typename PolygonType>
+        TriangleMesh TriangulateWithGeos(const PolygonType& polygon)
+        {
+            GdalEnvironment::Initialize();
+            const std::unique_ptr<OGRPolygon> source = MakeOgrPolygon(polygon);
+            GdalErrorScope scope;
+            std::unique_ptr<OGRGeometry> triangulation;
+            try
+            {
+                triangulation.reset(source->ConstrainedDelaunayTriangulation());
+            }
+            catch (const std::bad_alloc&)
+            {
+                throw;
+            }
+            catch (const std::exception& error)
+            {
+                throw CoreError(std::string("Polygon triangulation failed: ") + error.what());
+            }
+            scope.RethrowCaptureException();
+            if (triangulation == nullptr)
+            {
+                std::string message = "Polygon triangulation failed";
+                const std::string detail = scope.DetailedErrorMessage();
+                if (!detail.empty())
+                {
+                    message += ": " + detail;
+                }
+                throw CoreError(message);
+            }
+
+            MeshBuilder builder;
+            AppendTriangles(*triangulation, builder);
+            TriangleMesh mesh = builder.TakeResult();
+            if (mesh.indices.empty())
+            {
+                throw CoreError("Polygon triangulation produced no triangles");
+            }
+            return mesh;
+        }
     }
 
     template <typename PolygonType>
     TriangleMesh Triangulate(const PolygonType& polygon)
     {
         TriangulationFailureScope failureScope;
-        GdalEnvironment::Initialize();
-        const std::unique_ptr<OGRPolygon> source = MakeOgrPolygon(polygon);
-
-        GdalErrorScope scope;
-        bool valid = false;
+        TriangleMesh mesh;
+        bool meshed = false;
         {
-            const diagnostics::PerformanceScope validationScope(
-                diagnostics::PerformanceOperation::GeometryValidation);
-            valid = source->IsValid();
-        }
-        scope.RethrowCaptureException();
-        if (!valid)
-        {
-            diagnostics::PerformanceDiagnostics::IncrementCounter(
-                diagnostics::PerformanceCounter::InvalidGeometries);
-            throw CoreError(
-                "Polygon triangulation requires a valid polygon; the input is "
-                "self-intersecting or otherwise invalid");
-        }
-
-        const diagnostics::PerformanceScope triangulationScope(
-            diagnostics::PerformanceOperation::PolygonTriangulation);
-        std::unique_ptr<OGRGeometry> triangulation;
-        try
-        {
-            triangulation.reset(source->ConstrainedDelaunayTriangulation());
-        }
-        catch (const std::bad_alloc&)
-        {
-            throw;
-        }
-        catch (const std::exception& error)
-        {
-            throw CoreError(std::string("Polygon triangulation failed: ") + error.what());
-        }
-        scope.RethrowCaptureException();
-        if (triangulation == nullptr)
-        {
-            std::string message = "Polygon triangulation failed";
-            const std::string detail = scope.DetailedErrorMessage();
-            if (!detail.empty())
+            const diagnostics::PerformanceScope triangulationScope(
+                diagnostics::PerformanceOperation::PolygonTriangulation);
+            try
             {
-                message += ": " + detail;
+                meshed = TryTriangulateWithEarcut(polygon, mesh);
             }
-            throw CoreError(message);
+            catch (const InvalidArgument&)
+            {
+                throw;
+            }
+            catch (const std::bad_alloc&)
+            {
+                throw;
+            }
+            catch (const std::exception&)
+            {
+                meshed = false;
+            }
+            catch (...)
+            {
+                meshed = false;
+            }
+            if (!meshed)
+            {
+                mesh = TriangulateWithGeos(polygon);
+            }
         }
 
-        MeshBuilder builder;
-        AppendTriangles(*triangulation, builder);
-        TriangleMesh mesh = builder.TakeResult();
-        if (mesh.indices.empty())
-        {
-            throw CoreError("Polygon triangulation produced no triangles");
-        }
         diagnostics::PerformanceDiagnostics::IncrementCounter(
             diagnostics::PerformanceCounter::PolygonsTriangulated);
         diagnostics::PerformanceDiagnostics::IncrementCounter(

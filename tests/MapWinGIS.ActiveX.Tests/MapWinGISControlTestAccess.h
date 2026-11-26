@@ -67,6 +67,12 @@ namespace mwg::activex::testing
             return id;
         }
 
+        [[nodiscard]] static bool FillMeshPreparationDispatchCreated(
+            const CMapWinGISControl& control) noexcept
+        {
+            return control._fillMeshPreparationDispatch != nullptr;
+        }
+
         [[nodiscard]] static double Resolution(const CMapWinGISControl& control)
         {
             return control._view.GetViewport().Resolution().value();

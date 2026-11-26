@@ -7,7 +7,8 @@
  * Provides automation for vector loading, map navigation, GDAL operations,
  * rendering preferences, and painting polygon layers. The control owns one
  * Core MapView, the only map and view state; it forwards host events to it
- * and draws its render scene through its viewport.
+ * and draws its render scene through its viewport. Fill meshes for loaded
+ * scenes are prepared in the background and completed on the control thread.
  */
 #pragma once
 
@@ -24,6 +25,7 @@
 #include "MapWinGIS.ActiveX_i.h"
 #include "mapwingis/map/MapView.h"
 #include "FrameBuffer.h"
+#include "GdalDispatchWindow.h"
 #include "GdalEventSource.h"
 #include "VectorLayerRenderer.h"
 
@@ -187,6 +189,7 @@ public:
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnEraseBkgnd(UINT, WPARAM, LPARAM, BOOL& handled);
     static void DispatchGdalNotifications(void* control) noexcept;
+    static void DispatchFillMeshPreparation(void* control) noexcept;
     HRESULT OnDraw(ATL_DRAWINFO& drawInfo);
     ~CMapWinGISControl();
 
@@ -217,6 +220,9 @@ private:
     /// into the cache. Called when layers, the view (except a drag pan), the
     /// viewport size, or the backend preference changes.
     void InvalidateLayerCache() noexcept;
+    bool EnsureFillMeshPreparationDispatch() noexcept;
+    void PrepareFillMeshesInBackground() noexcept;
+    static bool WakeFillMeshPreparation(void* context) noexcept;
 
     /// Paints the cached layer frame over the already-cleared frame device
     /// context, shifted to the viewport's current view when only the center
@@ -247,6 +253,8 @@ private:
     COLORREF _layerCacheBackground = 0;
 
     bool _layerCacheValid = false;
+    std::shared_ptr<mwg::activex::GdalDispatchWindow>
+        _fillMeshPreparationDispatch;
     mwg::activex::VectorLayerRenderer _renderer;
     mwg::activex::GdalEventSource _gdalEvents;
     std::unordered_map<

@@ -6,7 +6,7 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase
 complete when its acceptance criteria have been met and its PR is ready.
 
 - [x] **Phase 1 – End-to-end benchmark + keep triangulation off the paint path** (PR 1)
-- [ ] **Phase 2 – Fast triangulation + background mesh preparation** (PR 2)
+- [x] **Phase 2 – Fast triangulation + background mesh preparation** (PR 2)
 - [ ] **Phase 3 – Remaining costs + documentation** (PR 3)
 
 **Target branch:** `development`
@@ -214,6 +214,32 @@ only if clearly better than earcut plus background preparation.
 - Tests cover the pending, ready, cancelled, and failed states.
 - Existing triangulation, holed, concave, and degenerate tests pass; pixel
   comparisons with GDI fill stay within the current tolerances.
+
+### Status after Phase 2
+
+Earcut is the internal fast path behind `TriangulatePolygon`; GEOS constrained
+Delaunay triangulation remains the fallback. The ActiveX control keeps Automatic
+Fill on GDI while immutable scenes are prepared on a bounded background path,
+then publishes completed meshes on the owner thread and invalidates the frame.
+Stable layer IDs, scene identities, and generation tokens discard stale work
+after replacement, clearing, or invalidation.
+
+Measured on the test dataset (2026-11-25, Release, one workstation):
+2,470 polygons completed in a 93.8 ms lazy OpenGL fill frame
+(178.9 ms process-wide triangulation CPU time across four workers). The first
+GDI frame was 20.3 ms after a 102.5 ms synchronous load; the asynchronous path
+was 21.2 ms after a 118.9 ms load. The full Debug non-interactive suite and
+the targeted Release benchmarks pass.
+
+Remaining limitations:
+
+- The control's normal Automatic path is background-prepared. A direct
+  explicit-OpenGL draw of a mesh-free scene still retains the synchronous
+  fallback contract when no background preparation was queued.
+- GEOS remains necessary for polygons earcut rejects. The failed path still
+  stays on GDI, including ambiguous self-intersecting geometry.
+- Stencil-then-cover was not needed to meet the measured target and was not
+  adopted.
 
 ---
 

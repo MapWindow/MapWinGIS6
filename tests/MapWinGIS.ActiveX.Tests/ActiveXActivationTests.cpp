@@ -2357,6 +2357,29 @@ TEST_F(ActiveXMapTest, ClearLayersReleasesLazyFillMeshes)
     EXPECT_EQ(Access::FillMeshCacheSize(control), 0U);
 }
 
+TEST_F(ActiveXMapTest, ReactivatingTheControlRestartsFillMeshPreparation)
+{
+    using Access = mwg::activex::testing::MapWinGISControlTestAccess;
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(
+        _control->put_RenderingBackendPreference(
+            ATL::CComBSTR(L"Automatic")),
+        S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    CMapWinGISControl& control = Access::Control(_control.Get());
+    ASSERT_TRUE(Access::FillMeshPreparationDispatchCreated(control));
+
+    LRESULT result = 0;
+    ASSERT_TRUE(SUCCEEDED(
+        _window->OnWindowMessage(WM_DESTROY, 0, 0, &result)));
+    EXPECT_FALSE(Access::FillMeshPreparationDispatchCreated(control));
+
+    ASSERT_TRUE(SUCCEEDED(
+        _window->OnWindowMessage(WM_CREATE, 0, 0, &result)));
+    EXPECT_TRUE(Access::FillMeshPreparationDispatchCreated(control));
+    EXPECT_EQ(Access::FillMeshCacheSize(control), 1U);
+}
+
 TEST_F(ActiveXMapTest, DragDrawBlitsWholePixelShiftsAndRendersFractionalOrHugeShifts)
 {
     using Access = mwg::activex::testing::MapWinGISControlTestAccess;

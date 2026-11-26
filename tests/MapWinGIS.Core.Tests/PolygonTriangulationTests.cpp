@@ -2,7 +2,7 @@
 
 /**
  * @file PolygonTriangulationTests.cpp
- * @brief Tests GEOS-backed polygon triangulation and scene mesh integration.
+ * @brief Tests earcut polygon triangulation and scene mesh integration.
  *
  * Verifies that convex, concave, holed, and multipart polygons become valid
  * indexed triangle meshes whose triangles cover exactly the polygon area,
@@ -324,6 +324,61 @@ TEST(PolygonTriangulation, TriangulatesConvexPolygonWithSeveralVertices)
     EXPECT_GE(mesh.indices.size(), 12u);
 }
 
+TEST(PolygonTriangulation, KeepsLargeProjectedCoordinatesStable)
+{
+    constexpr double offsetX = 600000.1;
+    constexpr double offsetY = 5000000.2;
+    const rendering::Polygon polygon = MakePolygon({
+        {offsetX, offsetY},
+        {offsetX + 10.2, offsetY},
+        {offsetX + 10.2, offsetY + 7.3},
+        {offsetX, offsetY + 7.3}});
+
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(MeshArea(mesh), 10.2 * 7.3, 1e-8);
+}
+
+TEST(PolygonTriangulation, IgnoresZeroAreaTriangles)
+{
+    const rendering::Polygon polygon =
+        MakePolygon({{0, 0}, {1, 0}, {2, 0}, {2, 1}, {0, 1}});
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(MeshArea(mesh), 2.0, 1e-12);
+}
+
+TEST(PolygonTriangulation, RejectsTinyExteriorMeshThatIgnoresInteriorRing)
+{
+    constexpr double scale = 1e-6;
+    const rendering::Polygon polygon = MakePolygon(
+        {{0, 0}, {4 * scale, 0}, {4 * scale, 4 * scale}, {0, 4 * scale}},
+        {{{10 * scale, 10 * scale},
+          {11 * scale, 10 * scale},
+          {11 * scale, 11 * scale},
+          {10 * scale, 11 * scale}}});
+
+    EXPECT_THROW(
+        (void)rendering::TriangulatePolygon(polygon),
+        CoreError);
+}
+
+TEST(PolygonTriangulation, RejectsOverlappingInteriorRings)
+{
+    const rendering::Polygon polygon = MakePolygon(
+        {{0, 0}, {10, 0}, {10, 10}, {0, 10}},
+        {{{1, 1}, {6, 1}, {6, 6}, {1, 6}},
+         {{4, 4}, {9, 4}, {9, 9}, {4, 9}}});
+
+    EXPECT_THROW(
+        (void)rendering::TriangulatePolygon(polygon),
+        InvalidArgument);
+}
+
 // --- Concave polygons ---
 
 TEST(PolygonTriangulation, TriangulatesSimpleConcavePolygon)
@@ -379,6 +434,32 @@ TEST(PolygonTriangulation, TriangulatesPolygonWithMultipleHoles)
     EXPECT_NEAR(MeshArea(mesh), 18.0, 1e-9);
 }
 
+TEST(PolygonTriangulation, TriangulatesPolygonWithManyDisjointHoles)
+{
+    rendering::Polygon polygon =
+        MakePolygon({{0, 0}, {18, 0}, {18, 18}, {0, 18}});
+    constexpr std::size_t holesPerAxis = 8;
+    for (std::size_t row = 0; row < holesPerAxis; ++row)
+    {
+        for (std::size_t column = 0; column < holesPerAxis; ++column)
+        {
+            const double x = static_cast<double>(column * 2 + 1);
+            const double y = static_cast<double>(row * 2 + 1);
+            polygon.push_back(
+                MakeRing({{x, y}, {x + 1, y}, {x + 1, y + 1}, {x, y + 1}}));
+        }
+    }
+
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(
+        MeshArea(mesh),
+        18.0 * 18.0 - static_cast<double>(holesPerAxis * holesPerAxis),
+        1e-9);
+}
+
 TEST(PolygonTriangulation, TriangulatesConcavePolygonWithHole)
 {
     const rendering::Polygon polygon = MakePolygon(
@@ -387,6 +468,32 @@ TEST(PolygonTriangulation, TriangulatesConcavePolygonWithHole)
     const rendering::TriangleMesh mesh = rendering::TriangulatePolygon(polygon);
 
     ExpectMeshCoversPolygon(mesh, polygon);
+}
+
+TEST(PolygonTriangulation, TriangulatesHoleThatTouchesExteriorRing)
+{
+    const rendering::Polygon polygon =
+        MakePolygon(
+            {{0, 0}, {1, 0}, {5, 0}, {5, 5}, {0, 5}},
+            {{{1, 0}, {2, 0}, {2, 1}, {1, 1}}});
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(MeshArea(mesh), 24.0, 1e-9);
+}
+
+TEST(PolygonTriangulation, IgnoresInteriorRingThatCollapsesAfterDeduplication)
+{
+    const rendering::Polygon polygon =
+        MakePolygon(
+            {{0, 0}, {4, 0}, {4, 4}, {0, 4}},
+            {{{1, 1}, {1, 1}, {1, 1}}});
+    const rendering::TriangleMesh mesh =
+        rendering::TriangulatePolygon(polygon);
+
+    ExpectValidMesh(mesh);
+    EXPECT_NEAR(MeshArea(mesh), 16.0, 1e-12);
 }
 
 // --- Input validation ---
@@ -403,6 +510,14 @@ TEST(PolygonTriangulation, RejectsDegenerateExteriorRing)
         InvalidArgument);
 }
 
+TEST(PolygonTriangulation, RejectsExteriorRingThatCollapsesAfterDeduplication)
+{
+    EXPECT_THROW(
+        (void)rendering::TriangulatePolygon(
+            MakePolygon({{0, 0}, {1, 0}, {1, 0}, {1, 0}})),
+        InvalidArgument);
+}
+
 TEST(PolygonTriangulation, RejectsCollinearExteriorRing)
 {
     EXPECT_THROW(
@@ -413,7 +528,8 @@ TEST(PolygonTriangulation, RejectsCollinearExteriorRing)
 TEST(PolygonTriangulation, RejectsSelfIntersectingPolygon)
 {
     EXPECT_THROW(
-        (void)rendering::TriangulatePolygon(MakePolygon({{0, 0}, {2, 2}, {2, 0}, {0, 2}})),
+        (void)rendering::TriangulatePolygon(
+            MakePolygon({{0, 0}, {2, 2}, {2, 0}, {0, 2}})),
         CoreError);
 }
 
@@ -519,9 +635,9 @@ TEST(PolygonTriangulation, FailedTriangulationKeepsOriginalRings)
     TempDirectory directory;
     const auto dataset = VectorDataset::Open(MakeWktDataset(
         directory.Path(),
-        "invalid.gpkg",
+        "degenerate.gpkg",
         wkbPolygon,
-        "POLYGON ((0 0, 2 2, 2 0, 0 2, 0 0))"));
+        "POLYGON ((0 0, 1 0, 2 0, 0 0))"));
 
     const rendering::VectorRenderScene scene = rendering::CreateVectorRenderScene(
         dataset->Layer(0),
@@ -530,8 +646,8 @@ TEST(PolygonTriangulation, FailedTriangulationKeepsOriginalRings)
     ASSERT_EQ(scene.polygons.size(), 1u);
     ASSERT_EQ(scene.fillMeshes.size(), 1u);
     EXPECT_FALSE(scene.fillMeshes.front().has_value())
-        << "The self-intersecting polygon must not receive a mesh";
+        << "The degenerate polygon must not receive a mesh";
     // GDI can still draw the original rings.
     ASSERT_EQ(scene.polygons.front().size(), 1u);
-    EXPECT_EQ(scene.polygons.front().front().size(), 5u);
+    EXPECT_EQ(scene.polygons.front().front().size(), 4u);
 }

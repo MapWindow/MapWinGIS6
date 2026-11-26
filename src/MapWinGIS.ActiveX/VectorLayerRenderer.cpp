@@ -4,8 +4,9 @@
  * @file VectorLayerRenderer.cpp
  * @brief Coordinates OpenGL and GDI rendering for vector scenes.
  *
- * Keeps backend selection internal to the ActiveX rendering layer and retries
- * with GDI when OpenGL is unavailable or cannot represent the scene.
+ * Keeps backend selection internal to the ActiveX rendering layer, queues
+ * background fill-mesh preparation, publishes ready meshes on draw, and
+ * retries with GDI when OpenGL cannot represent the scene.
  */
 #include "VectorLayerRenderer.h"
 
@@ -38,6 +39,13 @@ namespace mwg::activex
         {
             _diagnostic = L"The renderer could not represent its render-scene snapshot.";
             return S_FALSE;
+        }
+
+        (void)_openGlRenderer.PublishPreparedFillMeshes();
+        if (_preference == VectorRenderBackendPreference::Automatic &&
+            renderMode == VectorRenderMode::Fill)
+        {
+            _openGlRenderer.PrepareFillMeshesInBackground(stableScene);
         }
 
         if (_preference != VectorRenderBackendPreference::Gdi)
