@@ -10,6 +10,8 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <optional>
+#include <stdexcept>
 #include <string_view>
 
 #include <gdal_priv.h>
@@ -83,6 +85,21 @@ TEST(VectorDataset, ReadsLayerProjectionOnlyOnceEvenWhenUndefined)
         EXPECT_EQ(layer.Projection().Epsg().value_or(0), epsg);
         EXPECT_EQ(driver.projectionReads, initialReads + 1);
     }
+}
+
+TEST_F(VectorDatasetTest, DoesNotConsumeAnUnrelatedGdalLoggerException)
+{
+    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    {
+        throw std::runtime_error("Logger failed during a separate GDAL operation");
+    });
+    CPLError(CE_Warning, CPLE_AppDefined, "%s", "Unrelated GDAL warning");
+    GdalEnvironment::SetLogHandler({});
+
+    std::optional<int> epsg;
+    EXPECT_NO_THROW(epsg = _layer->Projection().Epsg());
+    EXPECT_EQ(epsg, 28992);
+    EXPECT_THROW(GdalEnvironment::RethrowLogException(), std::runtime_error);
 }
 
 TEST_F(VectorDatasetTest, HasOneLayer)

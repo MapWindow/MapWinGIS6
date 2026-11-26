@@ -27,6 +27,7 @@
 #include "internal/VectorLayerAccess.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/diagnostics/PerformanceDiagnostics.h"
+#include "mapwingis/gdal/GdalDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 namespace mwg
@@ -142,7 +143,7 @@ namespace mwg
         constexpr std::size_t kMaxWktExcerptBytes = 200;
 
         bool IsUndefinedGeoPackageSrs(
-            GDALDataset& dataset, OGRLayer& layer)
+            GDALDataset& dataset, OGRLayer& layer, const GdalErrorScope& diagnostics)
         {
             const GDALDriver* driver = dataset.GetDriver();
             if (driver == nullptr ||
@@ -177,13 +178,13 @@ namespace mwg
             CPLErrorReset();
             std::unique_ptr<OGRLayer, decltype(release)> result(
                 dataset.ExecuteSQL(sql.c_str(), nullptr, nullptr), release);
-            GdalEnvironment::RethrowLogException();
+            diagnostics.RethrowCaptureException();
             if (result == nullptr || CPLGetLastErrorType() >= CE_Failure)
             {
                 throw CoreError("Cannot read GeoPackage layer SRS ID");
             }
             const OGRFeatureUniquePtr feature(result->GetNextFeature());
-            GdalEnvironment::RethrowLogException();
+            diagnostics.RethrowCaptureException();
             if (CPLGetLastErrorType() >= CE_Failure)
             {
                 throw CoreError("Cannot read GeoPackage layer SRS ID");
@@ -785,15 +786,16 @@ namespace mwg
 
     Projection VectorLayer::Impl::ReadProjection() const
     {
+        const GdalErrorScope diagnostics;
         CPLErrorReset();
         const OGRSpatialReference* srs = _layer->GetSpatialRef();
-        GdalEnvironment::RethrowLogException();
+        diagnostics.RethrowCaptureException();
         if (CPLGetLastErrorType() >= CE_Failure)
         {
             throw CoreError("Cannot read vector layer spatial reference");
         }
         if (srs == nullptr ||
-            IsUndefinedGeoPackageSrs(_dataset, *_layer))
+            IsUndefinedGeoPackageSrs(_dataset, *_layer, diagnostics))
         {
             return {};
         }
@@ -802,7 +804,7 @@ namespace mwg
         static constexpr const char* options[] = {"FORMAT=WKT2_2019", nullptr};
         const OGRErr exported = srs->exportToWkt(&wkt, options);
         const std::unique_ptr<char, decltype([](char* text) { CPLFree(text); })> text(wkt);
-        GdalEnvironment::RethrowLogException();
+        diagnostics.RethrowCaptureException();
         if (exported != OGRERR_NONE || text == nullptr)
         {
             throw CoreError("Cannot export vector layer projection");

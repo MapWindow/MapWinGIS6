@@ -8,6 +8,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -90,6 +91,16 @@ TEST(ProjectionTest, DoesNotUseANonEpsgRootAuthorityAsIdentity)
 {
     constexpr std::string_view customProjection =
         R"(PROJCS["Private projected CRS",GEOGCS["Private geographic CRS",DATUM["Private datum",SPHEROID["Private ellipsoid",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",11],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["metre",1],AUTHORITY["PRIVATE","12345"]])";
+
+    const Projection custom = Projection::FromWkt(customProjection);
+
+    EXPECT_FALSE(custom.Epsg().has_value());
+}
+
+TEST(ProjectionTest, DoesNotUseAnOverflowingEpsgRootAuthorityAsIdentity)
+{
+    constexpr std::string_view customProjection =
+        R"(PROJCS["Private projected CRS",GEOGCS["Private geographic CRS",DATUM["Private datum",SPHEROID["Private ellipsoid",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",11],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["metre",1],AUTHORITY["EPSG","2147483648"]])";
 
     const Projection custom = Projection::FromWkt(customProjection);
 
@@ -179,6 +190,22 @@ TEST(ProjectionTest, ImportsProj4AndTransformsInTraditionalGisOrder)
     ASSERT_TRUE(transform(x, y));
     EXPECT_NEAR(x, 1113194.9079327357, 0.001);
     EXPECT_NEAR(y, 6446275.84101716, 0.001);
+}
+
+TEST(ProjectionTest, ReportsLoggerExceptionFromTheFailingTransform)
+{
+    const auto transform = Projection::FromEpsg(4326).TransformTo(Projection::FromEpsg(3857));
+    double x = 10.0;
+    double y = 100.0;
+    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    {
+        throw std::runtime_error("Logger failed during coordinate transformation");
+    });
+
+    EXPECT_THROW((void)transform(x, y), std::runtime_error);
+
+    GdalEnvironment::SetLogHandler({});
+    EXPECT_NO_THROW(GdalEnvironment::RethrowLogException());
 }
 
 TEST(ProjectionTest, ReportsBulkAndPerPointTransformationSuccess)

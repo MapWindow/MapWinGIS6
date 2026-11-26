@@ -13,8 +13,6 @@
 #include <charconv>
 #include <cctype>
 #include <cmath>
-#include <cstdlib>
-#include <limits>
 #include <utility>
 
 #include <cpl_conv.h>
@@ -24,6 +22,7 @@
 
 #include "internal/CoordinateMetadata.h"
 #include "mapwingis/core/Error.h"
+#include "mapwingis/gdal/GdalDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 namespace mwg
@@ -31,12 +30,13 @@ namespace mwg
     namespace
     {
         using SpatialReferencePtr = std::shared_ptr<const OGRSpatialReference>;
+        using GdalString = std::unique_ptr<char, decltype([](char* text) { CPLFree(text); })>;
+        using TransformationPtr = std::unique_ptr<
+            OGRCoordinateTransformation, decltype(&OGRCoordinateTransformation::DestroyCT)>;
 
-        std::string ExportedString(char* value)
+        std::string ExportedString(const GdalString& value)
         {
-            std::string result = value != nullptr ? value : "";
-            CPLFree(value);
-            return result;
+            return value != nullptr ? value.get() : "";
         }
 
         std::string FailureMessage(const std::string_view prefix)
@@ -231,14 +231,14 @@ namespace mwg
                 return std::nullopt;
             }
 
-            char* end = nullptr;
-            const long parsed = std::strtol(code, &end, 10);
-            if (end == code || *end != '\0' ||
-                parsed < 1 || parsed > std::numeric_limits<int>::max())
+            const char* const end = code + std::string_view(code).size();
+            int parsed = 0;
+            const auto result = std::from_chars(code, end, parsed);
+            if (result.ec != std::errc{} || result.ptr != end || parsed < 1)
             {
                 return std::nullopt;
             }
-            return static_cast<int>(parsed);
+            return parsed;
         }
 
         SpatialReferencePtr MakeSpatialReference(const OGRSpatialReference& source)
@@ -256,12 +256,12 @@ namespace mwg
     class ProjectionTransform::Impl
     {
     public:
-        explicit Impl(OGRCoordinateTransformation* transformation)
-            : _transformation(transformation, OGRCoordinateTransformation::DestroyCT)
+        explicit Impl(TransformationPtr transformation)
+            : _transformation(std::move(transformation))
         {
         }
 
-        std::shared_ptr<OGRCoordinateTransformation> _transformation;
+        TransformationPtr _transformation;
     };
 
     class Projection::Impl
@@ -279,6 +279,7 @@ namespace mwg
                 return _epsg;
             }
 
+            const GdalEnvironment::QuietScope quiet;
             std::unique_ptr<OGRSpatialReference> candidate(_reference->Clone());
             if (candidate == nullptr)
             {
@@ -359,8 +360,11 @@ namespace mwg
         {
             return false;
         }
-        return _impl->_transformation->Transform(
-                   count, x, y, z, perPointSuccess) == TRUE;
+        const GdalErrorScope diagnostics;
+        const bool succeeded = _impl->_transformation->Transform(
+            count, x, y, z, perPointSuccess) == TRUE;
+        diagnostics.RethrowCaptureException();
+        return succeeded;
     }
 
     Projection::Projection() = default;
@@ -505,14 +509,17 @@ namespace mwg
 
         char* text = nullptr;
         static constexpr const char* options[] = {"FORMAT=WKT2_2019", nullptr};
+        const GdalErrorScope diagnostics;
         CPLErrorReset();
-        if (_impl->_reference->exportToWkt(&text, options) != OGRERR_NONE)
+        const OGRErr result = _impl->_reference->exportToWkt(&text, options);
+        const GdalString ownedText(text);
+        diagnostics.RethrowCaptureException();
+        if (result != OGRERR_NONE)
         {
-            CPLFree(text);
             throw CoreError(FailureMessage("Cannot export coordinate reference system to WKT"));
         }
         return detail::AddCoordinateMetadata(
-            ExportedString(text), _impl->_reference->GetCoordinateEpoch());
+            ExportedString(ownedText), _impl->_reference->GetCoordinateEpoch());
     }
 
     std::string Projection::ExportToProj4() const
@@ -523,13 +530,16 @@ namespace mwg
         }
 
         char* text = nullptr;
+        const GdalErrorScope diagnostics;
         CPLErrorReset();
-        if (_impl->_reference->exportToProj4(&text) != OGRERR_NONE)
+        const OGRErr result = _impl->_reference->exportToProj4(&text);
+        const GdalString ownedText(text);
+        diagnostics.RethrowCaptureException();
+        if (result != OGRERR_NONE)
         {
-            CPLFree(text);
             throw CoreError(FailureMessage("Cannot export coordinate reference system to PROJ4"));
         }
-        return ExportedString(text);
+        return ExportedString(ownedText);
     }
 
     bool Projection::IsSame(const Projection& other) const
@@ -545,6 +555,7 @@ namespace mwg
         {
             return *code == *otherCode;
         }
+        const GdalEnvironment::QuietScope quiet;
         if (_impl->_reference->IsSame(other._impl->_reference.get()) == TRUE)
         {
             return true;
@@ -560,10 +571,10 @@ namespace mwg
             throw InvalidArgument("Cannot transform to or from an empty projection");
         }
 
-        auto sourceReference = _impl->_reference->Clone();
-        auto targetReference = target._impl->_reference->Clone();
-        std::unique_ptr<OGRSpatialReference> ownedSource(sourceReference);
-        std::unique_ptr<OGRSpatialReference> ownedTarget(targetReference);
+        const GdalErrorScope diagnostics;
+        const std::unique_ptr<OGRSpatialReference> ownedSource(_impl->_reference->Clone());
+        const std::unique_ptr<OGRSpatialReference> ownedTarget(target._impl->_reference->Clone());
+        diagnostics.RethrowCaptureException();
         if (ownedSource == nullptr || ownedTarget == nullptr)
         {
             throw CoreError("Cannot copy coordinate reference system for transformation");
@@ -572,14 +583,16 @@ namespace mwg
         ownedTarget->SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
 
         CPLErrorReset();
-        OGRCoordinateTransformation* transformation =
-            OGRCreateCoordinateTransformation(ownedSource.get(), ownedTarget.get());
+        TransformationPtr transformation(
+            OGRCreateCoordinateTransformation(ownedSource.get(), ownedTarget.get()),
+            OGRCoordinateTransformation::DestroyCT);
+        diagnostics.RethrowCaptureException();
         if (transformation == nullptr)
         {
             throw CoreError(FailureMessage(
                 "Cannot create coordinate reference system transformation"));
         }
         return ProjectionTransform(
-            std::make_shared<ProjectionTransform::Impl>(transformation));
+            std::make_shared<ProjectionTransform::Impl>(std::move(transformation)));
     }
 }
