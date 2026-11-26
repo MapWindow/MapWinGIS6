@@ -212,12 +212,12 @@ TEST(VectorDataset, ReadsEscapedGeoJsonCrsMember)
     const std::filesystem::path path = dir.Path() / "escaped-key.geojson";
     std::ofstream file(path, std::ios::binary);
     ASSERT_TRUE(file.is_open());
-    file << R"({"type":"FeatureCollection","cr\u0073":{"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::4326"}},"features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]})";
+    file << R"({"type":"FeatureCollection","cr\u0073":{"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::3857"}},"features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]})";
     file.close();
 
     const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
     const Projection projection = dataset->Layer(0).Projection();
-    EXPECT_EQ(projection.Epsg(), 4326);
+    EXPECT_EQ(projection.Epsg(), 3857);
 }
 
 TEST(VectorDataset, ReportsEmptyProjectionForReservedGeoPackageSrsIds)

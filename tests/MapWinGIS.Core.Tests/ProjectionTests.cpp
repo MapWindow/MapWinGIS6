@@ -13,6 +13,7 @@
 
 #include "TestData.h"
 #include "mapwingis/core/Error.h"
+#include "mapwingis/gdal/GdalEnvironment.h"
 #include "mapwingis/projection/Projection.h"
 #include "mapwingis/vector/VectorDataset.h"
 
@@ -178,6 +179,49 @@ TEST(ProjectionTest, ImportsProj4AndTransformsInTraditionalGisOrder)
     ASSERT_TRUE(transform(x, y));
     EXPECT_NEAR(x, 1113194.9079327357, 0.001);
     EXPECT_NEAR(y, 6446275.84101716, 0.001);
+}
+
+TEST(ProjectionTest, ReportsBulkAndPerPointTransformationSuccess)
+{
+    const ProjectionTransform transform =
+        Projection::FromEpsg(4326).TransformTo(Projection::FromEpsg(3857));
+    double x[] = {10.0, 11.0, 12.0};
+    double y[] = {50.0, 51.0, 100.0};
+    int success[] = {-1, -1, -1};
+
+    const GdalEnvironment::QuietScope quiet;
+    EXPECT_FALSE(transform.Transform(3, x, y, nullptr, success));
+    EXPECT_EQ(success[0], 1);
+    EXPECT_EQ(success[1], 1);
+    EXPECT_EQ(success[2], 0);
+    EXPECT_NEAR(x[0], 1113194.9079327357, 0.001);
+    EXPECT_NEAR(y[0], 6446275.84101716, 0.001);
+    EXPECT_NEAR(x[1], 1224514.3987260093, 0.001);
+    EXPECT_NEAR(y[1], 6621293.7227401651, 0.001);
+}
+
+TEST(ProjectionTest, TransformsBulkAndCallableThreeDimensionalCoordinates)
+{
+    const ProjectionTransform transform =
+        Projection::FromEpsg(4979).TransformTo(Projection::FromEpsg(3857));
+    double x[] = {10.0};
+    double y[] = {50.0};
+    double z[] = {25.0};
+    int success[] = {-1};
+
+    ASSERT_TRUE(transform.Transform(1, x, y, z, success));
+    EXPECT_EQ(success[0], 1);
+    EXPECT_DOUBLE_EQ(z[0], 25.0);
+    EXPECT_NEAR(x[0], 1113194.9079327357, 0.001);
+    EXPECT_NEAR(y[0], 6446275.84101716, 0.001);
+
+    double callableX = 10.0;
+    double callableY = 50.0;
+    double callableZ = 25.0;
+    ASSERT_TRUE(transform(callableX, callableY, callableZ));
+    EXPECT_DOUBLE_EQ(callableZ, 25.0);
+    EXPECT_NEAR(callableX, 1113194.9079327357, 0.001);
+    EXPECT_NEAR(callableY, 6446275.84101716, 0.001);
 }
 
 TEST(ProjectionTest, ResolvesRealProjectionDatasetWhenOptedIn)
