@@ -1720,11 +1720,20 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
 bool CMapWinGISControl::WakeFillMeshPreparation(
     void* const context) noexcept
 {
-    return ::PostMessageW(
-        static_cast<HWND>(context),
+    const HWND window = static_cast<HWND>(context);
+    if (::PostMessageW(
+        window,
         mwg::activex::kGdalDispatchMessage,
         0,
-        0) != FALSE;
+        0) != FALSE)
+    {
+        return true;
+    }
+    return ::SetTimer(
+        window,
+        mwg::activex::kGdalDispatchRetryTimerId,
+        mwg::activex::kGdalDispatchRetryIntervalMilliseconds,
+        nullptr) != 0;
 }
 
 void CMapWinGISControl::DispatchFillMeshPreparation(
@@ -1734,6 +1743,10 @@ void CMapWinGISControl::DispatchFillMeshPreparation(
     ATL::CComPtr<CMapWinGISControl> lifetime(instance);
     try
     {
+        if (instance->_fillMeshPreparationDispatch != nullptr)
+        {
+            instance->_fillMeshPreparationDispatch->StopRetryTimer();
+        }
         if (instance->_renderer.PublishPreparedFillMeshes())
         {
             instance->InvalidateLayerCache();

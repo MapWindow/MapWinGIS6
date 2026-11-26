@@ -352,6 +352,21 @@ TEST(PolygonTriangulation, IgnoresZeroAreaTriangles)
     EXPECT_NEAR(MeshArea(mesh), 2.0, 1e-12);
 }
 
+TEST(PolygonTriangulation, RejectsTinyExteriorMeshThatIgnoresInteriorRing)
+{
+    constexpr double scale = 1e-6;
+    const rendering::Polygon polygon = MakePolygon(
+        {{0, 0}, {4 * scale, 0}, {4 * scale, 4 * scale}, {0, 4 * scale}},
+        {{{10 * scale, 10 * scale},
+          {11 * scale, 10 * scale},
+          {11 * scale, 11 * scale},
+          {10 * scale, 11 * scale}}});
+
+    EXPECT_THROW(
+        (void)rendering::TriangulatePolygon(polygon),
+        CoreError);
+}
+
 // --- Concave polygons ---
 
 TEST(PolygonTriangulation, TriangulatesSimpleConcavePolygon)

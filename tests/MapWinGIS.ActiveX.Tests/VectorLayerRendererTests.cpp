@@ -434,15 +434,15 @@ TEST(VectorLayerRenderer, AutomaticFillSwitchesToOpenGlOnceFillMeshesExist)
     ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
     EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
 
-    // Prime the fill-mesh cache with an explicit OpenGL draw; Automatic then
-    // reuses it on later frames.
-    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::OpenGL);
-    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
-    EXPECT_EQ(
-        renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
-
-    renderer.SetPreference(mwg::activex::VectorRenderBackendPreference::Automatic);
-    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    for (int attempt = 0;
+         attempt < 100 &&
+         renderer.GetActiveBackend() !=
+             mwg::activex::VectorRenderBackendKind::OpenGL;
+         ++attempt)
+    {
+        ::Sleep(1);
+        ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    }
     EXPECT_EQ(
         renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::OpenGL);
     EXPECT_EQ(renderer.GetDiagnostic(), L"OpenGL rendered the frame successfully.");
@@ -916,6 +916,28 @@ TEST(VectorLayerRenderer, BackgroundPreparationContinuesDuringOpenGlRecovery)
     EXPECT_EQ(
         Access::FillMeshPreparationState(renderer, scene.layers.front()),
         mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Ready);
+}
+
+TEST(VectorLayerRenderer, ExplicitOpenGlDoesNotDuplicatePendingBackgroundPreparation)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::rendering::MapRenderScene scene =
+        MakeMapScene({MakeRectangleLayer({0.0, 0.0, 10.0, 10.0})});
+    Edit(scene.layers.front()).fillMeshes.clear();
+    PerformanceCapture diagnostics;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+
+    Access::PrepareFillMeshesInBackground(renderer, scene);
+    ASSERT_EQ(
+        Access::FillMeshPreparationState(renderer, scene.layers.front()),
+        mwg::activex::OpenGlVectorLayerRenderer::FillMeshPreparationState::Pending);
+    EXPECT_EQ(Access::PrepareFillMeshes(renderer, scene), S_FALSE);
+    ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
+    EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
+    EXPECT_EQ(
+        mwg::diagnostics::PerformanceDiagnostics::Snapshot().Counter(
+            mwg::diagnostics::PerformanceCounter::PolygonsTriangulated),
+        1);
 }
 
 TEST(VectorLayerRenderer, OpenGlCachesLazyMeshesPerLayerAcrossSceneChanges)

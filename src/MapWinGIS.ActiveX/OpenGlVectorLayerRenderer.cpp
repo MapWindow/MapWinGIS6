@@ -817,6 +817,14 @@ namespace mwg::activex
                 try
                 {
                     std::lock_guard lock(_fillMeshPreparation->mutex);
+                    const std::size_t completionCount =
+                        _fillMeshPreparation->completed.size() +
+                        _fillMeshPreparation->activeTokens.size() + 1U;
+                    if (completionCount >
+                        _fillMeshPreparation->completed.capacity())
+                    {
+                        _fillMeshPreparation->completed.reserve(completionCount);
+                    }
                     _fillMeshPreparation->activeTokens.insert_or_assign(
                         layer.layerId,
                         job.token);
@@ -965,27 +973,14 @@ namespace mwg::activex
                     std::vector<std::optional<rendering::TriangleMesh>>()
                         .swap(result.meshes);
                 }
-                try
+                preparation->completed.push_back(std::move(result));
+                if (!preparation->wakePending &&
+                    job.wakeCallback != nullptr)
                 {
-                    preparation->completed.push_back(std::move(result));
-                    if (!preparation->wakePending &&
-                        job.wakeCallback != nullptr)
-                    {
-                        wakeAttempted = true;
-                        wakePosted =
-                            job.wakeCallback(job.wakeContext);
-                        preparation->wakePending = wakePosted;
-                    }
-                }
-                catch (const std::bad_alloc&)
-                {
-                    ::OutputDebugStringW(
-                        L"MapWinGIS: could not retain a background fill-mesh result.\n");
-                }
-                catch (...)
-                {
-                    ::OutputDebugStringW(
-                        L"MapWinGIS: could not retain a background fill-mesh result.\n");
+                    wakeAttempted = true;
+                    wakePosted =
+                        job.wakeCallback(job.wakeContext);
+                    preparation->wakePending = wakePosted;
                 }
                 preparation->completionChanged.notify_all();
             }
@@ -1827,13 +1822,23 @@ namespace mwg::activex
                 const auto cached = cache->layers.find(layer.layerId);
                 if (cached != cache->layers.end())
                 {
-                    if (cached->second.scene.lock() == layer.scene &&
-                        (cached->second.state ==
-                             FillMeshPreparationState::Ready ||
-                         cached->second.state ==
-                             FillMeshPreparationState::Failed))
+                    if (cached->second.scene.lock() == layer.scene)
                     {
-                        continue;
+                        if (cached->second.state ==
+                             FillMeshPreparationState::Ready ||
+                            cached->second.state ==
+                            FillMeshPreparationState::Failed)
+                        {
+                            continue;
+                        }
+                        if (cached->second.state ==
+                            FillMeshPreparationState::Pending)
+                        {
+                            _lastFailureReason =
+                                L"The OpenGL fill meshes are still being prepared; "
+                                L"this frame was rendered with GDI.";
+                            return S_FALSE;
+                        }
                     }
                     CancelLayerFillMeshPreparation(layer.layerId);
                     (void)cache->layers.erase(cached);

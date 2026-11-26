@@ -10,6 +10,7 @@
  */
 #include "mapwingis/rendering/PolygonTriangulation.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -93,6 +94,35 @@ namespace mwg::rendering
         double TwiceSignedArea(const Point& a, const Point& b, const Point& c)
         {
             return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+        }
+
+        [[nodiscard]] bool PointIsInRing(
+            const Point& point,
+            const std::span<const Point> ring) noexcept
+        {
+            bool inside = false;
+            for (std::size_t index = 0; index < ring.size(); ++index)
+            {
+                const Point& start = ring[index];
+                const Point& end = ring[(index + 1U) % ring.size()];
+                if (TwiceSignedArea(start, end, point) == 0.0 &&
+                    point.x >= std::min(start.x, end.x) &&
+                    point.x <= std::max(start.x, end.x) &&
+                    point.y >= std::min(start.y, end.y) &&
+                    point.y <= std::max(start.y, end.y))
+                {
+                    return true;
+                }
+                if ((start.y > point.y) != (end.y > point.y) &&
+                    point.x <
+                        (end.x - start.x) * (point.y - start.y) /
+                            (end.y - start.y) +
+                        start.x)
+                {
+                    inside = !inside;
+                }
+            }
+            return inside;
         }
 
         // Exact coordinate equality: triangulation reuses input vertices bit for bit, and
@@ -254,6 +284,17 @@ namespace mwg::rendering
                 if (ringIndex != 0)
                 {
                     ValidateRing(ring, "interior");
+                    if (std::any_of(
+                            ring.begin(),
+                            ring.end(),
+                            [&polygon](const Point& point)
+                            {
+                                return !PointIsInRing(point, polygon.front());
+                            }))
+                    {
+                        throw InvalidArgument(
+                            "Polygon interior ring lies outside the exterior ring");
+                    }
                 }
 
                 std::vector<std::array<double, 2>> converted;
@@ -388,7 +429,7 @@ namespace mwg::rendering
             const double expectedArea = ExpectedFillArea(polygon);
             const double meshArea = MeshArea(mesh);
             const double tolerance =
-                std::max(1.0, std::abs(expectedArea)) * 1e-9;
+                std::abs(expectedArea) * 1e-9;
             return expectedArea > 0.0 &&
                 std::abs(meshArea - expectedArea) <= tolerance;
         }
