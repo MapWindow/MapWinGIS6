@@ -74,6 +74,46 @@ TEST(ProjectionTest, ComparesByEpsgAndCrsEquivalence)
     EXPECT_NE(epsg28992.ExportToWkt(), std::string(kAmersfoortEsriWkt));
 }
 
+TEST(ProjectionTest, DoesNotUseANestedGeographicEpsgAsProjectedIdentity)
+{
+    constexpr std::string_view customProjection =
+        R"(PROJCS["Custom Mercator",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]],PROJECTION["Mercator_1SP"],PARAMETER["central_meridian",7],PARAMETER["scale_factor",1],PARAMETER["false_easting",123456],PARAMETER["false_northing",0],UNIT["metre",1],AXIS["Easting",EAST],AXIS["Northing",NORTH]])";
+
+    const Projection custom = Projection::FromWkt(customProjection);
+
+    EXPECT_FALSE(custom.Epsg().has_value());
+    EXPECT_FALSE(custom.IsSame(Projection::FromEpsg(4326)));
+}
+
+TEST(ProjectionTest, DoesNotUseANonEpsgRootAuthorityAsIdentity)
+{
+    constexpr std::string_view customProjection =
+        R"(PROJCS["Private projected CRS",GEOGCS["Private geographic CRS",DATUM["Private datum",SPHEROID["Private ellipsoid",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",11],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["metre",1],AUTHORITY["PRIVATE","12345"]])";
+
+    const Projection custom = Projection::FromWkt(customProjection);
+
+    EXPECT_FALSE(custom.Epsg().has_value());
+}
+
+TEST(ProjectionTest, DoesNotEquateDifferentCustomDefinitionsWithSharedMetadata)
+{
+    constexpr std::string_view prefix =
+        R"(PROJCS["Shared Name",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",)";
+    constexpr std::string_view suffix =
+        R"(],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["metre",1]])";
+
+    const Projection first =
+        Projection::FromWkt(std::string(prefix) + "3" + std::string(suffix));
+    const Projection second =
+        Projection::FromWkt(std::string(prefix) + "4" + std::string(suffix));
+
+    EXPECT_FALSE(first.Epsg().has_value());
+    EXPECT_FALSE(second.Epsg().has_value());
+    EXPECT_EQ(first.Name(), second.Name());
+    EXPECT_FALSE(first.IsSame(second));
+    EXPECT_FALSE(second.IsSame(first));
+}
+
 TEST(ProjectionTest, ExportsFormatsThatParseBack)
 {
     const Projection projection = Projection::FromEpsg(28992);

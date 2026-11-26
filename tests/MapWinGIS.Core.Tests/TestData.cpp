@@ -480,7 +480,7 @@ namespace mwg::test
         return path;
     }
 
-    std::filesystem::path MakeProjectionlessGeoJson(
+    std::filesystem::path MakeRfc7946GeoJson(
         const std::filesystem::path& directory,
         const std::string& fileName)
     {

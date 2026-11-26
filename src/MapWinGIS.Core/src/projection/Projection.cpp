@@ -11,8 +11,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <utility>
 
 #include <cpl_conv.h>
@@ -48,18 +51,120 @@ namespace mwg
             return message;
         }
 
-        std::optional<int> AuthorityCode(const OGRSpatialReference& reference)
+        std::optional<double> CoordinateEpoch(const std::string_view wkt)
         {
+            constexpr std::string_view marker = "COORDINATEEPOCH[";
+            const auto position = std::search(
+                wkt.begin(), wkt.end(), marker.begin(), marker.end(),
+                [](const unsigned char left, const unsigned char right)
+                {
+                    return std::toupper(left) == std::toupper(right);
+                });
+            if (position == wkt.end())
+            {
+                return std::nullopt;
+            }
+
+            const std::size_t offset =
+                static_cast<std::size_t>(position - wkt.begin()) + marker.size();
+            if (offset >= wkt.size())
+            {
+                return std::nullopt;
+            }
+
+            const std::string value(wkt.substr(offset));
+            char* end = nullptr;
+            const double epoch = std::strtod(value.c_str(), &end);
+            if (end == value.c_str() || *end != ']' || !std::isfinite(epoch))
+            {
+                return std::nullopt;
+            }
+            return epoch;
+        }
+
+        std::string AddCoordinateEpoch(
+            std::string wkt, const OGRSpatialReference& reference)
+        {
+            const double epoch = reference.GetCoordinateEpoch();
+            if (!std::isfinite(epoch) || epoch == 0.0 ||
+                CoordinateEpoch(wkt).has_value() || wkt.empty() ||
+                wkt.back() != ']')
+            {
+                return wkt;
+            }
+
+            std::ostringstream epochText;
+            epochText << std::setprecision(
+                             std::numeric_limits<double>::max_digits10)
+                      << epoch;
+            wkt.insert(wkt.size() - 1,
+                       ",COORDINATEEPOCH[" + epochText.str() + "]");
+            return wkt;
+        }
+
+        std::string RemoveCoordinateEpoch(std::string wkt)
+        {
+            constexpr std::string_view marker = "COORDINATEEPOCH[";
+            const auto position = std::search(
+                wkt.begin(), wkt.end(), marker.begin(), marker.end(),
+                [](const unsigned char left, const unsigned char right)
+                {
+                    return std::toupper(left) == std::toupper(right);
+                });
+            if (position == wkt.end())
+            {
+                return wkt;
+            }
+
+            std::size_t begin = static_cast<std::size_t>(position - wkt.begin());
+            if (begin > 0 && wkt[begin - 1] == ',')
+            {
+                --begin;
+            }
+            const std::size_t end = wkt.find(']', begin);
+            if (end == std::string::npos)
+            {
+                return wkt;
+            }
+            wkt.erase(begin, end - begin + 1);
+            return wkt;
+        }
+
+        bool IsSameViaProj4(
+            const OGRSpatialReference& first, const OGRSpatialReference& second)
+        {
+            if (first.IsDynamic() || second.IsDynamic())
+            {
+                return false;
+            }
+
+            char* firstText = nullptr;
+            char* secondText = nullptr;
+            const OGRErr firstResult = first.exportToProj4(&firstText);
+            const OGRErr secondResult = second.exportToProj4(&secondText);
+            std::string firstProj4(firstText != nullptr ? firstText : "");
+            std::string secondProj4(secondText != nullptr ? secondText : "");
+            CPLFree(firstText);
+            CPLFree(secondText);
+            if (firstResult != OGRERR_NONE || secondResult != OGRERR_NONE ||
+                firstProj4.empty() || secondProj4.empty())
+            {
+                return false;
+            }
+
+            OGRSpatialReference firstNormalized;
+            OGRSpatialReference secondNormalized;
+            return firstNormalized.importFromProj4(firstProj4.c_str()) == OGRERR_NONE &&
+                   secondNormalized.importFromProj4(secondProj4.c_str()) == OGRERR_NONE &&
+                   firstNormalized.IsSame(&secondNormalized) == TRUE;
+        }
+
+        std::optional<int> EpsgAuthorityCode(const OGRSpatialReference& reference)
+        {
+            const char* const authority = reference.GetAuthorityName(nullptr);
             const char* code = reference.GetAuthorityCode(nullptr);
-            if (code == nullptr)
-            {
-                code = reference.GetAuthorityCode("PROJCS");
-            }
-            if (code == nullptr)
-            {
-                code = reference.GetAuthorityCode("GEOGCS");
-            }
-            if (code == nullptr)
+            if (authority == nullptr || code == nullptr ||
+                std::string_view(authority) != "EPSG")
             {
                 return std::nullopt;
             }
@@ -72,25 +177,6 @@ namespace mwg
                 return std::nullopt;
             }
             return static_cast<int>(parsed);
-        }
-
-        std::string NormalizedName(const char* name)
-        {
-            if (name == nullptr)
-            {
-                return {};
-            }
-
-            std::string normalized;
-            normalized.reserve(std::char_traits<char>::length(name));
-            for (const unsigned char character : std::string_view(name))
-            {
-                if (std::isalnum(character))
-                {
-                    normalized.push_back(static_cast<char>(std::tolower(character)));
-                }
-            }
-            return normalized;
         }
 
         SpatialReferencePtr MakeSpatialReference(const OGRSpatialReference& source)
@@ -140,7 +226,7 @@ namespace mwg
 
             (void)candidate->morphFromESRI();
             (void)candidate->AutoIdentifyEPSG();
-            _epsg = AuthorityCode(*candidate);
+            _epsg = EpsgAuthorityCode(*candidate);
 
             if (_epsg.has_value())
             {
@@ -165,7 +251,7 @@ namespace mwg
                         OGRSpatialReference::FromHandle(matches[index]);
                     if (matched != nullptr)
                     {
-                        _epsg = AuthorityCode(*matched);
+                        _epsg = EpsgAuthorityCode(*matched);
                     }
                 }
                 OSRFreeSRSArray(matches);
@@ -275,7 +361,8 @@ namespace mwg
             return std::nullopt;
         }
 
-        const std::string input(wkt);
+        const std::optional<double> epoch = CoordinateEpoch(wkt);
+        const std::string input = RemoveCoordinateEpoch(std::string(wkt));
         const char* text = input.c_str();
         const GdalEnvironment::QuietScope quiet;
         OGRSpatialReference reference;
@@ -284,6 +371,10 @@ namespace mwg
             reference.Validate() != OGRERR_NONE)
         {
             return std::nullopt;
+        }
+        if (epoch.has_value())
+        {
+            reference.SetCoordinateEpoch(*epoch);
         }
         reference.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
         return Projection(std::make_shared<Impl>(MakeSpatialReference(reference)));
@@ -348,13 +439,14 @@ namespace mwg
         }
 
         char* text = nullptr;
+        static constexpr const char* options[] = {"FORMAT=WKT2_2019", nullptr};
         CPLErrorReset();
-        if (_impl->_reference->exportToWkt(&text) != OGRERR_NONE)
+        if (_impl->_reference->exportToWkt(&text, options) != OGRERR_NONE)
         {
             CPLFree(text);
             throw CoreError(FailureMessage("Cannot export coordinate reference system to WKT"));
         }
-        return ExportedString(text);
+        return AddCoordinateEpoch(ExportedString(text), *_impl->_reference);
     }
 
     std::string Projection::ExportToProj4() const
@@ -391,20 +483,8 @@ namespace mwg
         {
             return true;
         }
-
-        const std::string name = NormalizedName(_impl->_reference->GetName());
-        const std::string otherName =
-            NormalizedName(other._impl->_reference->GetName());
-        if (!name.empty() && name == otherName)
-        {
-            return true;
-        }
-
-        const std::string projection =
-            NormalizedName(_impl->_reference->GetAttrValue("PROJECTION"));
-        const std::string otherProjection =
-            NormalizedName(other._impl->_reference->GetAttrValue("PROJECTION"));
-        return !projection.empty() && projection == otherProjection;
+        return IsSameViaProj4(
+            *_impl->_reference, *other._impl->_reference);
     }
 
     ProjectionTransform Projection::TransformTo(const Projection& target) const

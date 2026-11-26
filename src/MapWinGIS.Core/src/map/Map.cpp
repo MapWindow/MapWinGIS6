@@ -118,7 +118,11 @@ namespace mwg
         }
 
         const LayerId id{_impl->_lastId + 1};
-        mwg::Projection layerProjection = dataset->Layer(layerIndex).Projection();
+        mwg::Projection layerProjection;
+        if (!_impl->_projection.has_value())
+        {
+            layerProjection = dataset->Layer(layerIndex).Projection();
+        }
         auto layer = std::unique_ptr<MapLayer>(
             new MapLayer(std::make_unique<MapLayer::Impl>(id, std::move(dataset), layerIndex)));
         _impl->_layers.push_back(std::move(layer));

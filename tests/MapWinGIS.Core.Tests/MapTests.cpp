@@ -14,6 +14,9 @@
 #include <string>
 #include <vector>
 
+#include <cpl_error.h>
+#include <gdal_priv.h>
+
 #include "TestData.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/map/Map.h"
@@ -30,6 +33,30 @@ namespace
         EXPECT_DOUBLE_EQ(actual.yMin, expected.yMin);
         EXPECT_DOUBLE_EQ(actual.xMax, expected.xMax);
         EXPECT_DOUBLE_EQ(actual.yMax, expected.yMax);
+    }
+
+    std::string ToUtf8(const std::filesystem::path& path)
+    {
+        const std::u8string utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
+    void SetGeoPackageSrsId(const std::filesystem::path& path, const int srsId)
+    {
+        GDALDatasetUniquePtr dataset(GDALDataset::Open(
+            ToUtf8(path).c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE));
+        ASSERT_NE(dataset, nullptr);
+
+        CPLErrorReset();
+        const std::string updateGeometryColumns =
+            "UPDATE gpkg_geometry_columns SET srs_id = " + std::to_string(srsId);
+        const std::string updateContents =
+            "UPDATE gpkg_contents SET srs_id = " + std::to_string(srsId);
+        EXPECT_EQ(dataset->ExecuteSQL(updateGeometryColumns.c_str(),
+                                      nullptr, nullptr), nullptr);
+        EXPECT_EQ(dataset->ExecuteSQL(updateContents.c_str(),
+                                      nullptr, nullptr), nullptr);
+        EXPECT_LT(CPLGetLastErrorType(), CE_Failure);
     }
 
     class MapTest : public testing::Test
@@ -100,6 +127,29 @@ TEST_F(MapTest, DoesNotAdoptFromAProjectionlessLayer)
     (void)_map.AddLayer(projected);
     ASSERT_TRUE(_map.Projection().has_value());
     EXPECT_EQ(_map.Projection()->Epsg(), 28992);
+}
+
+TEST_F(MapTest, DoesNotAdoptReservedUndefinedGeoPackageProjections)
+{
+    for (const int srsId : {-1, 0})
+    {
+        SCOPED_TRACE(srsId);
+        const std::vector<Extent> rectangles{{0, 0, 1, 1}};
+        const std::filesystem::path path =
+            MakeRectanglesDataset(_directory.Path(), "undefined-" +
+                                   std::to_string(srsId) + ".gpkg", rectangles);
+        SetGeoPackageSrsId(path, srsId);
+
+        Map map;
+        (void)map.AddLayer(VectorDataset::Open(path));
+        EXPECT_FALSE(map.Projection().has_value());
+
+        (void)map.AddLayer(
+            VectorDataset::Open(MakeSampleShapefile(
+                _directory.Path(), "projected-" + std::to_string(srsId))));
+        ASSERT_TRUE(map.Projection().has_value());
+        EXPECT_EQ(map.Projection()->Epsg(), 28992);
+    }
 }
 
 TEST_F(MapTest, KeepsProjectionWhenLayersAreRemovedOrCleared)

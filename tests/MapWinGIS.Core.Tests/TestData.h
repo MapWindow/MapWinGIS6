@@ -136,8 +136,8 @@ namespace mwg::test
     std::filesystem::path MakeTwoLayerDataset(const std::filesystem::path& directory,
                                               const std::string& fileName);
 
-    /// Writes a polygon GeoJSON dataset without a CRS member.
-    std::filesystem::path MakeProjectionlessGeoJson(
+    /// Writes a polygon RFC 7946 GeoJSON dataset without a CRS member.
+    std::filesystem::path MakeRfc7946GeoJson(
         const std::filesystem::path& directory,
         const std::string& fileName);
 
