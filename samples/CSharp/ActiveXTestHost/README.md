@@ -43,8 +43,11 @@ The status bar shows the active rendering backend and rendering status. Automate
 
 With the default `Automatic` preference, Fill frames are painted with GDI
 until OpenGL fill meshes exist. The control prepares those meshes with
-bounded background workers from an immutable scene snapshot. Once they are
-published, the control warms the OpenGL target and invalidates the layer
+bounded background workers from an immutable scene snapshot. The control
+publishes them only from its owner-thread completion handler, and only after
+the first frame of a newly loaded or changed layer set has been presented, so
+that frame is never delayed by mesh publication or OpenGL warm-up. After
+publication, the control warms the OpenGL target and invalidates the layer
 frame; a later frame switches to OpenGL. `RenderingStatus` reports GDI while
 the meshes are pending and OpenGL after the transition succeeds.
 
@@ -52,10 +55,11 @@ the meshes are pending and OpenGL after the transition succeeds.
 
 Interactive Open and drag-and-drop loads use
 `BeginLoadVectorDataset` and completion events, so the scene read does not
-block the UI thread. The rightmost status-bar field shows the complete async
-load duration and how long the first repaint after that load took. Use it for
-a debugger-free comparison with MapWinGIS 5; meaningful timings require a
-Release build.
+block the UI thread. The rightmost status-bar field shows the async load
+duration up to the completion event and how long the first repaint took. The
+host measures that repaint synchronously inside the completion event, before
+any other queued paint can run. Use it for a debugger-free comparison with
+MapWinGIS 5; meaningful timings require a Release build.
 
 ## Run automated checks
 

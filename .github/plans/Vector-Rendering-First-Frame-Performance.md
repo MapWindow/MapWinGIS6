@@ -268,7 +268,10 @@ Do this work only where the Phase 1 measurements justify it.
 ### Status after Phase 3
 
 Completed the context/FBO warm-up when background meshes are published, before
-the Automatic backend-switch repaint. The interactive C# host Open and
+the Automatic backend-switch repaint. Publication and warm-up wait until the
+first frame of a new layer set has been presented, because the posted
+completion can otherwise run before the initial `WM_PAINT`. Draw does not
+publish owner-dispatched meshes. The interactive C# host Open and
 drag-and-drop paths now use `BeginLoadVectorDataset` and completion events, so
 scene construction does not block the host UI.
 

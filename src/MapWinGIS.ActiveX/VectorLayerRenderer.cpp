@@ -5,7 +5,8 @@
  * @brief Coordinates OpenGL and GDI rendering for vector scenes.
  *
  * Keeps backend selection internal to the ActiveX rendering layer, queues
- * background fill-mesh preparation, publishes ready meshes on draw, and
+ * background fill-mesh preparation, publishes ready meshes on draw unless an
+ * owner wake callback publishes them for Automatic Fill frames, and
  * retries with GDI when OpenGL cannot represent the scene.
  */
 #include "VectorLayerRenderer.h"
@@ -41,18 +42,23 @@ namespace mwg::activex
             return S_FALSE;
         }
 
-        (void)_openGlRenderer.PublishPreparedFillMeshes();
-        if (_preference == VectorRenderBackendPreference::Automatic &&
-            renderMode == VectorRenderMode::Fill)
+        const bool automaticFill =
+            _preference == VectorRenderBackendPreference::Automatic &&
+            renderMode == VectorRenderMode::Fill;
+        // Publishing here would let this paint select OpenGL before the owner
+        // has warmed the target, moving context and framebuffer allocation
+        // back onto the paint path.
+        if (!(automaticFill && _ownerPublishesFillMeshes))
+        {
+            (void)_openGlRenderer.PublishPreparedFillMeshes();
+        }
+        if (automaticFill)
         {
             _openGlRenderer.PrepareFillMeshesInBackground(stableScene);
         }
 
         if (_preference != VectorRenderBackendPreference::Gdi)
         {
-            const bool automaticFill =
-                _preference == VectorRenderBackendPreference::Automatic &&
-                renderMode == VectorRenderMode::Fill;
             const auto readiness = automaticFill
                 ? _openGlRenderer.GetFillMeshReadiness(stableScene)
                 : OpenGlVectorLayerRenderer::FillMeshReadiness::Ready;

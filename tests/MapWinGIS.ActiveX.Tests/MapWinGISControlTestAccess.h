@@ -73,6 +73,46 @@ namespace mwg::activex::testing
             return control._fillMeshPreparationDispatch != nullptr;
         }
 
+        [[nodiscard]] static bool WaitForCompletedFillMeshPreparation(
+            const CMapWinGISControl& control)
+        {
+            for (int attempt = 0; attempt < 500; ++attempt)
+            {
+                if (control._renderer.HasCompletedFillMeshPreparation())
+                {
+                    return true;
+                }
+                ::Sleep(10);
+            }
+            return false;
+        }
+
+        /// Delivers the owner-thread fill-mesh wake synchronously, as if the
+        /// posted message had been dispatched.
+        static void DeliverFillMeshCompletion(CMapWinGISControl& control) noexcept
+        {
+            if (control._fillMeshPreparationDispatch != nullptr)
+            {
+                ::SendMessageW(
+                    control._fillMeshPreparationDispatch->m_hWnd,
+                    mwg::activex::kGdalDispatchMessage,
+                    0,
+                    0);
+            }
+        }
+
+        [[nodiscard]] static bool FillMeshPublicationDeferred(
+            const CMapWinGISControl& control) noexcept
+        {
+            return control._fillMeshPublicationDeferred;
+        }
+
+        [[nodiscard]] static bool HasCompletedFillMeshPreparation(
+            const CMapWinGISControl& control) noexcept
+        {
+            return control._renderer.HasCompletedFillMeshPreparation();
+        }
+
         [[nodiscard]] static double Resolution(const CMapWinGISControl& control)
         {
             return control._view.GetViewport().Resolution().value();

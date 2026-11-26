@@ -59,7 +59,8 @@ namespace mwg::activex
             int maximumHeight) noexcept;
 
         /// Initializes the rendering context, staging buffer, and framebuffer
-        /// before the first scene draw. Returns S_OK when the target is ready.
+        /// before the first scene draw. Returns S_OK when the target is ready
+        /// and S_FALSE, without recording a failure, for a non-positive size.
         [[nodiscard]] HRESULT WarmUp(int width, int height) noexcept;
 
         /**
@@ -171,7 +172,11 @@ namespace mwg::activex
         [[nodiscard]] bool Initialize() noexcept;
         [[nodiscard]] bool InitializeFramebuffer() noexcept;
         [[nodiscard]] bool ResizeFramebuffer(int width, int height) noexcept;
-        [[nodiscard]] HRESULT InitializeTarget(int width, int height) noexcept;
+        /// Prepares the context, staging buffer, and framebuffer for a
+        /// positive target size. Only draw attempts consume the
+        /// initialization retry delay.
+        [[nodiscard]] HRESULT InitializeTarget(
+            int width, int height, bool drawAttempt) noexcept;
         void Release() noexcept;
         void QueueDeletedGpuBuffer(unsigned int buffer) noexcept;
         void FlushDeletedGpuBuffers() noexcept;

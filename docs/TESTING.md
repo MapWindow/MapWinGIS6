@@ -216,7 +216,9 @@ draws. With the default `Automatic` preference the coordinator instead paints a
 mesh-pending Fill frame with GDI. Missing meshes are prepared from immutable
 scenes on bounded background workers, then published to the control thread.
 The owner-thread publication warms the OpenGL context, staging buffer, and
-framebuffer for the current viewport before invalidating the frame. The next
+framebuffer for the current viewport before invalidating the frame. If the
+completion arrives before the first frame of a new layer set, publication and
+warm-up wait until that GDI frame has been presented. The next
 frame selects OpenGL once every layer is ready without allocating the target
 inside that paint.
 `MeasuresLazyOpenGlFillCosts` measures
@@ -415,8 +417,9 @@ Phase 3 moved the remaining user-visible setup off the OpenGL transition.
 The ActiveX control now warms its context and framebuffer while publishing
 completed background meshes, and the C# test host's interactive Open and drag
 paths use `BeginLoadVectorDataset` and `GdalOperationCompleted` instead of
-blocking on `LoadVectorDatasetEx`. The host still reports the complete
-asynchronous load duration and the first repaint.
+blocking on `LoadVectorDatasetEx`. The host reports the asynchronous load
+duration up to the completion event and measures the first repaint inside that
+event, so a later cached blit cannot be reported as the first frame.
 On 2026-11-26, the real-dataset Release run measured 93.4 ms load plus 21.6 ms
 first paint for `LoadVectorDatasetEx`, and 194.4 ms load plus 20.4 ms first
 paint for `BeginLoadVectorDataset`/`EndLoadVectorDataset`. Both runs reported

@@ -357,7 +357,11 @@ whose layers have no fill meshes yet with the GDI backend, so the paint
 path never blocks on triangulation. The control queues mesh generation for
 the immutable scene on its owner thread. A background coordinator reads only
 the scene snapshot, and a posted message publishes completed meshes on the
-control thread and invalidates the layer frame. The next frame can switch to
+control thread and invalidates the layer frame. Draw never publishes them in
+this mode. Posted messages are dispatched before `WM_PAINT`, so when the
+completion arrives before the first frame of a new or changed layer set has
+been presented, the control defers publication and warm-up until that frame
+has been drawn. The next frame can switch to
 OpenGL. Replaced, removed, and explicitly invalidated scene identities cancel
 their queued tokens, so stale results are never published. An explicit
 `OpenGL` preference still supports synchronous lazy preparation when a caller

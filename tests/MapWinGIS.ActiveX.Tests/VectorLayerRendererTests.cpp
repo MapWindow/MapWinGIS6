@@ -705,7 +705,7 @@ TEST(VectorLayerRenderer, OpenGlWarmUpCreatesTheTargetBeforeDrawing)
 {
     mwg::activex::OpenGlVectorLayerRenderer renderer;
     const HRESULT warmUpResult = renderer.WarmUp(120, 100);
-    if (warmUpResult == S_FALSE)
+    if (warmUpResult == S_FALSE || FAILED(warmUpResult))
     {
         GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
     }
@@ -713,6 +713,66 @@ TEST(VectorLayerRenderer, OpenGlWarmUpCreatesTheTargetBeforeDrawing)
     EXPECT_TRUE(
         mwg::activex::testing::OpenGlVectorLayerRendererTestAccess::
             IsWarmedUp(renderer, 120, 100));
+}
+
+TEST(VectorLayerRenderer, OpenGlWarmUpIgnoresAnUnsizedTarget)
+{
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    const std::wstring_view initialReason = renderer.GetLastFailureReason();
+    EXPECT_EQ(renderer.WarmUp(0, 0), S_FALSE);
+    EXPECT_EQ(renderer.GetLastFailureReason(), initialReason);
+
+    const HRESULT warmUpResult = renderer.WarmUp(120, 100);
+    if (warmUpResult == S_FALSE || FAILED(warmUpResult))
+    {
+        GTEST_SKIP() << "No OpenGL context with framebuffer objects is available.";
+    }
+    EXPECT_EQ(warmUpResult, S_OK);
+}
+
+TEST(VectorLayerRenderer, OpenGlWarmUpKeepsTheDrawRetryDelay)
+{
+    using Access = mwg::activex::testing::OpenGlVectorLayerRendererTestAccess;
+    mwg::activex::OpenGlVectorLayerRenderer renderer;
+    Access::SimulateFailedRecovery(renderer, 120, 100);
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        EXPECT_EQ(renderer.WarmUp(120, 100), S_FALSE);
+    }
+    EXPECT_EQ(Access::RetryDrawsRemaining(renderer), 60U);
+    EXPECT_EQ(
+        renderer.GetLastFailureReason(),
+        L"Simulated context initialization failure.");
+}
+
+TEST(VectorLayerRenderer, AutomaticFillLeavesPublicationToTheOwnerWake)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    Edit(scene.layers.front()).fillMeshes.clear();
+    const mwg::Viewport viewport = FitViewport(bounds);
+    ControlledWake wake;
+    wake.succeeds.store(true, std::memory_order_relaxed);
+
+    mwg::activex::VectorLayerRenderer renderer;
+    renderer.ConfigureFillMeshPreparation(PostControlledWake, &wake);
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    for (int attempt = 0;
+         attempt < 500 && !renderer.HasCompletedFillMeshPreparation();
+         ++attempt)
+    {
+        ::Sleep(10);
+    }
+    ASSERT_TRUE(renderer.HasCompletedFillMeshPreparation());
+
+    // A repaint before the owner handles the wake must not publish the
+    // meshes and switch to a cold OpenGL target.
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_EQ(renderer.GetActiveBackend(), mwg::activex::VectorRenderBackendKind::Gdi);
+    EXPECT_TRUE(renderer.HasCompletedFillMeshPreparation());
+    EXPECT_TRUE(renderer.PublishPreparedFillMeshes());
 }
 
 TEST(VectorLayerRenderer, OpenGlRendersConcavePolygonWithDuplicateVertex)

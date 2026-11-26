@@ -161,3 +161,14 @@ to the DBF field width, for example. Core therefore discards its cached feature
 after every `SetFeature` write, successful or not, so a later read returns the
 stored value instead of the value the caller wrote. See
 `VectorLayerEditTest.ReadsBackTheStoredValueAfterTheDriverCoercesAWrite`.
+
+## Posted completions can run before the first WM_PAINT
+
+Windows dispatches posted messages before `WM_PAINT`. A background job that
+finishes quickly can therefore post its owner-thread completion before the
+invalidated control paints its first frame. Work done in that handler delays
+that first frame. The control defers fill-mesh publication and OpenGL warm-up
+until the first frame of a new layer set has been presented. See
+`CMapWinGISControl::DispatchFillMeshPreparation` in
+[MapWinGISControl.cpp](../../../src/MapWinGIS.ActiveX/MapWinGISControl.cpp)
+and `ActiveXMapTest.FillMeshCompletionBeforeTheFirstPaintWaitsForThatFrame`.

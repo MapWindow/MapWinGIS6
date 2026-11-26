@@ -1112,9 +1112,16 @@ namespace mwg::activex
         const int width,
         const int height) noexcept
     {
+        if (width <= 0 || height <= 0)
+        {
+            // A control that is not sized yet has nothing to warm. This is a
+            // transient state, not a failure; the draw path validates its own
+            // target.
+            return S_FALSE;
+        }
         const diagnostics::PerformanceScope scope(
             diagnostics::PerformanceOperation::OpenGlContextInitialization);
-        return InitializeTarget(width, height);
+        return InitializeTarget(width, height, false);
     }
 
     bool OpenGlVectorLayerRenderer::Initialize() noexcept
@@ -1308,7 +1315,8 @@ namespace mwg::activex
 
     HRESULT OpenGlVectorLayerRenderer::InitializeTarget(
         const int width,
-        const int height) noexcept
+        const int height,
+        const bool drawAttempt) noexcept
     {
         if (width <= 0 || height <= 0)
         {
@@ -1335,7 +1343,12 @@ namespace mwg::activex
         {
             if (_initializationRetryDrawsRemaining > 0)
             {
-                --_initializationRetryDrawsRemaining;
+                // The retry delay counts painted frames; warm-ups between
+                // draws must not shorten it.
+                if (drawAttempt)
+                {
+                    --_initializationRetryDrawsRemaining;
+                }
                 _lastFailureReason = _initializationFailureReason;
                 return S_FALSE;
             }
@@ -2611,7 +2624,7 @@ namespace mwg::activex
                 diagnostics::PerformanceOperation::OpenGlContextInitialization);
 
             const HRESULT initializationResult =
-                InitializeTarget(target.width, target.height);
+                InitializeTarget(target.width, target.height, true);
             if (initializationResult != S_OK)
             {
                 return initializationResult;

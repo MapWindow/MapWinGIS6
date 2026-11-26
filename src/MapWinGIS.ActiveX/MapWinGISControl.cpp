@@ -8,7 +8,9 @@
  * Redraws: every map or view change made through the control goes through
  * its MapView; the control calls FireViewChange when the MapView reports
  * that the frame changed. Loaded scenes queue background fill-mesh work and
- * publish completion through a message-only dispatch window. OnDraw composes
+ * publish completion through a message-only dispatch window. Publication and
+ * OpenGL target warm-up wait until a pending layer change has been presented.
+ * OnDraw composes
  * the MapView's render scene through its viewport into an offscreen frame
  * buffer and presents the finished
  * frame with a single blit, so every layer uses the same transformation and
@@ -1738,6 +1740,16 @@ void CMapWinGISControl::DispatchFillMeshPreparation(
         {
             instance->_fillMeshPreparationDispatch->StopRetryTimer();
         }
+        if (instance->_layerFramePending)
+        {
+            // Posted completions outrank WM_PAINT, so they can arrive before
+            // the GDI frame of a new or changed scene is presented. Warming
+            // the OpenGL target here would delay that frame; OnDraw re-posts
+            // the wake once the frame has been presented.
+            instance->_fillMeshPublicationDeferred = true;
+            instance->FireViewChange();
+            return;
+        }
         if (instance->_renderer.PublishPreparedFillMeshes())
         {
             const mwg::Viewport& viewport = instance->_view.GetViewport();
@@ -1895,6 +1907,23 @@ STDMETHODIMP CMapWinGISControl::SetObjectRects(LPCRECT position, LPCRECT clip)
 void CMapWinGISControl::InvalidateLayerCache() noexcept
 {
     _layerCacheValid = false;
+    _layerFramePending = true;
+}
+
+void CMapWinGISControl::OnLayerFramePresented() noexcept
+{
+    _layerFramePending = false;
+    if (!_fillMeshPublicationDeferred || _fillMeshPreparationDispatch == nullptr)
+    {
+        return;
+    }
+    _fillMeshPublicationDeferred = false;
+    if (!_fillMeshPreparationDispatch->PostWake() &&
+        !_fillMeshPreparationDispatch->StartRetryTimer())
+    {
+        ::OutputDebugStringW(
+            L"MapWinGIS: unable to resume deferred fill-mesh publication.\n");
+    }
 }
 
 bool CMapWinGISControl::TryBlitCachedLayers(
@@ -2054,6 +2083,21 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
     const mwg::Viewport& clientViewport = _view.GetViewport();
     const bool alternateSize =
         width != clientViewport.Width() || height != clientViewport.Height();
+
+    // Only a client-sized draw presents the pending layer frame; prints and
+    // scaled draws leave deferred mesh publication waiting.
+    struct LayerFramePresentation final
+    {
+        CMapWinGISControl* control;
+
+        ~LayerFramePresentation()
+        {
+            if (control != nullptr)
+            {
+                control->OnLayerFramePresented();
+            }
+        }
+    } layerFramePresentation{alternateSize ? nullptr : this};
 
     // Printing, metafiles, and scaled draws must not resize or retain memory
     // in the interactive screen buffers. Their frame and OpenGL staging

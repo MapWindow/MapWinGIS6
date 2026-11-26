@@ -2380,6 +2380,37 @@ TEST_F(ActiveXMapTest, ReactivatingTheControlRestartsFillMeshPreparation)
     EXPECT_EQ(Access::FillMeshCacheSize(control), 1U);
 }
 
+TEST_F(ActiveXMapTest, FillMeshCompletionBeforeTheFirstPaintWaitsForThatFrame)
+{
+    using Access = mwg::activex::testing::MapWinGISControlTestAccess;
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(
+        _control->put_RenderingBackendPreference(
+            ATL::CComBSTR(L"Automatic")),
+        S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    CMapWinGISControl& control = Access::Control(_control.Get());
+    ASSERT_TRUE(Access::WaitForCompletedFillMeshPreparation(control));
+
+    // The posted completion outranks the pending WM_PAINT; it must not
+    // publish meshes or warm OpenGL before the first frame is presented.
+    Access::DeliverFillMeshCompletion(control);
+    EXPECT_TRUE(Access::FillMeshPublicationDeferred(control));
+    EXPECT_TRUE(Access::HasCompletedFillMeshPreparation(control));
+
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    ATL::CComBSTR backend;
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    EXPECT_STREQ(backend, L"GDI");
+    EXPECT_FALSE(Access::FillMeshPublicationDeferred(control));
+
+    Access::DeliverFillMeshCompletion(control);
+    EXPECT_FALSE(Access::FillMeshPublicationDeferred(control));
+    EXPECT_FALSE(Access::HasCompletedFillMeshPreparation(control));
+}
+
 TEST_F(ActiveXMapTest, DragDrawBlitsWholePixelShiftsAndRendersFractionalOrHugeShifts)
 {
     using Access = mwg::activex::testing::MapWinGISControlTestAccess;

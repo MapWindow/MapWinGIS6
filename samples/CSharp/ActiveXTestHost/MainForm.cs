@@ -550,11 +550,28 @@ internal sealed class MainForm : Form
         int previousLayerCount = (int)automation.LayerCount;
         long previousFeatureCount = (long)automation.FeatureCount;
         var loadWatch = Stopwatch.StartNew();
+        double? loadMilliseconds = null;
+        double? firstPaintMilliseconds = null;
+        // Measure inside the completion event: the control has committed the
+        // layer, and no later cached blit can be mistaken for the first frame.
         VectorLoadResult result = await VectorLoadClient.LoadAsync(
             automationObject,
             path,
-            CancellationToken.None);
+            CancellationToken.None,
+            () =>
+            {
+                loadMilliseconds = loadWatch.Elapsed.TotalMilliseconds;
+                var paintWatch = Stopwatch.StartNew();
+                _host?.Invalidate(true);
+                _host?.Update();
+                firstPaintMilliseconds = paintWatch.Elapsed.TotalMilliseconds;
+            });
         loadWatch.Stop();
+        if (result.CompletedOperationId is null)
+        {
+            throw new InvalidOperationException(
+                "The vector load completion event was not observed.");
+        }
         if (result.CompletedOperationId != result.OperationId ||
             result.Cancelled ||
             !result.Succeeded)
@@ -565,9 +582,9 @@ internal sealed class MainForm : Form
                     : result.Diagnostics);
         }
 
-        _lastLoadMilliseconds = loadWatch.Elapsed.TotalMilliseconds;
-        _awaitingFirstPaint = true;
-        _firstPaintMilliseconds = null;
+        _lastLoadMilliseconds = loadMilliseconds ?? loadWatch.Elapsed.TotalMilliseconds;
+        _awaitingFirstPaint = false;
+        _firstPaintMilliseconds = firstPaintMilliseconds;
         UpdateTimingLabel();
         var layer = new LoadedLayer(
             result.LayerId,
@@ -640,13 +657,21 @@ internal sealed class MainForm : Form
         }
     }
 
-    private async Task LoadDatasetsInteractivelyAsync(IEnumerable<string> paths)
+    /// <summary>
+    /// Loads datasets and reports failures to the user.
+    /// </summary>
+    /// <returns>
+    /// The combined failure and warning message in automated mode, or
+    /// <see langword="null"/>. Returning the message instead of throwing keeps
+    /// async-void UI callers from raising unhandled exceptions.
+    /// </returns>
+    private async Task<string?> LoadDatasetsInteractivelyAsync(IEnumerable<string> paths)
     {
         if (_loadingDatasets)
         {
             _renderingStatusLabel.Text =
                 "Rendering: a vector dataset load is already in progress.";
-            return;
+            return null;
         }
 
         _loadingDatasets = true;
@@ -687,7 +712,7 @@ internal sealed class MainForm : Form
             _renderingStatusLabel.Text = $"Rendering: {message}";
             if (_options.Automated)
             {
-                throw new InvalidOperationException(message);
+                return message;
             }
             MessageBox.Show(
                 this,
@@ -696,6 +721,7 @@ internal sealed class MainForm : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
+        return null;
     }
 
     private void ClearLayers()
@@ -983,7 +1009,10 @@ internal sealed class MainForm : Form
         try
         {
             automation.RenderingBackendPreference = "GDI";
-            await LoadDatasetsInteractivelyAsync([TestDatasetPath]);
+            if (await LoadDatasetsInteractivelyAsync([TestDatasetPath]) is { } failure)
+            {
+                throw new InvalidOperationException(failure);
+            }
             if ((int)automation.LayerCount != 1 || _layerList.Items.Count != 1 ||
                 _backendLabel.Text != "Backend: GDI" ||
                 _renderingStatusLabel.Text != $"Rendering: {(string)automation.RenderingStatus}")

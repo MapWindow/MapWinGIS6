@@ -28,7 +28,7 @@ internal interface IMapWinGISControl5
 
 internal sealed record VectorLoadResult(
     long OperationId,
-    long CompletedOperationId,
+    long? CompletedOperationId,
     bool Succeeded,
     bool Cancelled,
     long LayerId,
@@ -43,10 +43,23 @@ internal static class VectorLoadClient
 
     private delegate void GdalCompletedEvent(long operationId);
 
+    /// <summary>
+    /// Loads a vector dataset without blocking the UI thread.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="onCompleted"/> runs synchronously inside the control's
+    /// completion event, after the layer was committed and before the UI
+    /// thread can process the resulting paint. Cancellation is a request:
+    /// the method still waits for <c>EndLoadVectorDataset</c> so that the
+    /// control releases the operation.
+    /// <see cref="VectorLoadResult.CompletedOperationId"/> is set only when
+    /// the completion event was observed.
+    /// </remarks>
     public static async Task<VectorLoadResult> LoadAsync(
         object automationObject,
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? onCompleted = null)
     {
         var synchronizationContext = SynchronizationContext.Current ??
             throw new InvalidOperationException(
@@ -57,11 +70,14 @@ internal static class VectorLoadClient
         var completedIds = new HashSet<long>();
         long operationId = 0;
 
-        GdalCompletedEvent onCompleted = id =>
+        GdalCompletedEvent onCompletedEvent = id =>
         {
             if (id == operationId && operationId != 0)
             {
-                completed.TrySetResult(id);
+                if (completed.TrySetResult(id))
+                {
+                    onCompleted?.Invoke();
+                }
                 return;
             }
             // A very small load can finish and post its notification while
@@ -69,14 +85,16 @@ internal static class VectorLoadClient
             completedIds.Add(id);
         };
 
-        ComEventsHelper.Combine(control, EventsInterfaceId, 2, onCompleted);
+        ComEventsHelper.Combine(control, EventsInterfaceId, 2, onCompletedEvent);
         try
         {
             operationId = control.BeginLoadVectorDataset(path);
-            if (completedIds.Remove(operationId))
+            if (completedIds.Remove(operationId) &&
+                completed.TrySetResult(operationId))
             {
-                completed.TrySetResult(operationId);
+                onCompleted?.Invoke();
             }
+            Exception? cancellationFailure = null;
             using CancellationTokenRegistration cancellation =
                 cancellationToken.Register(() =>
                     synchronizationContext.Post(
@@ -92,31 +110,18 @@ internal static class VectorLoadClient
                             }
                             catch (COMException exception)
                             {
-                                if (!completed.Task.IsCompleted)
-                                {
-                                    completed.TrySetException(exception);
-                                }
+                                cancellationFailure = exception;
                             }
                         },
                         null));
 
-            if (cancellationToken.IsCancellationRequested)
+            bool succeeded;
+            bool cancelled;
+            long layerId;
+            string summary;
+            string diagnostics;
+            while (true)
             {
-                control.CancelLoadVectorDataset(operationId);
-            }
-
-            long completedOperationId = 0;
-            bool succeeded = false;
-            bool cancelled = false;
-            long layerId = 0;
-            string summary = string.Empty;
-            string diagnostics = string.Empty;
-            while (completedOperationId == 0)
-            {
-                await Task.WhenAny(
-                        completed.Task,
-                        Task.Delay(10, cancellationToken))
-                    .ConfigureAwait(true);
                 try
                 {
                     control.EndLoadVectorDataset(
@@ -126,20 +131,37 @@ internal static class VectorLoadClient
                         out layerId,
                         out summary,
                         out diagnostics);
-                    completedOperationId = completed.Task.IsCompletedSuccessfully
-                        ? await completed.Task.ConfigureAwait(true)
-                        : operationId;
+                    break;
                 }
                 catch (COMException exception)
-                    when (exception.HResult == HResultPending &&
-                          !cancellationToken.IsCancellationRequested)
+                    when (exception.HResult == HResultPending)
                 {
+                }
+
+                if (cancellationFailure is not null)
+                {
+                    throw new InvalidOperationException(
+                        "The vector load could not be cancelled.",
+                        cancellationFailure);
+                }
+                // Cancellation must not shorten this wait: only a successful
+                // End call releases the native operation slot.
+                if (completed.Task.IsCompleted)
+                {
+                    await Task.Delay(10).ConfigureAwait(true);
+                }
+                else
+                {
+                    await Task.WhenAny(completed.Task, Task.Delay(10))
+                        .ConfigureAwait(true);
                 }
             }
 
             return new VectorLoadResult(
                 operationId,
-                completedOperationId,
+                completed.Task.IsCompletedSuccessfully
+                    ? completed.Task.Result
+                    : null,
                 succeeded,
                 cancelled,
                 layerId,
@@ -148,7 +170,7 @@ internal static class VectorLoadClient
         }
         finally
         {
-            ComEventsHelper.Remove(control, EventsInterfaceId, 2, onCompleted);
+            ComEventsHelper.Remove(control, EventsInterfaceId, 2, onCompletedEvent);
         }
     }
 }
