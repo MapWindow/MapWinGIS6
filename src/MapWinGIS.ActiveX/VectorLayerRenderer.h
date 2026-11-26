@@ -103,6 +103,11 @@ namespace mwg::activex
             return _openGlRenderer.PublishPreparedFillMeshes();
         }
 
+        [[nodiscard]] bool HasCompletedFillMeshPreparation() const noexcept
+        {
+            return _openGlRenderer.HasCompletedFillMeshPreparation();
+        }
+
     private:
         friend class testing::MapWinGISControlTestAccess;
 

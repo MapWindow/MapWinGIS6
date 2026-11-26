@@ -25,6 +25,7 @@
 #include <vector>
 
 #include <mapbox/earcut.hpp>
+#include <geos_c.h>
 #include <ogrsf_frmts.h>
 
 #include "mapwingis/core/Error.h"
@@ -96,34 +97,73 @@ namespace mwg::rendering
             return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
         }
 
-        [[nodiscard]] bool PointIsInRing(
-            const Point& point,
-            const std::span<const Point> ring) noexcept
+        class ExteriorCoverage final
         {
-            bool inside = false;
-            for (std::size_t index = 0; index < ring.size(); ++index)
+        public:
+            explicit ExteriorCoverage(const std::span<const Point> exterior)
+                : _context(OGRGeometry::createGEOSContext())
             {
-                const Point& start = ring[index];
-                const Point& end = ring[(index + 1U) % ring.size()];
-                if (TwiceSignedArea(start, end, point) == 0.0 &&
-                    point.x >= std::min(start.x, end.x) &&
-                    point.x <= std::max(start.x, end.x) &&
-                    point.y >= std::min(start.y, end.y) &&
-                    point.y <= std::max(start.y, end.y))
+                if (_context == nullptr)
                 {
-                    return true;
+                    throw CoreError("Cannot create a GEOS context for ring validation");
                 }
-                if ((start.y > point.y) != (end.y > point.y) &&
-                    point.x <
-                        (end.x - start.x) * (point.y - start.y) /
-                            (end.y - start.y) +
-                        start.x)
+                auto polygon = std::make_unique<OGRPolygon>();
+                polygon->addRingDirectly(MakeRing(exterior).release());
+                _geometry =
+                    polygon->exportToGEOS(_context, true);
+                if (_geometry == nullptr)
                 {
-                    inside = !inside;
+                    OGRGeometry::freeGEOSContext(_context);
+                    _context = nullptr;
+                    throw CoreError("Cannot convert the exterior ring for validation");
                 }
             }
-            return inside;
-        }
+
+            ExteriorCoverage(const ExteriorCoverage&) = delete;
+            ExteriorCoverage& operator=(const ExteriorCoverage&) = delete;
+
+            ~ExteriorCoverage()
+            {
+                if (_geometry != nullptr)
+                {
+                    GEOSGeom_destroy_r(_context, _geometry);
+                }
+                OGRGeometry::freeGEOSContext(_context);
+            }
+
+            [[nodiscard]] bool Covers(const std::span<const Point> ring)
+            {
+                OGRMultiPoint points;
+                for (const Point& point : ring)
+                {
+                    auto vertex = std::make_unique<OGRPoint>(point.x, point.y);
+                    if (points.addGeometryDirectly(vertex.release()) != OGRERR_NONE)
+                    {
+                        throw CoreError(
+                            "Cannot represent an interior ring for validation");
+                    }
+                }
+                GEOSGeom geometry =
+                    points.exportToGEOS(_context, true);
+                if (geometry == nullptr)
+                {
+                    throw CoreError(
+                        "Cannot convert an interior ring for validation");
+                }
+                const char result =
+                    GEOSCovers_r(_context, _geometry, geometry);
+                GEOSGeom_destroy_r(_context, geometry);
+                if (result == 2)
+                {
+                    throw CoreError("Cannot validate an interior ring");
+                }
+                return result == 1;
+            }
+
+        private:
+            GEOSContextHandle_t _context;
+            GEOSGeom _geometry = nullptr;
+        };
 
         // Exact coordinate equality: triangulation reuses input vertices bit for bit, and
         // std::hash<double> hashes 0.0 and -0.0 alike, consistent with operator==.
@@ -272,6 +312,10 @@ namespace mwg::rendering
             }
 
             ValidateRing(polygon.front(), "exterior");
+            const std::unique_ptr<ExteriorCoverage> exterior =
+                polygon.size() > 1
+                    ? std::make_unique<ExteriorCoverage>(polygon.front())
+                    : nullptr;
             std::vector<std::vector<std::array<double, 2>>> result;
             result.reserve(polygon.size());
             for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
@@ -284,13 +328,7 @@ namespace mwg::rendering
                 if (ringIndex != 0)
                 {
                     ValidateRing(ring, "interior");
-                    if (std::any_of(
-                            ring.begin(),
-                            ring.end(),
-                            [&polygon](const Point& point)
-                            {
-                                return !PointIsInRing(point, polygon.front());
-                            }))
+                    if (!exterior->Covers(ring))
                     {
                         throw InvalidArgument(
                             "Polygon interior ring lies outside the exterior ring");

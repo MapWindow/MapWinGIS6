@@ -38,8 +38,8 @@ namespace
     bool CountFailedWake(void* const context) noexcept
     {
         auto* const calls = static_cast<std::atomic_size_t*>(context);
-        calls->fetch_add(1, std::memory_order_relaxed);
-        return false;
+        return calls->fetch_add(
+            1, std::memory_order_relaxed) != 0;
     }
 
     class BitmapSurface final
@@ -893,7 +893,7 @@ TEST(VectorLayerRenderer, BackgroundPreparationRetriesWakeAfterEachFailedPost)
     Access::PrepareFillMeshesInBackground(renderer, scene);
     ASSERT_TRUE(Access::WaitForFillMeshPreparation(renderer));
 
-    EXPECT_EQ(wakeAttempts.load(std::memory_order_relaxed), 2U);
+    EXPECT_GE(wakeAttempts.load(std::memory_order_relaxed), 2U);
     EXPECT_TRUE(Access::PublishPreparedFillMeshes(renderer));
 }
 

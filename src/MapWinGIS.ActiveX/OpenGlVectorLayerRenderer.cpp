@@ -988,6 +988,20 @@ namespace mwg::activex
             {
                 ::OutputDebugStringW(
                     L"MapWinGIS: unable to post background fill-mesh completion.\n");
+                while (!wakePosted)
+                {
+                    {
+                        std::lock_guard lock(preparation->mutex);
+                        if (preparation->stopping)
+                        {
+                            break;
+                        }
+                    }
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(10));
+                    wakePosted =
+                        job.wakeCallback(job.wakeContext);
+                }
             }
         }
     }
@@ -1003,8 +1017,17 @@ namespace mwg::activex
         try
         {
             std::lock_guard lock(_fillMeshPreparation->mutex);
+            std::vector<FillMeshPreparation::Result> replacement;
+            replacement.reserve(_fillMeshPreparation->activeTokens.size());
             completed.swap(_fillMeshPreparation->completed);
+            _fillMeshPreparation->completed.swap(replacement);
             _fillMeshPreparation->wakePending = false;
+        }
+        catch (const std::bad_alloc&)
+        {
+            OutputDebugStringW(
+                L"MapWinGIS: could not preserve fill-mesh completion capacity.\n");
+            return false;
         }
         catch (const std::exception&)
         {
@@ -1034,6 +1057,17 @@ namespace mwg::activex
             changed = true;
         }
         return changed;
+    }
+
+    bool OpenGlVectorLayerRenderer::HasCompletedFillMeshPreparation()
+        const noexcept
+    {
+        if (_fillMeshPreparation == nullptr)
+        {
+            return false;
+        }
+        std::lock_guard lock(_fillMeshPreparation->mutex);
+        return !_fillMeshPreparation->completed.empty();
     }
 
     std::optional<std::wstring_view> OpenGlVectorLayerRenderer::GetTargetRejectionReason(

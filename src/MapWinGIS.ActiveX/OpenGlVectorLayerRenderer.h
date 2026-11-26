@@ -127,6 +127,7 @@ namespace mwg::activex
         /// Publishes completed worker results from the control's owner thread.
         /// Returns true when a pending state changed.
         [[nodiscard]] bool PublishPreparedFillMeshes() noexcept;
+        [[nodiscard]] bool HasCompletedFillMeshPreparation() const noexcept;
 
         /// Returns why the scene cannot be drawn in the requested mode
         /// without generating geometry, or nullopt when it is drawable.

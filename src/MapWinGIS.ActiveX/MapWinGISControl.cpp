@@ -1720,20 +1720,11 @@ void CMapWinGISControl::DispatchGdalNotifications(void* const control) noexcept
 bool CMapWinGISControl::WakeFillMeshPreparation(
     void* const context) noexcept
 {
-    const HWND window = static_cast<HWND>(context);
-    if (::PostMessageW(
-        window,
+    return ::PostMessageW(
+        static_cast<HWND>(context),
         mwg::activex::kGdalDispatchMessage,
         0,
-        0) != FALSE)
-    {
-        return true;
-    }
-    return ::SetTimer(
-        window,
-        mwg::activex::kGdalDispatchRetryTimerId,
-        mwg::activex::kGdalDispatchRetryIntervalMilliseconds,
-        nullptr) != 0;
+        0) != FALSE;
 }
 
 void CMapWinGISControl::DispatchFillMeshPreparation(
@@ -1751,6 +1742,21 @@ void CMapWinGISControl::DispatchFillMeshPreparation(
         {
             instance->InvalidateLayerCache();
             instance->FireViewChange();
+        }
+        if (instance->_fillMeshPreparationDispatch != nullptr)
+        {
+            if (instance->_renderer.HasCompletedFillMeshPreparation())
+            {
+                if (!instance->_fillMeshPreparationDispatch->StartRetryTimer())
+                {
+                    ::OutputDebugStringW(
+                        L"MapWinGIS: unable to arm the fill-mesh retry timer.\n");
+                }
+            }
+            else
+            {
+                instance->_fillMeshPreparationDispatch->StopRetryTimer();
+            }
         }
     }
     catch (const std::exception& exception)
