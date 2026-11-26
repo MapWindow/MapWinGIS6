@@ -10,12 +10,11 @@
 #include "mapwingis/vector/VectorDataset.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cmath>
-#include <iomanip>
 #include <limits>
 #include <optional>
-#include <sstream>
 #include <string_view>
 #include <utility>
 
@@ -145,7 +144,7 @@ namespace mwg
         constexpr std::size_t kMaxWktExcerptBytes = 200;
 
         bool IsUndefinedGeoPackageSrs(
-            GDALDataset& dataset, const OGRSpatialReference& srs)
+            GDALDataset& dataset, OGRLayer& layer)
         {
             const GDALDriver* driver = dataset.GetDriver();
             if (driver == nullptr ||
@@ -154,10 +153,42 @@ namespace mwg
                 return false;
             }
 
-            const char* const name = srs.GetName();
-            return name != nullptr &&
-                   (std::string_view(name) == "Undefined geographic SRS" ||
-                    std::string_view(name) == "Undefined Cartesian SRS");
+            const char* const layerName = layer.GetName();
+            if (layerName == nullptr)
+            {
+                return false;
+            }
+
+            std::string escapedName(layerName);
+            std::size_t quote = escapedName.find('\'');
+            while (quote != std::string::npos)
+            {
+                escapedName.replace(quote, 1, "''");
+                quote = escapedName.find('\'', quote + 2);
+            }
+            const std::string sql =
+                "SELECT srs_id FROM gpkg_geometry_columns WHERE table_name = '" +
+                escapedName + "'";
+            const auto release = [&dataset](OGRLayer* result)
+            {
+                if (result != nullptr)
+                {
+                    dataset.ReleaseResultSet(result);
+                }
+            };
+            std::unique_ptr<OGRLayer, decltype(release)> result(
+                dataset.ExecuteSQL(sql.c_str(), nullptr, nullptr), release);
+            if (result == nullptr)
+            {
+                return false;
+            }
+            const OGRFeatureUniquePtr feature(result->GetNextFeature());
+            if (feature == nullptr)
+            {
+                return false;
+            }
+            const GIntBig srsId = feature->GetFieldAsInteger64(0);
+            return srsId == -1 || srsId == 0;
         }
 
         std::string WktExcerpt(const std::string_view wkt)
@@ -739,7 +770,8 @@ namespace mwg
     Projection VectorLayer::Projection() const
     {
         const OGRSpatialReference* srs = _impl->_layer->GetSpatialRef();
-        if (srs == nullptr || IsUndefinedGeoPackageSrs(_impl->_dataset, *srs))
+        if (srs == nullptr ||
+            IsUndefinedGeoPackageSrs(_impl->_dataset, *_impl->_layer))
         {
             return {};
         }
@@ -756,15 +788,18 @@ namespace mwg
         CPLFree(wkt);
         const double epoch = srs->GetCoordinateEpoch();
         if (std::isfinite(epoch) && epoch != 0.0 &&
-            result.find("COORDINATEEPOCH[") == std::string::npos &&
-            !result.empty() && result.back() == ']')
+            !result.empty())
         {
-            std::ostringstream epochText;
-            epochText << std::setprecision(
-                             std::numeric_limits<double>::max_digits10)
-                      << epoch;
-            result.insert(result.size() - 1,
-                          ",COORDINATEEPOCH[" + epochText.str() + "]");
+            char buffer[32];
+            const auto formatted = std::to_chars(
+                std::begin(buffer), std::end(buffer), epoch,
+                std::chars_format::general,
+                std::numeric_limits<double>::max_digits10);
+            if (formatted.ec == std::errc{})
+            {
+                result = "COORDINATEMETADATA[" + result + ",EPOCH[" +
+                         std::string(std::begin(buffer), formatted.ptr) + "]]";
+            }
         }
         const std::optional<mwg::Projection> projection =
             mwg::Projection::TryFromWkt(result);

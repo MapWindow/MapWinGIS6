@@ -114,6 +114,45 @@ TEST(ProjectionTest, DoesNotEquateDifferentCustomDefinitionsWithSharedMetadata)
     EXPECT_FALSE(second.IsSame(first));
 }
 
+TEST(ProjectionTest, DoesNotIgnoreGeographicDimensionalityDuringNormalization)
+{
+    const auto customGeographic = [](const int code)
+    {
+        std::string wkt = Projection::FromEpsg(code).ExportToWkt();
+        const std::string rootAuthority =
+            ",ID[\"EPSG\"," + std::to_string(code) + "]";
+        const std::size_t authority = wkt.rfind(rootAuthority);
+        EXPECT_NE(authority, std::string::npos);
+        wkt.erase(authority, rootAuthority.size());
+        const std::size_t semiMajor = wkt.find("6378137");
+        EXPECT_NE(semiMajor, std::string::npos);
+        wkt.replace(semiMajor, 7, "6380000");
+        wkt.insert(wkt.size() - 1,
+                   ",ID[\"PRIVATE\",\"" + std::to_string(code) + "\"]");
+        return Projection::FromWkt(wkt);
+    };
+
+    const Projection twoDimensions = customGeographic(4326);
+    const Projection threeDimensions = customGeographic(4979);
+
+    EXPECT_FALSE(twoDimensions.Epsg().has_value());
+    EXPECT_FALSE(threeDimensions.Epsg().has_value());
+    EXPECT_FALSE(twoDimensions.IsSame(threeDimensions));
+    EXPECT_FALSE(threeDimensions.IsSame(twoDimensions));
+}
+
+TEST(ProjectionTest, TreatsCoordinateEpochMarkerInsideQuotedNameAsNameText)
+{
+    constexpr std::string_view wkt =
+        R"(GEOGCS["Survey COORDINATEEPOCH[2020.5]",DATUM["Survey datum",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]])";
+
+    const Projection projection = Projection::FromWkt(wkt);
+
+    EXPECT_EQ(projection.Name(), "Survey COORDINATEEPOCH[2020.5]");
+    EXPECT_NE(projection.ExportToWkt().find("Survey COORDINATEEPOCH[2020.5]"),
+              std::string::npos);
+}
+
 TEST(ProjectionTest, ExportsFormatsThatParseBack)
 {
     const Projection projection = Projection::FromEpsg(28992);

@@ -10,12 +10,11 @@
 #include "mapwingis/projection/Projection.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
-#include <iomanip>
 #include <limits>
-#include <sstream>
 #include <utility>
 
 #include <cpl_conv.h>
@@ -51,89 +50,173 @@ namespace mwg
             return message;
         }
 
-        std::optional<double> CoordinateEpoch(const std::string_view wkt)
+        bool StartsWithIgnoreCase(
+            const std::string_view text, const std::size_t offset,
+            const std::string_view token)
         {
-            constexpr std::string_view marker = "COORDINATEEPOCH[";
-            const auto position = std::search(
-                wkt.begin(), wkt.end(), marker.begin(), marker.end(),
-                [](const unsigned char left, const unsigned char right)
-                {
-                    return std::toupper(left) == std::toupper(right);
-                });
-            if (position == wkt.end())
-            {
-                return std::nullopt;
-            }
-
-            const std::size_t offset =
-                static_cast<std::size_t>(position - wkt.begin()) + marker.size();
-            if (offset >= wkt.size())
-            {
-                return std::nullopt;
-            }
-
-            const std::string value(wkt.substr(offset));
-            char* end = nullptr;
-            const double epoch = std::strtod(value.c_str(), &end);
-            if (end == value.c_str() || *end != ']' || !std::isfinite(epoch))
-            {
-                return std::nullopt;
-            }
-            return epoch;
+            return offset <= text.size() &&
+                   token.size() <= text.size() - offset &&
+                   std::equal(
+                       token.begin(), token.end(), text.begin() + offset,
+                       [](const unsigned char expected, const unsigned char actual)
+                       {
+                           return std::toupper(expected) == std::toupper(actual);
+                       });
         }
 
-        std::string AddCoordinateEpoch(
+        std::size_t SkipWhitespace(
+            const std::string_view text, std::size_t offset)
+        {
+            while (offset < text.size() &&
+                   std::isspace(static_cast<unsigned char>(text[offset])) != 0)
+            {
+                ++offset;
+            }
+            return offset;
+        }
+
+        std::string Trimmed(const std::string_view text)
+        {
+            const std::size_t begin = SkipWhitespace(text, 0);
+            std::size_t end = text.size();
+            while (end > begin &&
+                   std::isspace(static_cast<unsigned char>(text[end - 1])) != 0)
+            {
+                --end;
+            }
+            return std::string(text.substr(begin, end - begin));
+        }
+
+        struct CoordinateMetadata
+        {
+            std::string crs;
+            double epoch;
+        };
+
+        std::optional<CoordinateMetadata> ParseCoordinateMetadata(
+            const std::string_view wkt)
+        {
+            constexpr std::string_view metadata = "COORDINATEMETADATA[";
+            constexpr std::string_view epochNode = "EPOCH[";
+            const std::size_t outerStart = SkipWhitespace(wkt, 0);
+            if (!StartsWithIgnoreCase(wkt, outerStart, metadata))
+            {
+                return std::nullopt;
+            }
+
+            const std::size_t innerStart = outerStart + metadata.size();
+            std::size_t depth = 1;
+            bool inString = false;
+            std::size_t separator = std::string_view::npos;
+            std::size_t epochStart = std::string_view::npos;
+            for (std::size_t index = innerStart; index < wkt.size(); ++index)
+            {
+                const char character = wkt[index];
+                if (inString)
+                {
+                    if (character != '"')
+                    {
+                        continue;
+                    }
+                    if (index + 1 < wkt.size() && wkt[index + 1] == '"')
+                    {
+                        ++index;
+                        continue;
+                    }
+                    inString = false;
+                    continue;
+                }
+
+                if (character == '"')
+                {
+                    inString = true;
+                }
+                else if (character == '[')
+                {
+                    ++depth;
+                }
+                else if (character == ']')
+                {
+                    if (--depth == 0)
+                    {
+                        return std::nullopt;
+                    }
+                }
+                else if (character == ',' && depth == 1)
+                {
+                    const std::size_t candidate = SkipWhitespace(wkt, index + 1);
+                    if (StartsWithIgnoreCase(wkt, candidate, epochNode))
+                    {
+                        separator = index;
+                        epochStart = candidate + epochNode.size();
+                        break;
+                    }
+                }
+            }
+            if (separator == std::string_view::npos)
+                return std::nullopt;
+
+            const std::size_t epochEnd = wkt.find(']', epochStart);
+            if (epochEnd == std::string_view::npos)
+            {
+                return std::nullopt;
+            }
+            const std::string_view numeric =
+                wkt.substr(epochStart, epochEnd - epochStart);
+            double epoch = 0.0;
+            const auto parsed = std::from_chars(
+                numeric.data(), numeric.data() + numeric.size(), epoch,
+                std::chars_format::general);
+            if (parsed.ec != std::errc{} ||
+                parsed.ptr != numeric.data() + numeric.size() ||
+                !std::isfinite(epoch))
+            {
+                return std::nullopt;
+            }
+
+            const std::size_t outerEnd =
+                SkipWhitespace(wkt, epochEnd + 1);
+            if (outerEnd >= wkt.size() || wkt[outerEnd] != ']' ||
+                SkipWhitespace(wkt, outerEnd + 1) != wkt.size())
+            {
+                return std::nullopt;
+            }
+            return CoordinateMetadata{
+                Trimmed(wkt.substr(innerStart, separator - innerStart)), epoch};
+        }
+
+        std::string AddCoordinateMetadata(
             std::string wkt, const OGRSpatialReference& reference)
         {
             const double epoch = reference.GetCoordinateEpoch();
-            if (!std::isfinite(epoch) || epoch == 0.0 ||
-                CoordinateEpoch(wkt).has_value() || wkt.empty() ||
-                wkt.back() != ']')
+            if (!std::isfinite(epoch) || epoch == 0.0 || wkt.empty())
             {
                 return wkt;
             }
 
-            std::ostringstream epochText;
-            epochText << std::setprecision(
-                             std::numeric_limits<double>::max_digits10)
-                      << epoch;
-            wkt.insert(wkt.size() - 1,
-                       ",COORDINATEEPOCH[" + epochText.str() + "]");
-            return wkt;
-        }
-
-        std::string RemoveCoordinateEpoch(std::string wkt)
-        {
-            constexpr std::string_view marker = "COORDINATEEPOCH[";
-            const auto position = std::search(
-                wkt.begin(), wkt.end(), marker.begin(), marker.end(),
-                [](const unsigned char left, const unsigned char right)
-                {
-                    return std::toupper(left) == std::toupper(right);
-                });
-            if (position == wkt.end())
+            char buffer[32];
+            const auto formatted = std::to_chars(
+                std::begin(buffer), std::end(buffer), epoch,
+                std::chars_format::general,
+                std::numeric_limits<double>::max_digits10);
+            if (formatted.ec != std::errc{})
             {
                 return wkt;
             }
-
-            std::size_t begin = static_cast<std::size_t>(position - wkt.begin());
-            if (begin > 0 && wkt[begin - 1] == ',')
-            {
-                --begin;
-            }
-            const std::size_t end = wkt.find(']', begin);
-            if (end == std::string::npos)
-            {
-                return wkt;
-            }
-            wkt.erase(begin, end - begin + 1);
-            return wkt;
+            return "COORDINATEMETADATA[" + wkt + ",EPOCH[" +
+                   std::string(std::begin(buffer), formatted.ptr) + "]]";
         }
 
         bool IsSameViaProj4(
             const OGRSpatialReference& first, const OGRSpatialReference& second)
         {
-            if (first.IsDynamic() || second.IsDynamic())
+            if (first.IsDynamic() || second.IsDynamic() ||
+                first.IsGeographic() != second.IsGeographic() ||
+                first.IsProjected() != second.IsProjected() ||
+                first.IsCompound() != second.IsCompound() ||
+                first.IsGeocentric() != second.IsGeocentric() ||
+                first.IsVertical() != second.IsVertical() ||
+                first.GetAxesCount() != second.GetAxesCount())
             {
                 return false;
             }
@@ -361,8 +444,10 @@ namespace mwg
             return std::nullopt;
         }
 
-        const std::optional<double> epoch = CoordinateEpoch(wkt);
-        const std::string input = RemoveCoordinateEpoch(std::string(wkt));
+        const std::optional<CoordinateMetadata> metadata =
+            ParseCoordinateMetadata(wkt);
+        const std::string input =
+            metadata.has_value() ? metadata->crs : std::string(wkt);
         const char* text = input.c_str();
         const GdalEnvironment::QuietScope quiet;
         OGRSpatialReference reference;
@@ -372,9 +457,9 @@ namespace mwg
         {
             return std::nullopt;
         }
-        if (epoch.has_value())
+        if (metadata.has_value())
         {
-            reference.SetCoordinateEpoch(*epoch);
+            reference.SetCoordinateEpoch(metadata->epoch);
         }
         reference.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
         return Projection(std::make_shared<Impl>(MakeSpatialReference(reference)));
@@ -446,7 +531,7 @@ namespace mwg
             CPLFree(text);
             throw CoreError(FailureMessage("Cannot export coordinate reference system to WKT"));
         }
-        return AddCoordinateEpoch(ExportedString(text), *_impl->_reference);
+        return AddCoordinateMetadata(ExportedString(text), *_impl->_reference);
     }
 
     std::string Projection::ExportToProj4() const

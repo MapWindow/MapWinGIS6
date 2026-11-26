@@ -262,8 +262,38 @@ TEST(VectorDataset, PreservesGeoPackageCoordinateEpoch)
     raw.reset();
 
     const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
-    EXPECT_NE(dataset->Layer(0).Projection().ExportToWkt().find("2020.5"),
+    const std::string exported = dataset->Layer(0).Projection().ExportToWkt();
+    ASSERT_TRUE(exported.starts_with("COORDINATEMETADATA["));
+    EXPECT_NE(exported.find("EPOCH[2020.5]"), std::string::npos);
+
+    OGRSpatialReference independent;
+    const char* text = exported.c_str();
+    ASSERT_EQ(independent.importFromWkt(&text), OGRERR_NONE);
+    EXPECT_DOUBLE_EQ(independent.GetCoordinateEpoch(), 2020.5);
+    EXPECT_NE(Projection::FromWkt(exported).ExportToWkt().find("EPOCH[2020.5]"),
               std::string::npos);
+}
+
+TEST(VectorDataset, UsesGeoPackageSrsIdNotAReservedNameToDetectUndefinedCrs)
+{
+    GdalEnvironment::Initialize();
+    const TempDirectory dir;
+    const std::filesystem::path path = dir.Path() / "named.gpkg";
+    GDALDriver* const driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+    ASSERT_NE(driver, nullptr);
+    GDALDatasetUniquePtr creator(
+        driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+    ASSERT_NE(creator, nullptr);
+
+    OGRSpatialReference named;
+    ASSERT_EQ(named.importFromEPSG(28992), OGRERR_NONE);
+    ASSERT_EQ(named.SetProjCS("Undefined Cartesian SRS"), OGRERR_NONE);
+    ASSERT_EQ(named.SetAuthority("PROJCS", "PRIVATE", 10001), OGRERR_NONE);
+    ASSERT_NE(creator->CreateLayer("named", &named, wkbPolygon), nullptr);
+    creator.reset();
+
+    const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+    EXPECT_FALSE(dataset->Layer(0).Projection().IsEmpty());
 }
 
 TEST(VectorDataset, ReportsMissingFiles)
