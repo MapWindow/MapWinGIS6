@@ -2084,20 +2084,17 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
     const bool alternateSize =
         width != clientViewport.Width() || height != clientViewport.Height();
 
-    // Only a client-sized draw presents the pending layer frame; prints and
-    // scaled draws leave deferred mesh publication waiting.
-    struct LayerFramePresentation final
+    // Only a successful, drawable, client-sized draw presents the pending
+    // layer frame; failed, prints, and scaled draws leave deferred mesh
+    // publication waiting.
+    const auto presented = [&](const HRESULT result) -> HRESULT
     {
-        CMapWinGISControl* control;
-
-        ~LayerFramePresentation()
+        if (SUCCEEDED(result) && drawable && !alternateSize)
         {
-            if (control != nullptr)
-            {
-                control->OnLayerFramePresented();
-            }
+            OnLayerFramePresented();
         }
-    } layerFramePresentation{alternateSize ? nullptr : this};
+        return result;
+    };
 
     // Printing, metafiles, and scaled draws must not resize or retain memory
     // in the interactive screen buffers. Their frame and OpenGL staging
@@ -2208,7 +2205,7 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
                 0,
                 SRCCOPY) != 0)
         {
-            return result;
+            return presented(result);
         }
 
         // A blit between different devices (printer or metafile targets)
@@ -2218,7 +2215,7 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
         useLayerCache = false;
     }
 
-    return renderFrame();
+    return presented(renderFrame());
 }
 
 LRESULT CMapWinGISControl::OnEraseBkgnd(
