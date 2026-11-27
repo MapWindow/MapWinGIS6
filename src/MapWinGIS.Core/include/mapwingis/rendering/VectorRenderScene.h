@@ -27,7 +27,8 @@ namespace mwg
 
     namespace rendering
     {
-        /// A two-dimensional coordinate in the source layer's coordinate system.
+        /// A two-dimensional scene coordinate. Standalone vector scenes use
+        /// source coordinates; map layer scenes may use a display projection.
         struct Point
         {
             double x;
@@ -116,7 +117,7 @@ namespace mwg
 
         /// A backend-neutral triangulated 2D fill mesh for one polygon.
         ///
-        /// Vertices stay in the source layer's coordinate system. Indices
+        /// Vertices use the containing scene's coordinate system. Indices
         /// occur in groups of three that each describe one triangle; every
         /// index references a valid vertex. Triangles produced by
         /// TriangulatePolygon share vertices through the index buffer and
@@ -143,7 +144,7 @@ namespace mwg
             std::optional<Extent> spatialFilter;
         };
 
-        /// Owned polygon geometry and its source-coordinate bounds.
+        /// Owned polygon geometry and the bounds of its coordinate system.
         struct MWG_CORE_API VectorRenderScene
         {
             Extent extent;

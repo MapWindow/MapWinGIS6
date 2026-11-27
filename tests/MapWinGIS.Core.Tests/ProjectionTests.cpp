@@ -206,6 +206,29 @@ TEST(ProjectionTest, ImportsProj4AndTransformsInTraditionalGisOrder)
     EXPECT_NEAR(y, 6446275.84101716, 0.001);
 }
 
+TEST(ProjectionTest, TransformsBoundsWithDensifiedEdges)
+{
+    const ProjectionTransform transform =
+        Projection::FromEpsg(4326).TransformTo(Projection::FromEpsg(3857));
+    const Extent source{10.0, 50.0, 11.0, 51.0};
+    double xMin = source.xMin;
+    double yMin = source.yMin;
+    double xMax = source.xMax;
+    double yMax = source.yMax;
+    ASSERT_TRUE(transform(xMin, yMin));
+    ASSERT_TRUE(transform(xMax, yMax));
+    Extent transformed;
+
+    ASSERT_TRUE(transform.TransformBounds(source, transformed));
+
+    EXPECT_TRUE(transformed.IsValid());
+    EXPECT_NEAR(transformed.xMin, xMin, 1e-6);
+    EXPECT_NEAR(transformed.yMin, yMin, 1e-6);
+    EXPECT_NEAR(transformed.xMax, xMax, 1e-6);
+    EXPECT_NEAR(transformed.yMax, yMax, 1e-6);
+    EXPECT_FALSE(transform.TransformBounds(Extent{}, transformed));
+}
+
 TEST(ProjectionTest, ReportsLoggerExceptionFromTheFailingTransform)
 {
     const auto transform = Projection::FromEpsg(4326).TransformTo(Projection::FromEpsg(3857));

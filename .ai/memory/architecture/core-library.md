@@ -63,6 +63,14 @@ construction must not replace a layer's cached full extent or feature count
 with the selected subset. See `VectorRenderSceneOptions`,
 `VectorLayerAccess::ForEachGeometry`, and `MapView.cpp`.
 
+A `MapLayer` can set an independent display projection without modifying its
+dataset. Scene construction inverse-transforms display-space spatial filters
+to source coordinates, then transforms polygon coordinates, prepared meshes,
+and extents into display coordinates. `MapLayer::GetExtent` uses a densified
+bounds transform, and `MapView` invalidates only the changed layer's scene.
+Native layers retain the original no-transform path. See `Map.cpp`,
+`MapRenderScene.cpp`, and `ProjectionTransform::TransformBounds`.
+
 ## References
 
 - [Architecture documentation](../../../docs/ARCHITECTURE.md#module-design)

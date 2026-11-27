@@ -32,6 +32,14 @@ namespace
         EXPECT_DOUBLE_EQ(actual.yMax, expected.yMax);
     }
 
+    void ExpectExtentNear(const Extent& actual, const Extent& expected)
+    {
+        EXPECT_NEAR(actual.xMin, expected.xMin, 1e-10);
+        EXPECT_NEAR(actual.yMin, expected.yMin, 1e-10);
+        EXPECT_NEAR(actual.xMax, expected.xMax, 1e-10);
+        EXPECT_NEAR(actual.yMax, expected.yMax, 1e-10);
+    }
+
     class MapTest : public testing::Test
     {
     protected:
@@ -175,6 +183,59 @@ TEST_F(MapTest, ChangesProjectionOnlyExplicitly)
     EXPECT_FALSE(_map.Projection().has_value());
     EXPECT_THROW(_map.SetProjection(Projection{}), InvalidArgument);
     EXPECT_FALSE(_map.Projection().has_value());
+}
+
+TEST_F(MapTest, TransformsLayerExtentOnlyWhenADisplayProjectionIsSet)
+{
+    const std::shared_ptr<VectorDataset> dataset =
+        VectorDataset::Open(MakeProvincesDataset(
+            _directory.Path(), "projected.gpkg"));
+    const LayerId id = _map.AddLayer(dataset);
+    const Extent sourceExtent = _map.FindLayer(id)->GetExtent();
+    const Projection source = dataset->Layer(0).Projection();
+    const Projection wgs84 = Projection::FromEpsg(4326);
+    Extent expected;
+    ASSERT_TRUE(source.TransformTo(wgs84).TransformBounds(sourceExtent, expected));
+
+    ASSERT_TRUE(_map.SetLayerDisplayProjection(id, wgs84));
+    EXPECT_FALSE(_map.FindLayer(id)->DisplayProjection()->IsEmpty());
+    EXPECT_TRUE(_map.FindLayer(id)->DisplayProjection()->IsSame(wgs84));
+    ExpectExtentNear(_map.FindLayer(id)->GetExtent(), expected);
+    EXPECT_FALSE(_map.SetLayerDisplayProjection(id, wgs84));
+    EXPECT_TRUE(_map.SetLayerDisplayProjection(id, source));
+    EXPECT_FALSE(_map.FindLayer(id)->DisplayProjection().has_value());
+    ExpectExtent(_map.FindLayer(id)->GetExtent(), sourceExtent);
+    EXPECT_FALSE(_map.ClearLayerDisplayProjection(id));
+}
+
+TEST_F(MapTest, RejectsDisplayReprojectionWithoutASourceProjection)
+{
+    const LayerId id = _map.AddLayer(OpenRectangles({{0, 0, 1, 1}}));
+
+    EXPECT_THROW(
+        (void)_map.SetLayerDisplayProjection(id, Projection::FromEpsg(4326)),
+        InvalidArgument);
+    EXPECT_THROW(
+        (void)_map.SetLayerDisplayProjection(id, Projection{}),
+        InvalidArgument);
+    EXPECT_FALSE(_map.SetLayerDisplayProjection(LayerId{42}, Projection::FromEpsg(4326)));
+    EXPECT_FALSE(_map.ClearLayerDisplayProjection(LayerId{42}));
+}
+
+TEST_F(MapTest, DisplayProjectionStateIsIndependentForDuplicateLayers)
+{
+    const std::shared_ptr<VectorDataset> dataset =
+        VectorDataset::Open(MakeProvincesDataset(
+            _directory.Path(), "duplicates.gpkg"));
+    const LayerId native = _map.AddLayer(dataset);
+    const LayerId transformed = _map.AddLayer(dataset);
+
+    ASSERT_TRUE(_map.SetLayerDisplayProjection(
+        transformed, Projection::FromEpsg(4326)));
+    EXPECT_FALSE(_map.FindLayer(native)->DisplayProjection().has_value());
+    ASSERT_TRUE(_map.FindLayer(transformed)->DisplayProjection().has_value());
+    EXPECT_TRUE(_map.ClearLayerDisplayProjection(transformed));
+    EXPECT_FALSE(_map.FindLayer(transformed)->DisplayProjection().has_value());
 }
 
 TEST_F(MapTest, AppendsNewLayersOnTop)

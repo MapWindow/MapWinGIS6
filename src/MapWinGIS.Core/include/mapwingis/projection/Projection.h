@@ -16,6 +16,7 @@
 #include <string_view>
 
 #include "mapwingis/core/Api.h"
+#include "mapwingis/core/Extent.h"
 
 namespace mwg
 {
@@ -45,6 +46,12 @@ namespace mwg
                                      double* y,
                                      double* z = nullptr,
                                      int* perPointSuccess = nullptr) const;
+
+        /// Transforms an axis-aligned extent with densified edges to account
+        /// for curvature. The destination is assigned only after success.
+        [[nodiscard]] bool TransformBounds(const Extent& source,
+                                           Extent& destination,
+                                           int densifyPoints = 21) const;
 
     private:
         friend class Projection;

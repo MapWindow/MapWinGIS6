@@ -27,6 +27,8 @@ cancellation events.
 Core exposes an immutable projection value for EPSG, WKT, and PROJ4 coordinate
 reference systems. Vector layers report that value, and a map adopts and keeps
 the first available layer projection until a host explicitly changes it.
+Individual map layers can also use an on-the-fly display projection. Core
+transforms render scenes and extents without changing their source datasets.
 
 The core also supports a shared map viewport with pan, center zoom, anchored
 zoom, and fitting to the visible map or a named layer. These navigation calls

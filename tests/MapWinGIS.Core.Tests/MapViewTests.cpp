@@ -325,6 +325,77 @@ TEST_F(MapViewTest, MapChangesRebuildTheSceneAndReportARedraw)
     EXPECT_FALSE(_view.SetLayerVisible(second, true));
 }
 
+TEST_F(MapViewTest, ChangingDisplayProjectionInvalidatesOnlyThatLayer)
+{
+    VectorReadTestDriver driver;
+    driver.projectionEpsg = 28992;
+    const std::shared_ptr<VectorDataset> dataset =
+        VectorDataset::Open(VectorReadTestDriver::kPath);
+    const LayerId transformed = _view.AddLayer(dataset);
+    const LayerId native = _view.AddLayer(dataset);
+    const auto& scene = _view.Scene();
+    ASSERT_EQ(scene.layers.size(), 2U);
+    const auto nativeBefore = scene.layers[1].scene;
+    const auto transformedBefore = scene.layers[0].scene;
+
+    ASSERT_TRUE(_view.SetLayerDisplayProjection(
+        transformed, Projection::FromEpsg(4326)));
+    const auto& reprojected = _view.Scene();
+    ASSERT_EQ(reprojected.layers.size(), 2U);
+    EXPECT_NE(reprojected.layers[0].scene, transformedBefore);
+    EXPECT_EQ(reprojected.layers[1].scene, nativeBefore);
+    EXPECT_FALSE(_view.SetLayerDisplayProjection(
+        transformed, Projection::FromEpsg(4326)));
+    const std::shared_ptr<const rendering::VectorRenderScene> reprojectedScene =
+        reprojected.layers[0].scene;
+
+    ASSERT_TRUE(_view.ClearLayerDisplayProjection(transformed));
+    const auto& restored = _view.Scene();
+    ASSERT_EQ(restored.layers.size(), 2U);
+    EXPECT_NE(restored.layers[0].scene, reprojectedScene);
+    EXPECT_EQ(restored.layers[1].scene, nativeBefore);
+    EXPECT_DOUBLE_EQ(restored.layers[0].scene->polygons.front().front()[0].x, 0.0);
+    EXPECT_DOUBLE_EQ(restored.layers[0].scene->polygons.front().front()[0].y, 0.0);
+    EXPECT_FALSE(_view.ClearLayerDisplayProjection(transformed));
+}
+
+TEST_F(MapViewTest, FitAndMixedSceneUseTransformedDisplayCoordinates)
+{
+    ASSERT_TRUE(_view.Resize(400, 200));
+    const std::shared_ptr<VectorDataset> projected = VectorDataset::Open(
+        MakeProvincesDataset(_directory.Path(), "mixed-projected.gpkg"));
+    const std::shared_ptr<VectorDataset> wgs84 = VectorDataset::Open(
+        MakeRfc7946GeoJson(_directory.Path(), "mixed-wgs84.geojson"));
+    const LayerId transformed = _view.AddLayer(projected);
+    const LayerId native = _view.AddLayer(wgs84);
+    ASSERT_TRUE(_view.SetLayerDisplayProjection(
+        transformed, Projection::FromEpsg(4326)));
+    ASSERT_TRUE(_view.FitToMap(0.0));
+
+    const Extent transformedExtent =
+        _view.GetMap().FindLayer(transformed)->GetExtent();
+    const Extent nativeExtent =
+        _view.GetMap().FindLayer(native)->GetExtent();
+    EXPECT_TRUE(transformedExtent.IsValid());
+    EXPECT_TRUE(nativeExtent.IsValid());
+    EXPECT_LT(std::abs(transformedExtent.CenterX()), 180.0);
+    EXPECT_LT(std::abs(transformedExtent.CenterY()), 90.0);
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), transformedExtent));
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), nativeExtent));
+
+    const auto& scene = _view.Scene();
+    ASSERT_EQ(scene.layers.size(), 2U);
+    for (const rendering::LayerRenderScene& layer : scene.layers)
+    {
+        ASSERT_TRUE(layer.scene->extent.IsValid());
+        EXPECT_LT(std::abs(layer.scene->extent.CenterX()), 180.0);
+        EXPECT_LT(std::abs(layer.scene->extent.CenterY()), 90.0);
+    }
+
+    ASSERT_TRUE(_view.ZoomToLayer(transformed, 0.0));
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), transformedExtent));
+}
+
 TEST_F(MapViewTest, SceneIsReusedWhileViewportCoverageRemainsValid)
 {
     ASSERT_TRUE(_view.Resize(300, 200));

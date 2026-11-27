@@ -9,6 +9,7 @@
  */
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -263,6 +264,44 @@ TEST_F(MapRenderSceneTest, DuplicateLayersAreSeparateSceneLayers)
     ASSERT_EQ(scene.layers.size(), 2U);
     EXPECT_EQ(scene.layers[0].layerId, first);
     EXPECT_EQ(scene.layers[1].layerId, second);
+}
+
+TEST_F(MapRenderSceneTest, ReprojectsSceneCoordinatesAndPreparedMeshes)
+{
+    const std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(
+        MakeProvincesDataset(_directory.Path(), "projected.gpkg"));
+    const LayerId id = _map.AddLayer(dataset);
+    const Projection source = dataset->Layer(0).Projection();
+    const Projection display = Projection::FromEpsg(4326);
+    ASSERT_TRUE(_map.SetLayerDisplayProjection(id, display));
+
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(
+        _map,
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
+
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_EQ(scene.skippedLayers.size(), 0U);
+    const rendering::VectorRenderScene& projected = *scene.layers.front().scene;
+    ASSERT_FALSE(projected.polygons.empty());
+    ASSERT_EQ(projected.fillMeshes.size(), projected.polygons.size());
+    const ProjectionTransform transform = source.TransformTo(display);
+    double x = Provinces::kMinX;
+    double y = Provinces::kMinY;
+    ASSERT_TRUE(transform(x, y));
+    EXPECT_NEAR(projected.polygons.front().front()[0].x, x, 1e-10);
+    EXPECT_NEAR(projected.polygons.front().front()[0].y, y, 1e-10);
+    ASSERT_TRUE(projected.fillMeshes.front().has_value());
+    ASSERT_FALSE(projected.fillMeshes.front()->vertices.empty());
+    for (const rendering::Point& point :
+         projected.fillMeshes.front()->vertices)
+    {
+        EXPECT_TRUE(projected.extent.Contains(point.x, point.y));
+        EXPECT_LT(std::abs(point.x), 180.0);
+        EXPECT_LT(std::abs(point.y), 90.0);
+    }
+    EXPECT_TRUE(projected.extent.Contains(
+        projected.polygons.front().front()[0].x,
+        projected.polygons.front().front()[0].y));
 }
 
 TEST_F(MapRenderSceneTest, IsolatesStandardExceptionsButPropagatesAllocationFailures)

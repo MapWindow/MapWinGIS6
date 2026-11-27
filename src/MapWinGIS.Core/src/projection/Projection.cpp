@@ -367,6 +367,37 @@ namespace mwg
         return succeeded;
     }
 
+    bool ProjectionTransform::TransformBounds(
+        const Extent& source,
+        Extent& destination,
+        const int densifyPoints) const
+    {
+        if (!source.IsValid() || densifyPoints < 0 || _impl == nullptr)
+        {
+            return false;
+        }
+
+        Extent transformed;
+        const GdalErrorScope diagnostics;
+        const bool succeeded = _impl->_transformation->TransformBounds(
+            source.xMin,
+            source.yMin,
+            source.xMax,
+            source.yMax,
+            &transformed.xMin,
+            &transformed.yMin,
+            &transformed.xMax,
+            &transformed.yMax,
+            densifyPoints) == TRUE;
+        diagnostics.RethrowCaptureException();
+        if (!succeeded)
+        {
+            return false;
+        }
+        destination = transformed;
+        return true;
+    }
+
     Projection::Projection() = default;
     Projection::Projection(std::shared_ptr<Impl> impl) noexcept
         : _impl(std::move(impl))

@@ -18,6 +18,8 @@ namespace mwg::rendering::detail
     using LayerScene = std::variant<LayerRenderScene, SkippedLayer>;
 
     /// Builds drawable geometry or a skip diagnostic for one map layer.
+    /// Explicit display projections transform coordinates and extents before
+    /// the immutable scene is returned.
     /// Allocation failures and non-standard exceptions propagate.
     [[nodiscard]] LayerScene BuildLayerRenderScene(
         const MapLayer& layer,

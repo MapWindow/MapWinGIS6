@@ -42,6 +42,11 @@ objects created with `Projection::TransformTo`.
 the string property had not established a MapWinGIS 5 automation contract.
 The map adopts its first available layer projection and retains it when layers
 are removed or cleared.
+Each `MapLayer` can independently select a display projection. Scene and extent
+reprojection happen on the fly in Core and never rewrite source data. Clearing
+the display projection restores the source coordinates. The current rendering
+vertical slice is read-only, so editing behavior for reprojected layers is not
+provided.
 
 ## What "port" means here
 
@@ -131,8 +136,9 @@ control does not claim binary or API compatibility with existing v5 clients.
 Each control load selects the first dataset layer. Core prepares an ordered
 scene for all visible map layers, including Polygon, MultiPolygon,
 CurvePolygon, and MultiSurface geometry. It
-does not expose the broad v5 map, layer, shape, event, or editing API. It draws
-in source coordinates without reprojection. OpenGL fills the triangulated
+does not expose the broad v5 map, layer, shape, event, or editing API. Its
+current automation operations do not select a display projection, so committed
+control loads draw in source coordinates. OpenGL fills the triangulated
 meshes Core prepares for convex, concave, holed, and multipart polygons; GDI
 draws the original rings as the CPU fallback for scenes and systems OpenGL
 cannot handle.

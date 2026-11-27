@@ -27,7 +27,7 @@ namespace mwg::rendering
     {
         /// Identity of the map layer the geometry was copied from.
         LayerId layerId;
-        /// Immutable polygon geometry in map coordinates; never null or empty
+        /// Immutable polygon geometry in display coordinates; never null or empty
         /// in a MapRenderScene. Shared, not copied, between a MapView's layer
         /// cache and the scenes it assembles; replace the pointer rather than
         /// modifying the geometry.
@@ -72,8 +72,9 @@ namespace mwg::rendering
     /// Each layer is converted on its own, so a layer that cannot be
     /// rendered is listed in skippedLayers and does not prevent the other
     /// layers from being drawn. Hidden layers and layers without polygon
-    /// geometry are listed in skippedLayers too. Coordinates stay in the
-    /// layers' source coordinate system; the scene does not reproject.
+    /// geometry are listed in skippedLayers too. Coordinates use each layer's
+    /// explicit display projection, or its source CRS by default. Source data
+    /// is never changed.
     ///
     /// The scene is a snapshot: later changes to the map or its sources are
     /// not reflected, so create a new scene after the map changes. With no
