@@ -53,6 +53,58 @@ namespace
                 MakeRectanglesDataset(_directory.Path(), fileName, rectangles));
         }
 
+        std::shared_ptr<VectorDataset> OpenProjectedRectangles(
+            const std::vector<Extent>& rectangles,
+            const int epsg)
+        {
+            GdalEnvironment::Initialize();
+            const std::filesystem::path path =
+                _directory.Path() /
+                ("projected-" + std::to_string(_datasetCount++) + ".gpkg");
+            GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+            if (driver == nullptr)
+            {
+                throw std::runtime_error("GPKG driver is not available");
+            }
+            GDALDatasetUniquePtr output(driver->Create(
+                ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+            if (output == nullptr)
+            {
+                throw std::runtime_error("Cannot create the projected rectangle dataset");
+            }
+            OGRSpatialReference reference;
+            if (reference.importFromEPSG(epsg) != OGRERR_NONE)
+            {
+                throw std::runtime_error("Cannot create the rectangle projection");
+            }
+            OGRLayer* layer =
+                output->CreateLayer("rectangles", &reference, wkbPolygon, nullptr);
+            if (layer == nullptr)
+            {
+                throw std::runtime_error("Cannot create the rectangle layer");
+            }
+            for (const Extent& extent : rectangles)
+            {
+                OGRLinearRing ring;
+                ring.addPoint(extent.xMin, extent.yMin);
+                ring.addPoint(extent.xMax, extent.yMin);
+                ring.addPoint(extent.xMax, extent.yMax);
+                ring.addPoint(extent.xMin, extent.yMax);
+                ring.closeRings();
+                OGRPolygon polygon;
+                polygon.addRing(&ring);
+                OGRFeatureUniquePtr feature(
+                    OGRFeature::CreateFeature(layer->GetLayerDefn()));
+                if (feature->SetGeometry(&polygon) != OGRERR_NONE ||
+                    layer->CreateFeature(feature.get()) != OGRERR_NONE)
+                {
+                    throw std::runtime_error("Cannot write a projected rectangle");
+                }
+            }
+            output.reset();
+            return VectorDataset::Open(path);
+        }
+
         /// Opens a single-feature multipart layer whose first component is a
         /// concave L-shaped polygon and whose second is a rectangle with a
         /// square hole, so scene-lifetime checks cover triangulated complex
@@ -394,6 +446,41 @@ TEST_F(MapViewTest, FitAndMixedSceneUseTransformedDisplayCoordinates)
 
     ASSERT_TRUE(_view.ZoomToLayer(transformed, 0.0));
     EXPECT_TRUE(IsVisible(_view.GetViewport(), transformedExtent));
+}
+
+TEST_F(MapViewTest, RefiltersReprojectedAntimeridianFeaturesAsTheViewportMoves)
+{
+    ASSERT_TRUE(_view.Resize(400, 200));
+    const std::shared_ptr<VectorDataset> dataset = OpenProjectedRectangles(
+        std::vector<Extent>{
+            {-100000.0, -100000.0, 100000.0, 100000.0},
+            {18924313.0, -1000000.0, 21150790.0, 1000000.0}},
+        3857);
+    const LayerId layer = _view.AddLayer(dataset);
+    ASSERT_TRUE(_view.SetLayerDisplayProjection(layer, Projection::FromEpsg(4326)));
+    ASSERT_TRUE(_view.FitToMap(0.0));
+    EXPECT_TRUE(_view.GetMap().FindLayer(layer)->GetExtent().IsValid());
+
+    for (int zoom = 0; zoom < 4; ++zoom)
+    {
+        ASSERT_TRUE(_view.ZoomIn(4.0));
+    }
+    const auto& near = _view.Scene();
+    ASSERT_EQ(near.layers.size(), 1U);
+    ASSERT_TRUE(near.skippedLayers.empty());
+    EXPECT_EQ(near.layers.front().scene->sourceFeatureCount, 1);
+    ASSERT_EQ(near.layers.front().scene->polygons.size(), 1U);
+    EXPECT_LT(std::abs(near.layers.front().scene->extent.CenterX()), 5.0);
+
+    ASSERT_TRUE(_view.Pan(175.0, 0.0));
+    const auto& distant = _view.Scene();
+    ASSERT_EQ(distant.layers.size(), 1U);
+    ASSERT_TRUE(distant.skippedLayers.empty());
+    EXPECT_EQ(distant.layers.front().scene->sourceFeatureCount, 1);
+    ASSERT_EQ(distant.layers.front().scene->polygons.size(), 1U);
+    EXPECT_GT(std::abs(
+                  distant.layers.front().scene->polygons.front().front()[0].x),
+              160.0);
 }
 
 TEST_F(MapViewTest, SceneIsReusedWhileViewportCoverageRemainsValid)

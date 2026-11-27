@@ -255,12 +255,14 @@ namespace mwg
     class ProjectionTransform::Impl
     {
     public:
-        explicit Impl(TransformationPtr transformation)
-            : _transformation(std::move(transformation))
+        Impl(TransformationPtr transformation, const bool targetIsGeographic)
+            : _transformation(std::move(transformation)),
+              _targetIsGeographic(targetIsGeographic)
         {
         }
 
         TransformationPtr _transformation;
+        bool _targetIsGeographic;
     };
 
     class Projection::Impl
@@ -393,6 +395,11 @@ namespace mwg
         if (!succeeded)
         {
             return false;
+        }
+        if (_impl->_targetIsGeographic && transformed.xMin > transformed.xMax)
+        {
+            transformed.xMin = -180.0;
+            transformed.xMax = 180.0;
         }
         destination = transformed;
         return true;
@@ -626,6 +633,7 @@ namespace mwg
                 "Cannot create coordinate reference system transformation"));
         }
         return ProjectionTransform(
-            std::make_shared<ProjectionTransform::Impl>(std::move(transformation)));
+            std::make_shared<ProjectionTransform::Impl>(
+                std::move(transformation), target.IsGeographic()));
     }
 }

@@ -6,6 +6,7 @@
  */
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
@@ -209,24 +210,40 @@ TEST(ProjectionTest, ImportsProj4AndTransformsInTraditionalGisOrder)
 TEST(ProjectionTest, TransformsBoundsWithDensifiedEdges)
 {
     const ProjectionTransform transform =
-        Projection::FromEpsg(4326).TransformTo(Projection::FromEpsg(3857));
-    const Extent source{10.0, 50.0, 11.0, 51.0};
-    double xMin = source.xMin;
-    double yMin = source.yMin;
-    double xMax = source.xMax;
-    double yMax = source.yMax;
-    ASSERT_TRUE(transform(xMin, yMin));
-    ASSERT_TRUE(transform(xMax, yMax));
+        Projection::FromEpsg(4326).TransformTo(Projection::FromEpsg(3413));
+    const Extent source{-80.0, 60.0, 80.0, 80.0};
+    double cornerX[] = {source.xMin, source.xMax, source.xMin, source.xMax};
+    double cornerY[] = {source.yMin, source.yMin, source.yMax, source.yMax};
+    ASSERT_TRUE(transform.Transform(4, cornerX, cornerY));
+    const double cornerYMin = *std::min_element(std::begin(cornerY), std::end(cornerY));
+    const double cornerYMax = *std::max_element(std::begin(cornerY), std::end(cornerY));
+    double curvedEdgeX = 0.0;
+    double curvedEdgeY = source.yMin;
+    ASSERT_TRUE(transform(curvedEdgeX, curvedEdgeY));
     Extent transformed;
 
     ASSERT_TRUE(transform.TransformBounds(source, transformed));
 
     EXPECT_TRUE(transformed.IsValid());
-    EXPECT_NEAR(transformed.xMin, xMin, 1e-6);
-    EXPECT_NEAR(transformed.yMin, yMin, 1e-6);
-    EXPECT_NEAR(transformed.xMax, xMax, 1e-6);
-    EXPECT_NEAR(transformed.yMax, yMax, 1e-6);
+    EXPECT_TRUE(transformed.Contains(curvedEdgeX, curvedEdgeY));
+    EXPECT_LT(transformed.yMin, cornerYMin);
+    EXPECT_GE(transformed.yMax, cornerYMax);
     EXPECT_FALSE(transform.TransformBounds(Extent{}, transformed));
+}
+
+TEST(ProjectionTest, NormalizesAntimeridianCrossingBoundsInGeographicOutput)
+{
+    const ProjectionTransform transform =
+        Projection::FromEpsg(3857).TransformTo(Projection::FromEpsg(4326));
+    const Extent source{
+        18924313.0, -1000000.0, 21150790.0, 1000000.0};
+    Extent transformed;
+
+    ASSERT_TRUE(transform.TransformBounds(source, transformed));
+
+    EXPECT_TRUE(transformed.IsValid());
+    EXPECT_DOUBLE_EQ(transformed.xMin, -180.0);
+    EXPECT_DOUBLE_EQ(transformed.xMax, 180.0);
 }
 
 TEST(ProjectionTest, ReportsLoggerExceptionFromTheFailingTransform)

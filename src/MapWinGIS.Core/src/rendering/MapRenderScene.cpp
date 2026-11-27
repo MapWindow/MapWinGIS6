@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "mapwingis/core/Error.h"
+#include "mapwingis/rendering/PolygonTriangulation.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 #include "internal/VectorRenderSceneBuilder.h"
@@ -49,15 +50,28 @@ namespace mwg::rendering
 
         void TransformScene(
             VectorRenderScene& scene,
-            const ProjectionTransform& forward)
+            const ProjectionTransform& forward,
+            const bool prepareFillMeshes)
         {
             TransformPoints(scene.polygons.Coordinates(), forward);
-            for (std::optional<TriangleMesh>& mesh : scene.fillMeshes)
+            if (!prepareFillMeshes)
             {
-                if (mesh.has_value())
+                return;
+            }
+
+            scene.fillMeshes.clear();
+            scene.fillMeshes.reserve(scene.polygons.size());
+            for (std::size_t index = 0; index < scene.polygons.size(); ++index)
+            {
+                std::optional<TriangleMesh> mesh;
+                try
                 {
-                    TransformPoints(mesh->vertices, forward);
+                    mesh = TriangulatePolygon(scene.polygons[index]);
                 }
+                catch (const CoreError&)
+                {
+                }
+                scene.fillMeshes.push_back(std::move(mesh));
             }
         }
     }
@@ -112,7 +126,8 @@ namespace mwg::rendering
                     scene = detail::BuildVectorRenderScene(
                         layer.Source(), sourceOptions);
                     const ProjectionTransform forward = source.TransformTo(*display);
-                    TransformScene(scene, forward);
+                    TransformScene(
+                        scene, forward, options.prepareFillMeshes);
                     if (scene.extent.IsValid())
                     {
                         Extent transformedExtent;
