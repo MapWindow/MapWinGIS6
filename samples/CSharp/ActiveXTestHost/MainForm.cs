@@ -852,6 +852,17 @@ internal sealed class MainForm : Form
                 "The control still reports loaded layers after clearing them.");
         }
 
+        // The control keeps the map projection after clearing layers. This
+        // host starts over, so the next loaded layer sets the projection.
+        var projection = (IMapWinGISControlProjection)automationObject;
+        projection.MapProjection = string.Empty;
+        if (projection.MapEpsg >= 0 ||
+            !string.IsNullOrEmpty(projection.MapProjection))
+        {
+            throw new InvalidOperationException(
+                "The control still reports a map projection after clearing it.");
+        }
+
         RepaintHost();
         RefreshStatus();
     }

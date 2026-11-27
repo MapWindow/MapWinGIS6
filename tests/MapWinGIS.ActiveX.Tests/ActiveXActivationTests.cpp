@@ -1996,6 +1996,82 @@ TEST_F(ActiveXMapTest, ExposesProjectionAutomationAndReprojectsDisplay)
     EXPECT_EQ(projection->ReprojectLayer(layerId), E_INVALIDARG);
 }
 
+TEST_F(ActiveXMapTest, AClearedMapTakesTheNextLayerProjectionAfterAProjectionReset)
+{
+    ComPtr<IMapWinGISControlProjection> projection;
+    ComPtr<IMapWinGISControl4> control;
+    ASSERT_EQ(_control.As(&projection), S_OK);
+    ASSERT_EQ(_control.As(&control), S_OK);
+
+    const auto path = mwg::test::MakeSampleShapefile(
+        _directory.Path(), "cleared");
+    LONGLONG layerId = 0;
+    ASSERT_EQ(control->LoadVectorDatasetEx(
+        ATL::CComBSTR(path.c_str()), &layerId), S_OK);
+    const std::string wgs84 =
+        mwg::Projection::FromEpsg(4326).ExportToWkt();
+    ASSERT_EQ(
+        projection->put_MapProjection(ATL::CComBSTR(wgs84.c_str())),
+        S_OK);
+
+    // Clearing layers keeps the map projection; the host resets it.
+    ASSERT_EQ(control->ClearLayers(), S_OK);
+    LONG epsg = 0;
+    ASSERT_EQ(projection->get_MapEpsg(&epsg), S_OK);
+    EXPECT_EQ(epsg, 4326);
+    ASSERT_EQ(projection->put_MapProjection(ATL::CComBSTR(L"")), S_OK);
+    ATL::CComBSTR wkt(L"unchanged");
+    ASSERT_EQ(projection->get_MapProjection(&wkt), S_OK);
+    EXPECT_EQ(wkt.Length(), 0U);
+
+    ASSERT_EQ(control->LoadVectorDatasetEx(
+        ATL::CComBSTR(path.c_str()), &layerId), S_OK);
+    ASSERT_EQ(projection->get_MapEpsg(&epsg), S_OK);
+    EXPECT_EQ(epsg, 28992);
+    ASSERT_EQ(projection->LayerDisplayEpsg(layerId, &epsg), S_OK);
+    EXPECT_EQ(epsg, -1);
+    VARIANT_BOOL matchesMapProjection = VARIANT_FALSE;
+    ASSERT_EQ(projection->ProbeVectorProjection(
+        ATL::CComBSTR(path.c_str()),
+        &epsg,
+        &wkt,
+        &matchesMapProjection), S_OK);
+    EXPECT_EQ(matchesMapProjection, VARIANT_TRUE);
+}
+
+TEST_F(ActiveXMapTest, AnEmptyFrameAfterClearingKeepsThePreferenceButReportsNoBackend)
+{
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(
+        _control->put_RenderingBackendPreference(ATL::CComBSTR(L"GDI")),
+        S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    ATL::CComBSTR backend;
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    EXPECT_STREQ(backend, L"GDI");
+
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    backend.Empty();
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    EXPECT_STREQ(backend, L"Not rendered");
+    ATL::CComBSTR status;
+    ASSERT_EQ(_control->get_RenderingStatus(&status), S_OK);
+    EXPECT_STREQ(status, L"There are no layers to render.");
+    ATL::CComBSTR preference;
+    ASSERT_EQ(_control->get_RenderingBackendPreference(&preference), S_OK);
+    EXPECT_STREQ(preference, L"GDI");
+
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    backend.Empty();
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    EXPECT_STREQ(backend, L"GDI");
+}
+
 TEST_F(ActiveXMapTest, NavigationSucceedsWhenThereIsNoViewToChange)
 {
     ComPtr<IMapWinGISControl4> control;

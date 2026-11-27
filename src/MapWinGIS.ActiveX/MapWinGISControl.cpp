@@ -2819,6 +2819,10 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
                     useLayerCache,
                     !alternateSize);
             }
+            if (scene.layers.empty())
+            {
+                _renderer.MarkEmptyFrame();
+            }
             return S_OK;
         }
         catch (const std::bad_alloc&)

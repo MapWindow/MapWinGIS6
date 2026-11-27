@@ -75,6 +75,19 @@ namespace mwg::activex
             return _diagnostic;
         }
 
+        /// Records a frame without layers after an earlier rendered frame:
+        /// no backend drew it, so the previous frame's backend and
+        /// diagnostic must not be reported. The backend preference is kept.
+        void MarkEmptyFrame() noexcept
+        {
+            if (!_activeBackend)
+            {
+                return;
+            }
+            _activeBackend.reset();
+            _diagnostic = L"There are no layers to render.";
+        }
+
         void InvalidateSceneCache() noexcept
         {
             _openGlRenderer.ClearFillMeshCache();
