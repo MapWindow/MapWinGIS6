@@ -123,6 +123,14 @@ namespace mwg::activex::testing
             return control._view.Pan(pixels * Resolution(control), 0.0);
         }
 
+        [[nodiscard]] static bool LayerHasDisplayProjection(
+            const CMapWinGISControl& control,
+            const LayerId id)
+        {
+            const MapLayer* const layer = control._view.GetMap().FindLayer(id);
+            return layer != nullptr && layer->DisplayProjection().has_value();
+        }
+
         static void StagePendingFit(CMapWinGISControl& control, std::shared_ptr<VectorDataset> dataset)
         {
             (void)control._view.Resize(0, 0);

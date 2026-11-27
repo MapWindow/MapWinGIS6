@@ -10,7 +10,11 @@ complete when its acceptance criteria have been met and its PR is ready.
   - Reprojection remains display-only; source-coordinate editing and on-disk
     geometry changes are intentionally out of scope.
   - ActiveX projection operations and the host mismatch prompt remain Phase 3.
-- [ ] **Phase 3 – ActiveX projection interface + test-host prompt and EPSG status bar** (PR 3)
+- [x] **Phase 3 – ActiveX projection interface + test-host prompt and EPSG status bar** (PR 3)
+  - Projection mismatch UI belongs to the test host. Reprojection remains
+    display-only and never rewrites source data.
+  - The automated host run stays non-interactive. Its generated EPSG:28992
+    shapefile verifies probe, map, layer, and status-bar reporting.
 
 **Target branch:** `development`
 

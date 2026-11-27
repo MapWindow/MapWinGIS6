@@ -1,5 +1,18 @@
 # Verified development lessons
 
+## Projection identity belongs in Core
+
+Projection matching first uses an autodetected EPSG code. It falls back to OGR
+equivalence and normalized names only when EPSG identity is unavailable.
+Display reprojection belongs at the Core scene-build boundary, where geometry
+and extents use one transformation without changing source data. The ActiveX
+control translates that model through a separate dispatch interface. Hosts own
+the three-way mismatch policy and prompt. See
+[Projection.cpp](../../../src/MapWinGIS.Core/src/projection/Projection.cpp),
+[MapRenderScene.cpp](../../../src/MapWinGIS.Core/src/rendering/MapRenderScene.cpp),
+and
+[MapWinGIS.ActiveX.idl](../../../src/MapWinGIS.ActiveX/MapWinGIS.ActiveX.idl).
+
 ## ATL registry scripts are not C++ source
 
 The ATL registrar rejected `//` comments in `MapWinGISControl.rgs` with

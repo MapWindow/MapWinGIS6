@@ -47,6 +47,7 @@
 #include "PanBlit.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
+#include "mapwingis/projection/Projection.h"
 #include "mapwingis/vector/VectorDataset.h"
 
 OBJECT_ENTRY_AUTO(CLSID_MapWinGISControl, CMapWinGISControl)
@@ -96,6 +97,48 @@ namespace
         }
         *destination = static_cast<LONGLONG>(id.value);
         return S_OK;
+    }
+
+    [[nodiscard]] HRESULT ToLayerId(
+        const LONGLONG value,
+        mwg::LayerId& id) noexcept
+    {
+        if (value <= 0)
+        {
+            return E_INVALIDARG;
+        }
+        id = mwg::LayerId{static_cast<std::uint64_t>(value)};
+        return S_OK;
+    }
+
+    [[nodiscard]] HRESULT BstrToPath(
+        const BSTR value,
+        std::filesystem::path& path) noexcept
+    {
+        if (value == nullptr)
+        {
+            return E_INVALIDARG;
+        }
+        const UINT length = ::SysStringLen(value);
+        if (length == 0 ||
+            std::wstring_view(value, length).find(L'\0') != std::wstring_view::npos)
+        {
+            return E_INVALIDARG;
+        }
+        try
+        {
+            path = std::filesystem::path(
+                std::wstring(value, static_cast<std::size_t>(length)));
+            return S_OK;
+        }
+        catch (const std::bad_alloc&)
+        {
+            return E_OUTOFMEMORY;
+        }
+        catch (...)
+        {
+            return E_INVALIDARG;
+        }
     }
 
     struct PreparedVectorDataset final
@@ -283,7 +326,8 @@ STDMETHODIMP CMapWinGISControl::InterfaceSupportsErrorInfo(REFIID interfaceId)
         IsEqualIID(interfaceId, IID_IMapWinGISControl3) ||
         IsEqualIID(interfaceId, IID_IMapWinGISControl4) ||
         IsEqualIID(interfaceId, IID_IMapWinGISControl5) ||
-        IsEqualIID(interfaceId, IID_IMapWinGISControlGdal) ? S_OK : S_FALSE;
+        IsEqualIID(interfaceId, IID_IMapWinGISControlGdal) ||
+        IsEqualIID(interfaceId, IID_IMapWinGISControlProjection) ? S_OK : S_FALSE;
 }
 
 STDMETHODIMP CMapWinGISControl::BeginGdalOperation(
@@ -486,6 +530,483 @@ STDMETHODIMP CMapWinGISControl::LoadVectorDatasetEx(
     }
     *layerId = 0;
     return LoadVectorDatasetImpl(path, layerId, IID_IMapWinGISControl4);
+}
+
+STDMETHODIMP CMapWinGISControl::get_MapProjection(BSTR* wkt)
+{
+    if (wkt == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The map projection output pointer is null.",
+            IID_IMapWinGISControlProjection,
+            E_POINTER);
+    }
+    *wkt = nullptr;
+    try
+    {
+        const std::optional<mwg::Projection>& projection =
+            _view.GetMap().Projection();
+        return Utf8ToBstr(
+            projection.has_value() ? projection->ExportToWkt() : std::string{},
+            wkt);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while reading the map projection.",
+            IID_IMapWinGISControlProjection,
+            E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while reading the map projection.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::put_MapProjection(BSTR wkt)
+{
+    if (wkt == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The map projection is null.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    try
+    {
+        std::string wktText;
+        const HRESULT conversion = BstrToUtf8(wkt, wktText);
+        if (FAILED(conversion))
+        {
+            return SetControlComErrorInfo(
+                "The map projection WKT is invalid.",
+                IID_IMapWinGISControlProjection,
+                conversion);
+        }
+        if (wktText.empty())
+        {
+            _view.ClearProjection();
+        }
+        else
+        {
+            _view.SetProjection(mwg::Projection::FromWkt(wktText));
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while setting the map projection.",
+            IID_IMapWinGISControlProjection,
+            E_OUTOFMEMORY);
+    }
+    catch (const mwg::InvalidArgument& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while setting the map projection.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::get_MapEpsg(LONG* epsg)
+{
+    if (epsg == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The EPSG output pointer is null.",
+            IID_IMapWinGISControlProjection,
+            E_POINTER);
+    }
+    *epsg = -1;
+    try
+    {
+        const std::optional<mwg::Projection>& projection =
+            _view.GetMap().Projection();
+        if (projection.has_value() && projection->Epsg().has_value())
+        {
+            *epsg = static_cast<LONG>(*projection->Epsg());
+        }
+        return S_OK;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while reading the map EPSG code.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::LayerProjection(
+    const LONGLONG layerId,
+    BSTR* wkt)
+{
+    if (wkt == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The layer projection output pointer is null.",
+            IID_IMapWinGISControlProjection,
+            E_POINTER);
+    }
+    *wkt = nullptr;
+    mwg::LayerId id{};
+    if (FAILED(ToLayerId(layerId, id)))
+    {
+        return SetControlComErrorInfo(
+            "Layer ID must be positive.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    const mwg::MapLayer* const layer = _view.GetMap().FindLayer(id);
+    if (layer == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "Layer ID was not found.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    try
+    {
+        const mwg::Projection projection = layer->Source().Projection();
+        return Utf8ToBstr(
+            projection.IsEmpty() ? std::string{} : projection.ExportToWkt(),
+            wkt);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while reading the layer projection.",
+            IID_IMapWinGISControlProjection,
+            E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while reading the layer projection.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::LayerEpsg(
+    const LONGLONG layerId,
+    LONG* epsg)
+{
+    if (epsg == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The EPSG output pointer is null.",
+            IID_IMapWinGISControlProjection,
+            E_POINTER);
+    }
+    *epsg = -1;
+    mwg::LayerId id{};
+    if (FAILED(ToLayerId(layerId, id)))
+    {
+        return SetControlComErrorInfo(
+            "Layer ID must be positive.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    const mwg::MapLayer* const layer = _view.GetMap().FindLayer(id);
+    if (layer == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "Layer ID was not found.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    try
+    {
+        const std::optional<int> value = layer->Source().Projection().Epsg();
+        if (value.has_value())
+        {
+            *epsg = static_cast<LONG>(*value);
+        }
+        return S_OK;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while reading the layer EPSG code.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::ProbeVectorProjection(
+    BSTR path,
+    LONG* epsg,
+    BSTR* wkt)
+{
+    if (epsg == nullptr || wkt == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "A projection probe output pointer is null.",
+            IID_IMapWinGISControlProjection,
+            E_POINTER);
+    }
+    *epsg = -1;
+    *wkt = nullptr;
+    std::filesystem::path datasetPath;
+    const HRESULT pathResult = BstrToPath(path, datasetPath);
+    if (FAILED(pathResult))
+    {
+        return SetControlComErrorInfo(
+            "The dataset path is null or empty.",
+            IID_IMapWinGISControlProjection,
+            pathResult);
+    }
+    try
+    {
+        const std::shared_ptr<mwg::VectorDataset> dataset =
+            mwg::VectorDataset::Open(datasetPath);
+        if (dataset->LayerCount() == 0)
+        {
+            return SetControlComErrorInfo(
+                "Vector dataset contains no layers.",
+                IID_IMapWinGISControlProjection,
+                E_FAIL);
+        }
+        const mwg::Projection projection = dataset->Layer(0).Projection();
+        const std::optional<int> code = projection.Epsg();
+        std::string wktText = projection.IsEmpty()
+            ? std::string{}
+            : projection.ExportToWkt();
+        BSTR wktResult = nullptr;
+        const HRESULT conversion = Utf8ToBstr(wktText, &wktResult);
+        if (FAILED(conversion))
+        {
+            return SetControlComErrorInfo(
+                "The probed projection could not be marshalled to COM.",
+                IID_IMapWinGISControlProjection,
+                conversion);
+        }
+        *wkt = wktResult;
+        if (code.has_value())
+        {
+            *epsg = static_cast<LONG>(*code);
+        }
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while probing the vector projection.",
+            IID_IMapWinGISControlProjection,
+            E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while probing the vector projection.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::ReprojectLayer(const LONGLONG layerId)
+{
+    mwg::LayerId id{};
+    if (FAILED(ToLayerId(layerId, id)))
+    {
+        return SetControlComErrorInfo(
+            "Layer ID must be positive.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    const mwg::MapLayer* const layer = _view.GetMap().FindLayer(id);
+    if (layer == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "Layer ID was not found.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    const std::optional<mwg::Projection>& mapProjection =
+        _view.GetMap().Projection();
+    if (!mapProjection.has_value())
+    {
+        return SetControlComErrorInfo(
+            "The map projection is unknown.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    const std::optional<mwg::Projection> previousDisplay =
+        layer->DisplayProjection();
+    try
+    {
+        if (!_view.SetLayerDisplayProjection(id, *mapProjection))
+        {
+            return S_OK;
+        }
+        try
+        {
+            (void)_view.FitToMap();
+        }
+        catch (...)
+        {
+            if (previousDisplay.has_value())
+            {
+                (void)_view.SetLayerDisplayProjection(id, *previousDisplay);
+            }
+            else
+            {
+                (void)_view.ClearLayerDisplayProjection(id);
+            }
+            throw;
+        }
+        _renderer.InvalidateSceneCache();
+        PrepareFillMeshesInBackground();
+        InvalidateLayerCache();
+        FireViewChange();
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while reprojecting the layer.",
+            IID_IMapWinGISControlProjection,
+            E_OUTOFMEMORY);
+    }
+    catch (const mwg::InvalidArgument& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while reprojecting the layer.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::ClearLayerReprojection(
+    const LONGLONG layerId)
+{
+    mwg::LayerId id{};
+    if (FAILED(ToLayerId(layerId, id)))
+    {
+        return SetControlComErrorInfo(
+            "Layer ID must be positive.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    if (_view.GetMap().FindLayer(id) == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "Layer ID was not found.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    const std::optional<mwg::Projection> previousDisplay =
+        _view.GetMap().FindLayer(id)->DisplayProjection();
+    try
+    {
+        if (!_view.ClearLayerDisplayProjection(id))
+        {
+            return S_OK;
+        }
+        try
+        {
+            (void)_view.FitToMap();
+        }
+        catch (...)
+        {
+            (void)_view.SetLayerDisplayProjection(id, *previousDisplay);
+            throw;
+        }
+        _renderer.InvalidateSceneCache();
+        PrepareFillMeshesInBackground();
+        InvalidateLayerCache();
+        FireViewChange();
+        return S_OK;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while clearing layer reprojection.",
+            IID_IMapWinGISControlProjection,
+            E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while clearing layer reprojection.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
 }
 
 STDMETHODIMP CMapWinGISControl::BeginLoadVectorDataset(

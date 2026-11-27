@@ -70,6 +70,12 @@ class ATL_NO_VTABLE CMapWinGISControl :
         &IID_IMapWinGISControlGdal,
         &LIBID_MapWinGISActiveXLib,
         0xFFFF,
+        0xFFFF>,
+    public ATL::IDispatchImpl<
+        IMapWinGISControlProjection,
+        &IID_IMapWinGISControlProjection,
+        &LIBID_MapWinGISActiveXLib,
+        0xFFFF,
         0xFFFF>
 {
 public:
@@ -86,6 +92,7 @@ public:
         COM_INTERFACE_ENTRY(IMapWinGISControl2)
         COM_INTERFACE_ENTRY(IMapWinGISControl)
         COM_INTERFACE_ENTRY(IMapWinGISControlGdal)
+        COM_INTERFACE_ENTRY(IMapWinGISControlProjection)
         COM_INTERFACE_ENTRY(ISupportErrorInfo)
         COM_INTERFACE_ENTRY(IProvideClassInfo)
         COM_INTERFACE_ENTRY(IProvideClassInfo2)
@@ -158,6 +165,14 @@ public:
         BSTR* summary,
         BSTR* diagnostics) override;
     STDMETHOD(GetLayerId)(LONG index, LONGLONG* layerId) override;
+    STDMETHOD(get_MapProjection)(BSTR* wkt) override;
+    STDMETHOD(put_MapProjection)(BSTR wkt) override;
+    STDMETHOD(get_MapEpsg)(LONG* epsg) override;
+    STDMETHOD(LayerProjection)(LONGLONG layerId, BSTR* wkt) override;
+    STDMETHOD(LayerEpsg)(LONGLONG layerId, LONG* epsg) override;
+    STDMETHOD(ProbeVectorProjection)(BSTR path, LONG* epsg, BSTR* wkt) override;
+    STDMETHOD(ReprojectLayer)(LONGLONG layerId) override;
+    STDMETHOD(ClearLayerReprojection)(LONGLONG layerId) override;
     STDMETHOD(BeginGdalOperation)(
         BSTR algorithmPath,
         SAFEARRAY* arguments,

@@ -1879,7 +1879,8 @@ TEST_F(ActiveXMapTest, ReportsAutomationErrorInformation)
     ASSERT_EQ(_control.As(&support), S_OK);
     for (const IID* iid : {&__uuidof(IMapWinGISControl), &__uuidof(IMapWinGISControl2),
                            &__uuidof(IMapWinGISControl3), &__uuidof(IMapWinGISControl4),
-                           &__uuidof(IMapWinGISControlGdal)})
+                           &__uuidof(IMapWinGISControlGdal),
+                           &__uuidof(IMapWinGISControlProjection)})
     {
         EXPECT_EQ(support->InterfaceSupportsErrorInfo(*iid), S_OK);
     }
@@ -1911,6 +1912,65 @@ TEST_F(ActiveXMapTest, ReportsAutomationErrorInformation)
     EXPECT_TRUE(IsEqualIID(source, __uuidof(IMapWinGISControl)));
 }
 
+TEST_F(ActiveXMapTest, ExposesProjectionAutomationAndReprojectsDisplay)
+{
+    ComPtr<IMapWinGISControlProjection> projection;
+    ComPtr<IMapWinGISControl4> control;
+    ASSERT_EQ(_control.As(&projection), S_OK);
+    ASSERT_EQ(_control.As(&control), S_OK);
+
+    LONG epsg = 0;
+    ATL::CComBSTR wkt(L"unchanged");
+    ASSERT_EQ(projection->get_MapEpsg(&epsg), S_OK);
+    EXPECT_EQ(epsg, -1);
+    ASSERT_EQ(projection->get_MapProjection(&wkt), S_OK);
+    EXPECT_EQ(wkt.Length(), 0U);
+
+    const auto path = mwg::test::MakeSampleShapefile(
+        _directory.Path(), "projection");
+    ASSERT_EQ(projection->ProbeVectorProjection(
+        ATL::CComBSTR(path.c_str()), &epsg, &wkt), S_OK);
+    EXPECT_EQ(epsg, 28992);
+    EXPECT_GT(wkt.Length(), 0U);
+
+    LONGLONG layerId = 0;
+    ASSERT_EQ(control->LoadVectorDatasetEx(
+        ATL::CComBSTR(path.c_str()), &layerId), S_OK);
+    ASSERT_EQ(projection->get_MapEpsg(&epsg), S_OK);
+    EXPECT_EQ(epsg, 28992);
+    ASSERT_EQ(projection->LayerEpsg(layerId, &epsg), S_OK);
+    EXPECT_EQ(epsg, 28992);
+    ASSERT_EQ(projection->LayerProjection(layerId, &wkt), S_OK);
+    EXPECT_GT(wkt.Length(), 0U);
+
+    const std::string wgs84 =
+        mwg::Projection::FromEpsg(4326).ExportToWkt();
+    ASSERT_EQ(
+        projection->put_MapProjection(ATL::CComBSTR(wgs84.c_str())),
+        S_OK);
+    ASSERT_EQ(projection->get_MapEpsg(&epsg), S_OK);
+    EXPECT_EQ(epsg, 4326);
+    ASSERT_EQ(projection->ReprojectLayer(layerId), S_OK);
+    EXPECT_TRUE(mwg::activex::testing::
+        MapWinGISControlTestAccess::LayerHasDisplayProjection(
+            mwg::activex::testing::MapWinGISControlTestAccess::Control(
+                _control.Get()),
+            mwg::LayerId{static_cast<std::uint64_t>(layerId)}));
+
+    ASSERT_EQ(projection->ClearLayerReprojection(layerId), S_OK);
+    EXPECT_FALSE(mwg::activex::testing::
+        MapWinGISControlTestAccess::LayerHasDisplayProjection(
+            mwg::activex::testing::MapWinGISControlTestAccess::Control(
+                _control.Get()),
+            mwg::LayerId{static_cast<std::uint64_t>(layerId)}));
+
+    ASSERT_EQ(projection->put_MapProjection(ATL::CComBSTR(L"")), S_OK);
+    ASSERT_EQ(projection->get_MapEpsg(&epsg), S_OK);
+    EXPECT_EQ(epsg, -1);
+    EXPECT_EQ(projection->LayerEpsg(layerId + 100, &epsg), E_INVALIDARG);
+    EXPECT_EQ(projection->ReprojectLayer(layerId), E_INVALIDARG);
+}
+
 TEST_F(ActiveXMapTest, NavigationSucceedsWhenThereIsNoViewToChange)
 {
     ComPtr<IMapWinGISControl4> control;
@@ -1929,11 +1989,13 @@ TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
     ComPtr<IMapWinGISControl3> third;
     ComPtr<IMapWinGISControl4> fourth;
     ComPtr<IMapWinGISControl5> fifth;
+    ComPtr<IMapWinGISControlProjection> projection;
     ASSERT_EQ(_control.As(&first), S_OK);
     ASSERT_EQ(_control.As(&second), S_OK);
     ASSERT_EQ(_control.As(&third), S_OK);
     ASSERT_EQ(_control.As(&fourth), S_OK);
     ASSERT_EQ(_control.As(&fifth), S_OK);
+    ASSERT_EQ(_control.As(&projection), S_OK);
     ComPtr<IUnknown> identity;
     ASSERT_EQ(fourth.As(&identity), S_OK);
     ComPtr<IUnknown> other;
@@ -1957,6 +2019,10 @@ TEST_F(ActiveXMapTest, PreservesDispatchIdsAndInterfaceIdentity)
     EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl3), thirdIid));
     const IID fifthIid{0x4F8CE31A, 0x60D1, 0x4B9D, {0xA4, 0xAF, 0x2C, 0x80, 0xC5, 0xF6, 0x3A, 0x91}};
     EXPECT_TRUE(IsEqualIID(__uuidof(IMapWinGISControl5), fifthIid));
+    const IID projectionIid{0x26717861, 0xE47D, 0x4326,
+                            {0x94, 0x14, 0xFC, 0xF2, 0xE9, 0x04, 0xB7, 0x0D}};
+    EXPECT_TRUE(IsEqualIID(
+        __uuidof(IMapWinGISControlProjection), projectionIid));
 
     ComPtr<IDispatch> dispatch;
     ASSERT_EQ(_control.As(&dispatch), S_OK);

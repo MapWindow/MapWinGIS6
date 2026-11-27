@@ -69,6 +69,13 @@ namespace mwg
         [[nodiscard]] const Map& GetMap() const noexcept;
         [[nodiscard]] const Viewport& GetViewport() const noexcept;
 
+        /// Replaces the map projection without transforming existing layers.
+        /// \throws InvalidArgument when projection is empty.
+        void SetProjection(mwg::Projection projection);
+
+        /// Clears the map projection without changing existing layers.
+        void ClearProjection() noexcept;
+
         /// Adds a layer on top of the map; see Map::AddLayer. Fits the view
         /// to the map when the viewport has no view yet.
         /// \throws InvalidArgument as Map::AddLayer does.

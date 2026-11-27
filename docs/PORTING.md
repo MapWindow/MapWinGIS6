@@ -48,6 +48,13 @@ the display projection restores the source coordinates. The current rendering
 vertical slice is read-only, so editing behavior for reprojected layers is not
 provided.
 
+The ActiveX layer exposes one projection capability through
+`IMapWinGISControlProjection`. It does not duplicate the MapWinGIS 5
+`geoProjection` object. WKT is the automation value. EPSG is a separate
+integer because hosts often identify a coordinate reference system by its EPSG
+code. The control does not show a mismatch prompt. A host probes the next
+dataset, asks the user for a policy, and then loads or reprojects the layer.
+
 ## What "port" means here
 
 1. **Understand the legacy behavior.** Inspect v5 sources and tests to learn
@@ -111,6 +118,9 @@ total while keeping the viewport.
 operation capability, and `IMapWinGISControlEvents` is a separate dispinterface
 for notifications. Do not change a published interface IID or silently add
 vtable members to it.
+`IMapWinGISControlProjection` is another separate interface. It exposes map
+and layer WKT, EPSG values, a read-only dataset probe, and display
+reprojection operations.
 
 | Navigation member | Coordinates and factors |
 |---|---|
@@ -136,10 +146,10 @@ control does not claim binary or API compatibility with existing v5 clients.
 Each control load selects the first dataset layer. Core prepares an ordered
 scene for all visible map layers, including Polygon, MultiPolygon,
 CurvePolygon, and MultiSurface geometry. It
-does not expose the broad v5 map, layer, shape, event, or editing API. Its
-current automation operations do not select a display projection, so committed
-control loads draw in source coordinates. OpenGL fills the triangulated
-meshes Core prepares for convex, concave, holed, and multipart polygons; GDI
+does not expose the broad v5 map, layer, shape, event, or editing API.
+Projection automation is limited to coordinate reference system reads and
+display-only reprojection. OpenGL fills the triangulated meshes Core prepares
+for convex, concave, holed, and multipart polygons; GDI
 draws the original rings as the CPU fallback for scenes and systems OpenGL
 cannot handle.
 
