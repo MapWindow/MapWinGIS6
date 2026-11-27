@@ -387,6 +387,56 @@ TEST_F(MapRenderSceneTest, RebuildsFillMeshesAfterNonlinearReprojection)
     }
 }
 
+TEST_F(MapRenderSceneTest, SplitsWrappedProjectedPolygonsAtTheLongitudeSeam)
+{
+    const std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(
+        MakeWktDataset(
+            _directory.Path(),
+            "antimeridian.gpkg",
+            3857,
+            "POLYGON ("
+            "(18924313 -1000000, 21150790 -1000000, "
+            "21150790 1000000, 18924313 1000000, 18924313 -1000000), "
+            "(19370000 -250000, 19600000 -250000, "
+            "19600000 250000, 19370000 250000, 19370000 -250000))"));
+    const LayerId id = _map.AddLayer(dataset);
+    ASSERT_TRUE(_map.SetLayerDisplayProjection(id, Projection::FromEpsg(4326)));
+
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(
+        _map,
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
+
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_TRUE(scene.skippedLayers.empty());
+    const rendering::VectorRenderScene& projected = *scene.layers.front().scene;
+    ASSERT_EQ(projected.polygons.size(), 2U);
+    std::size_t ringCount = 0;
+    for (std::size_t index = 0; index < projected.polygons.size(); ++index)
+    {
+        const rendering::PolygonView polygon = projected.polygons[index];
+        ringCount += polygon.size();
+        for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
+        {
+            for (const rendering::Point& point : polygon[ringIndex])
+            {
+                EXPECT_GT(std::abs(point.x), 169.0);
+                EXPECT_LT(std::abs(point.x), 180.000001);
+            }
+        }
+    }
+    EXPECT_EQ(ringCount, 3U);
+    ASSERT_EQ(projected.fillMeshes.size(), 2U);
+    for (const std::optional<rendering::TriangleMesh>& mesh : projected.fillMeshes)
+    {
+        ASSERT_TRUE(mesh.has_value());
+        for (const rendering::Point& point : mesh->vertices)
+        {
+            EXPECT_GT(std::abs(point.x), 169.0);
+            EXPECT_LT(std::abs(point.x), 180.000001);
+        }
+    }
+}
+
 TEST_F(MapRenderSceneTest, IsolatesStandardExceptionsButPropagatesAllocationFailures)
 {
     GdalEnvironment::Initialize();

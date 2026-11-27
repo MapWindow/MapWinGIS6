@@ -448,7 +448,7 @@ TEST_F(MapViewTest, FitAndMixedSceneUseTransformedDisplayCoordinates)
     EXPECT_TRUE(IsVisible(_view.GetViewport(), transformedExtent));
 }
 
-TEST_F(MapViewTest, RefiltersReprojectedAntimeridianFeaturesAsTheViewportMoves)
+TEST_F(MapViewTest, RebuildsCompleteSceneWhenLongitudeFilteringIsAmbiguous)
 {
     ASSERT_TRUE(_view.Resize(400, 200));
     const std::shared_ptr<VectorDataset> dataset = OpenProjectedRectangles(
@@ -468,19 +468,28 @@ TEST_F(MapViewTest, RefiltersReprojectedAntimeridianFeaturesAsTheViewportMoves)
     const auto& near = _view.Scene();
     ASSERT_EQ(near.layers.size(), 1U);
     ASSERT_TRUE(near.skippedLayers.empty());
-    EXPECT_EQ(near.layers.front().scene->sourceFeatureCount, 1);
-    ASSERT_EQ(near.layers.front().scene->polygons.size(), 1U);
+    EXPECT_EQ(near.layers.front().scene->sourceFeatureCount, 2);
+    ASSERT_EQ(near.layers.front().scene->polygons.size(), 3U);
     EXPECT_LT(std::abs(near.layers.front().scene->extent.CenterX()), 5.0);
 
     ASSERT_TRUE(_view.Pan(175.0, 0.0));
     const auto& distant = _view.Scene();
     ASSERT_EQ(distant.layers.size(), 1U);
     ASSERT_TRUE(distant.skippedLayers.empty());
-    EXPECT_EQ(distant.layers.front().scene->sourceFeatureCount, 1);
-    ASSERT_EQ(distant.layers.front().scene->polygons.size(), 1U);
-    EXPECT_GT(std::abs(
-                  distant.layers.front().scene->polygons.front().front()[0].x),
-              160.0);
+    EXPECT_EQ(distant.layers.front().scene->sourceFeatureCount, 2);
+    ASSERT_EQ(distant.layers.front().scene->polygons.size(), 3U);
+    bool hasWesternLongitudeCoverage = false;
+    for (std::size_t index = 0;
+         index < distant.layers.front().scene->polygons.size();
+         ++index)
+    {
+        for (const rendering::Point& point :
+             distant.layers.front().scene->polygons[index].front())
+        {
+            hasWesternLongitudeCoverage |= std::abs(point.x) > 160.0;
+        }
+    }
+    EXPECT_TRUE(hasWesternLongitudeCoverage);
 }
 
 TEST_F(MapViewTest, SceneIsReusedWhileViewportCoverageRemainsValid)
