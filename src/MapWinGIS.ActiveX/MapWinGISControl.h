@@ -170,9 +170,15 @@ public:
     STDMETHOD(get_MapEpsg)(LONG* epsg) override;
     STDMETHOD(LayerProjection)(LONGLONG layerId, BSTR* wkt) override;
     STDMETHOD(LayerEpsg)(LONGLONG layerId, LONG* epsg) override;
-    STDMETHOD(ProbeVectorProjection)(BSTR path, LONG* epsg, BSTR* wkt) override;
+    STDMETHOD(ProbeVectorProjection)(
+        BSTR path,
+        LONG* epsg,
+        BSTR* wkt,
+        VARIANT_BOOL* matchesMapProjection) override;
     STDMETHOD(ReprojectLayer)(LONGLONG layerId) override;
     STDMETHOD(ClearLayerReprojection)(LONGLONG layerId) override;
+    STDMETHOD(LayerDisplayProjection)(LONGLONG layerId, BSTR* wkt) override;
+    STDMETHOD(LayerDisplayEpsg)(LONGLONG layerId, LONG* epsg) override;
     STDMETHOD(BeginGdalOperation)(
         BSTR algorithmPath,
         SAFEARRAY* arguments,

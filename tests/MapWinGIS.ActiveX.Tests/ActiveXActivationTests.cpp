@@ -1928,10 +1928,15 @@ TEST_F(ActiveXMapTest, ExposesProjectionAutomationAndReprojectsDisplay)
 
     const auto path = mwg::test::MakeSampleShapefile(
         _directory.Path(), "projection");
+    VARIANT_BOOL matchesMapProjection = VARIANT_TRUE;
     ASSERT_EQ(projection->ProbeVectorProjection(
-        ATL::CComBSTR(path.c_str()), &epsg, &wkt), S_OK);
+        ATL::CComBSTR(path.c_str()),
+        &epsg,
+        &wkt,
+        &matchesMapProjection), S_OK);
     EXPECT_EQ(epsg, 28992);
     EXPECT_GT(wkt.Length(), 0U);
+    EXPECT_EQ(matchesMapProjection, VARIANT_FALSE);
 
     LONGLONG layerId = 0;
     ASSERT_EQ(control->LoadVectorDatasetEx(
@@ -1942,6 +1947,16 @@ TEST_F(ActiveXMapTest, ExposesProjectionAutomationAndReprojectsDisplay)
     EXPECT_EQ(epsg, 28992);
     ASSERT_EQ(projection->LayerProjection(layerId, &wkt), S_OK);
     EXPECT_GT(wkt.Length(), 0U);
+    ASSERT_EQ(projection->LayerDisplayProjection(layerId, &wkt), S_OK);
+    EXPECT_EQ(wkt.Length(), 0U);
+    ASSERT_EQ(projection->LayerDisplayEpsg(layerId, &epsg), S_OK);
+    EXPECT_EQ(epsg, -1);
+    ASSERT_EQ(projection->ProbeVectorProjection(
+        ATL::CComBSTR(path.c_str()),
+        &epsg,
+        &wkt,
+        &matchesMapProjection), S_OK);
+    EXPECT_EQ(matchesMapProjection, VARIANT_TRUE);
 
     const std::string wgs84 =
         mwg::Projection::FromEpsg(4326).ExportToWkt();
@@ -1951,6 +1966,12 @@ TEST_F(ActiveXMapTest, ExposesProjectionAutomationAndReprojectsDisplay)
     ASSERT_EQ(projection->get_MapEpsg(&epsg), S_OK);
     EXPECT_EQ(epsg, 4326);
     ASSERT_EQ(projection->ReprojectLayer(layerId), S_OK);
+    ASSERT_EQ(projection->LayerEpsg(layerId, &epsg), S_OK);
+    EXPECT_EQ(epsg, 28992);
+    ASSERT_EQ(projection->LayerDisplayEpsg(layerId, &epsg), S_OK);
+    EXPECT_EQ(epsg, 4326);
+    ASSERT_EQ(projection->LayerDisplayProjection(layerId, &wkt), S_OK);
+    EXPECT_GT(wkt.Length(), 0U);
     EXPECT_TRUE(mwg::activex::testing::
         MapWinGISControlTestAccess::LayerHasDisplayProjection(
             mwg::activex::testing::MapWinGISControlTestAccess::Control(
@@ -1958,6 +1979,10 @@ TEST_F(ActiveXMapTest, ExposesProjectionAutomationAndReprojectsDisplay)
             mwg::LayerId{static_cast<std::uint64_t>(layerId)}));
 
     ASSERT_EQ(projection->ClearLayerReprojection(layerId), S_OK);
+    ASSERT_EQ(projection->LayerDisplayEpsg(layerId, &epsg), S_OK);
+    EXPECT_EQ(epsg, -1);
+    ASSERT_EQ(projection->LayerDisplayProjection(layerId, &wkt), S_OK);
+    EXPECT_EQ(wkt.Length(), 0U);
     EXPECT_FALSE(mwg::activex::testing::
         MapWinGISControlTestAccess::LayerHasDisplayProjection(
             mwg::activex::testing::MapWinGISControlTestAccess::Control(

@@ -32,11 +32,19 @@ internal interface IMapWinGISControlProjection
     void ProbeVectorProjection(
         [MarshalAs(UnmanagedType.BStr)] string path,
         out int epsg,
-        [MarshalAs(UnmanagedType.BStr)] out string wkt);
+        [MarshalAs(UnmanagedType.BStr)] out string wkt,
+        [MarshalAs(UnmanagedType.VariantBool)] out bool matchesMapProjection);
 
     [DispId(6)]
     void ReprojectLayer(long layerId);
 
     [DispId(7)]
     void ClearLayerReprojection(long layerId);
+
+    [DispId(8)]
+    [return: MarshalAs(UnmanagedType.BStr)]
+    string LayerDisplayProjection(long layerId);
+
+    [DispId(9)]
+    int LayerDisplayEpsg(long layerId);
 }

@@ -69,6 +69,7 @@ internal sealed class ProjectionMismatchDialog : Form
             Text = "Cancel"
         };
         CancelButton = cancel;
+        AcceptButton = reproject;
 
         var buttons = new FlowLayoutPanel
         {

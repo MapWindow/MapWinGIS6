@@ -783,9 +783,10 @@ STDMETHODIMP CMapWinGISControl::LayerEpsg(
 STDMETHODIMP CMapWinGISControl::ProbeVectorProjection(
     BSTR path,
     LONG* epsg,
-    BSTR* wkt)
+    BSTR* wkt,
+    VARIANT_BOOL* matchesMapProjection)
 {
-    if (epsg == nullptr || wkt == nullptr)
+    if (epsg == nullptr || wkt == nullptr || matchesMapProjection == nullptr)
     {
         return SetControlComErrorInfo(
             "A projection probe output pointer is null.",
@@ -794,6 +795,7 @@ STDMETHODIMP CMapWinGISControl::ProbeVectorProjection(
     }
     *epsg = -1;
     *wkt = nullptr;
+    *matchesMapProjection = VARIANT_FALSE;
     std::filesystem::path datasetPath;
     const HRESULT pathResult = BstrToPath(path, datasetPath);
     if (FAILED(pathResult))
@@ -833,6 +835,12 @@ STDMETHODIMP CMapWinGISControl::ProbeVectorProjection(
         {
             *epsg = static_cast<LONG>(*code);
         }
+        const std::optional<mwg::Projection>& mapProjection =
+            _view.GetMap().Projection();
+        if (mapProjection.has_value() && projection.IsSame(*mapProjection))
+        {
+            *matchesMapProjection = VARIANT_TRUE;
+        }
         return S_OK;
     }
     catch (const std::bad_alloc&)
@@ -853,6 +861,123 @@ STDMETHODIMP CMapWinGISControl::ProbeVectorProjection(
     {
         return SetControlComErrorInfo(
             "An unexpected error occurred while probing the vector projection.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::LayerDisplayProjection(
+    const LONGLONG layerId,
+    BSTR* wkt)
+{
+    if (wkt == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The layer display projection output pointer is null.",
+            IID_IMapWinGISControlProjection,
+            E_POINTER);
+    }
+    *wkt = nullptr;
+    mwg::LayerId id{};
+    if (FAILED(ToLayerId(layerId, id)))
+    {
+        return SetControlComErrorInfo(
+            "Layer ID must be positive.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    const mwg::MapLayer* const layer = _view.GetMap().FindLayer(id);
+    if (layer == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "Layer ID was not found.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    try
+    {
+        const std::optional<mwg::Projection>& projection =
+            layer->DisplayProjection();
+        return Utf8ToBstr(
+            projection.has_value() ? projection->ExportToWkt() : std::string{},
+            wkt);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return SetControlComErrorInfo(
+            "Out of memory while reading the layer display projection.",
+            IID_IMapWinGISControlProjection,
+            E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while reading the layer display projection.",
+            IID_IMapWinGISControlProjection,
+            E_UNEXPECTED);
+    }
+}
+
+STDMETHODIMP CMapWinGISControl::LayerDisplayEpsg(
+    const LONGLONG layerId,
+    LONG* epsg)
+{
+    if (epsg == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "The EPSG output pointer is null.",
+            IID_IMapWinGISControlProjection,
+            E_POINTER);
+    }
+    *epsg = -1;
+    mwg::LayerId id{};
+    if (FAILED(ToLayerId(layerId, id)))
+    {
+        return SetControlComErrorInfo(
+            "Layer ID must be positive.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    const mwg::MapLayer* const layer = _view.GetMap().FindLayer(id);
+    if (layer == nullptr)
+    {
+        return SetControlComErrorInfo(
+            "Layer ID was not found.",
+            IID_IMapWinGISControlProjection,
+            E_INVALIDARG);
+    }
+    try
+    {
+        const std::optional<mwg::Projection>& projection =
+            layer->DisplayProjection();
+        if (projection.has_value())
+        {
+            const std::optional<int> value = projection->Epsg();
+            if (value.has_value())
+            {
+                *epsg = static_cast<LONG>(*value);
+            }
+        }
+        return S_OK;
+    }
+    catch (const std::exception& exception)
+    {
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControlProjection,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while reading the layer display EPSG code.",
             IID_IMapWinGISControlProjection,
             E_UNEXPECTED);
     }

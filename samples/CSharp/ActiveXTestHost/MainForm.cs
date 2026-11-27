@@ -628,7 +628,11 @@ internal sealed class MainForm : Form
             {
                 var projection =
                     (IMapWinGISControlProjection)automationObject;
-                int epsg = projection.LayerEpsg(layer.Id);
+                int epsg = projection.LayerDisplayEpsg(layer.Id);
+                if (epsg < 0)
+                {
+                    epsg = projection.LayerEpsg(layer.Id);
+                }
                 return epsg >= 0
                     ? $"{layer.Path}\nEPSG: {epsg}"
                     : $"{layer.Path}\nEPSG: unknown";
@@ -638,6 +642,18 @@ internal sealed class MainForm : Form
             }
         }
         return layer.Path;
+    }
+
+    private void RefreshLayerToolTip(LoadedLayer layer)
+    {
+        foreach (ListViewItem item in _layerList.Items)
+        {
+            if (item.Tag is LoadedLayer { Id: long id } && id == layer.Id)
+            {
+                item.ToolTipText = GetLayerToolTip(layer);
+                return;
+            }
+        }
     }
 
     private async void OpenVectorDatasets()
@@ -704,6 +720,7 @@ internal sealed class MainForm : Form
                     if (choice == ProjectionMismatchChoice.Reproject)
                     {
                         projection.ReprojectLayer(layer.Id);
+                        RefreshLayerToolTip(layer);
                     }
                 }
                 catch (Exception exception)
@@ -752,7 +769,8 @@ internal sealed class MainForm : Form
         projection.ProbeVectorProjection(
             path,
             out int layerEpsg,
-            out string layerWkt);
+            out string layerWkt,
+            out bool sameProjection);
         string mapWkt = projection.MapProjection;
         if (string.IsNullOrWhiteSpace(mapWkt) ||
             string.IsNullOrWhiteSpace(layerWkt))
@@ -761,9 +779,6 @@ internal sealed class MainForm : Form
         }
 
         int mapEpsg = projection.MapEpsg;
-        bool sameProjection = layerEpsg >= 0 || mapEpsg >= 0
-            ? layerEpsg == mapEpsg
-            : string.Equals(layerWkt, mapWkt, StringComparison.Ordinal);
         if (sameProjection)
         {
             return ProjectionMismatchChoice.LoadAsIs;
@@ -1249,18 +1264,28 @@ internal sealed class MainForm : Form
         projection.ProbeVectorProjection(
             TestDatasetPath,
             out int probedEpsg,
-            out string probedWkt);
-        if (probedEpsg != 28992 ||
-            string.IsNullOrWhiteSpace(probedWkt) ||
-            projection.MapEpsg != 28992 ||
-            projection.LayerEpsg(layerId) != 28992 ||
-            string.IsNullOrWhiteSpace(projection.MapProjection) ||
-            string.IsNullOrWhiteSpace(projection.LayerProjection(layerId)) ||
-            _epsgLabel.Text != "EPSG: 28992")
-        {
-            throw new InvalidOperationException(
-                "The projection automation interface did not report EPSG:28992.");
-        }
+            out string probedWkt,
+            out bool matchesMapProjection);
+        if (probedEpsg != 28992)
+            throw new InvalidOperationException($"ProbeVectorProjection returned EPSG:{probedEpsg}.");
+        if (string.IsNullOrWhiteSpace(probedWkt))
+            throw new InvalidOperationException("ProbeVectorProjection returned no WKT.");
+        if (!matchesMapProjection)
+            throw new InvalidOperationException("ProbeVectorProjection did not match the map CRS.");
+        if (projection.MapEpsg != 28992)
+            throw new InvalidOperationException($"MapEpsg returned EPSG:{projection.MapEpsg}.");
+        if (projection.LayerEpsg(layerId) != 28992)
+            throw new InvalidOperationException($"LayerEpsg returned EPSG:{projection.LayerEpsg(layerId)}.");
+        if (projection.LayerDisplayEpsg(layerId) != -1)
+            throw new InvalidOperationException("A non-reprojected layer reported a display EPSG.");
+        if (string.IsNullOrWhiteSpace(projection.MapProjection))
+            throw new InvalidOperationException("MapProjection returned no WKT.");
+        if (string.IsNullOrWhiteSpace(projection.LayerProjection(layerId)))
+            throw new InvalidOperationException("LayerProjection returned no source WKT.");
+        if (!string.IsNullOrWhiteSpace(projection.LayerDisplayProjection(layerId)))
+            throw new InvalidOperationException("A non-reprojected layer reported display WKT.");
+        if (_epsgLabel.Text != "EPSG: 28992")
+            throw new InvalidOperationException($"The EPSG label was '{_epsgLabel.Text}'.");
     }
 
     private void VerifyRenderingBackendsWhereSupported()

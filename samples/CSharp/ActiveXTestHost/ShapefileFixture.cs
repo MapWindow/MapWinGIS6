@@ -14,8 +14,8 @@ internal static class ShapefileFixture
 
     private static readonly (double X, double Y)[][] Polygons =
     [
-        [(West, South), (1.5, South), (1.5, North), (West, North), (West, South)],
-        [(2.5, South), (East, South), (East, North), (2.5, North), (2.5, South)]
+        [(West, South), (West, North), (1.5, North), (1.5, South), (West, South)],
+        [(2.5, South), (2.5, North), (East, North), (East, South), (2.5, South)]
     ];
 
     public static void Write(string path)

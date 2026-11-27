@@ -170,6 +170,28 @@ TEST_F(MapViewTest, NewViewHasNoLayersSizeOrView)
     EXPECT_FALSE(_view.FitToMap());
 }
 
+TEST_F(MapViewTest, ProjectionCanBeSetPersistedAndCleared)
+{
+    EXPECT_THROW(
+        _view.SetProjection(Projection{}),
+        InvalidArgument);
+    EXPECT_FALSE(_view.GetMap().Projection().has_value());
+
+    _view.SetProjection(Projection::FromEpsg(4326));
+    const LayerId layer = _view.AddLayer(
+        VectorDataset::Open(MakeSampleShapefile(_directory.Path())));
+    ASSERT_TRUE(_view.GetMap().Projection().has_value());
+    EXPECT_EQ(_view.GetMap().Projection()->Epsg(), 4326);
+
+    ASSERT_TRUE(_view.RemoveLayer(layer));
+    ASSERT_TRUE(_view.GetMap().Projection().has_value());
+    EXPECT_EQ(_view.GetMap().Projection()->Epsg(), 4326);
+
+    _view.ClearProjection();
+    _view.ClearProjection();
+    EXPECT_FALSE(_view.GetMap().Projection().has_value());
+}
+
 TEST_F(MapViewTest, FirstLayerFitsTheViewWhenTheViewportHasASize)
 {
     ASSERT_TRUE(_view.Resize(200, 100));
