@@ -351,6 +351,14 @@ request filtered scenes. Alternate-size draws use the live scene; filtered
 direct-host scenes are therefore valid only through the live viewport. Hosts
 that draw a different viewport must supply complete prepared scenes.
 
+`IMapWinGISControlProjection` is a separate dispatch interface for coordinate
+reference system access. It reports the map and layer projections and their
+EPSG codes. It can probe a dataset before load, set or clear the map
+projection, and set or clear one layer's display projection. The OCX
+translates WKT and COM errors. Core still owns projection matching,
+transformation, and map state. A host owns a projection mismatch prompt
+because that choice is an application policy.
+
 Rendering consumes backend-neutral input prepared from core data; neither the
 coordinator nor a backend loads datasets or implements GIS rules. For each
 visible map layer, Core sequentially reads Polygon, MultiPolygon,
@@ -524,9 +532,9 @@ COM property reads do not scan datasets or rebuild the scene. `FitToMap`,
 `ZoomToLayer`, `ZoomIn`, `ZoomOut`, `ZoomAt`, and `Pan` forward navigation to
 the control's one `MapView` and request a redraw only when its view changes.
 Each successful load still fits the view to the combined map extent. Raster
-layers and other geometry types are not rendered. Core can assign each map
-layer a display projection, but the current ActiveX automation surface does
-not expose this operation and loads layers in their source coordinates.
+layers and other geometry types are not rendered. Hosts can use
+`IMapWinGISControlProjection` to reproject a loaded layer for display. This
+operation does not change the source dataset.
 
 For direct `CreateVectorRenderScene` and `CreateMapRenderScene` calls, Core
 prepares and retains the complete supported polygon scene in memory. `MapView`

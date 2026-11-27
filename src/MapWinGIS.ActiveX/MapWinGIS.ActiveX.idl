@@ -180,6 +180,62 @@ library MapWinGISActiveXLib
             [out] SAFEARRAY(BSTR)* warnings);
     };
 
+    [
+        object,
+        dual,
+        oleautomation,
+        uuid(26717861-E47D-4326-9414-FCF2E904B70D),
+        pointer_default(unique)
+    ]
+    interface IMapWinGISControlProjection : IDispatch
+    {
+        [propget, id(1)]
+        HRESULT MapProjection([out, retval] BSTR* wkt);
+
+        [propput, id(1)]
+        HRESULT MapProjection([in] BSTR wkt);
+
+        [propget, id(2)]
+        HRESULT MapEpsg([out, retval] LONG* epsg);
+
+        // Reports the source CRS, independent of display-only reprojection.
+        [id(3)]
+        HRESULT LayerProjection(
+            [in] hyper layerId,
+            [out, retval] BSTR* wkt);
+
+        // Reports the source EPSG code, or -1 when it is unavailable.
+        [id(4)]
+        HRESULT LayerEpsg(
+            [in] hyper layerId,
+            [out, retval] LONG* epsg);
+
+        [id(5)]
+        HRESULT ProbeVectorProjection(
+            [in] BSTR path,
+            [out] LONG* epsg,
+            [out] BSTR* wkt,
+            [out] VARIANT_BOOL* matchesMapProjection);
+
+        [id(6)]
+        HRESULT ReprojectLayer([in] hyper layerId);
+
+        [id(7)]
+        HRESULT ClearLayerReprojection([in] hyper layerId);
+
+        // Returns empty when the layer has no explicit display reprojection.
+        [id(8)]
+        HRESULT LayerDisplayProjection(
+            [in] hyper layerId,
+            [out, retval] BSTR* wkt);
+
+        // Returns -1 when the layer has no explicit display reprojection.
+        [id(9)]
+        HRESULT LayerDisplayEpsg(
+            [in] hyper layerId,
+            [out, retval] LONG* epsg);
+    };
+
     // Keep event notifications separate from the control's automation
     // interfaces.
     [
@@ -207,6 +263,7 @@ library MapWinGISActiveXLib
     {
         [default] interface IMapWinGISControl5;
         interface IMapWinGISControlGdal;
+        interface IMapWinGISControlProjection;
         [default, source] dispinterface IMapWinGISControlEvents;
     };
 };

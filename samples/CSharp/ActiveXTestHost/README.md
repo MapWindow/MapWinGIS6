@@ -28,8 +28,20 @@ The host activates the control through its application manifest. It does not req
 Select `Open` to choose one or more vector datasets. You can also drag files onto the host. Each dataset adds its first layer to the list.
 
 The list shows each layer name, feature count, stable ID, and source path. Select a layer and choose `Layer` to fit that layer. Choose `Map` to fit all layers. Choose `Clear` to remove all layers.
+The layer tooltip shows its EPSG code when the dataset provides one.
+The status bar shows the map EPSG code.
 
 Available file formats depend on the GDAL drivers in the build. The host does not display raster datasets.
+
+Before an interactive load, the host probes the dataset projection. If the map
+has another projection, a dialog offers three choices:
+
+1. Reproject the layer to the map projection for display.
+2. Load the layer in its source coordinates.
+3. Cancel the load.
+
+The dialog belongs to the host. The ActiveX control only exposes projection
+facts and display operations.
 
 ## Test navigation
 
@@ -69,8 +81,12 @@ Run automated mode from an interactive Windows desktop session:
 pwsh -File samples\CSharp\ActiveXTestHost\Run-ActiveXTestHost.ps1 -Configuration Debug -Platform x64 -Automated
 ```
 
-The host writes individual results to `bin\Debug\x64\ActiveXTestHost-results.json`. It checks dataset loading, layer IDs and counts, map navigation, clearing and reloading, invalid input, resizing, and rendering. A watchdog stops the run after 30 seconds. Use `-TimeoutSeconds` to set a value from 5 to 300 seconds.
+The host writes individual results to `bin\Debug\x64\ActiveXTestHost-results.json`. It checks dataset loading, layer IDs and counts, map navigation, clearing and reloading, invalid input, resizing, projection automation, and rendering. Automated mode does not open the projection mismatch dialog. A watchdog stops the run after 30 seconds. Use `-TimeoutSeconds` to set a value from 5 to 300 seconds.
 
 ## Limitations
 
-The host loads only the first layer from each dataset. It does not implement raster display, projections, vector editing, or tile services. Automated checks require Windows and an interactive desktop session. The host does not provide a manual rendering-backend selector.
+The host loads only the first layer from each dataset. Reprojection changes
+display coordinates only. It does not edit the source data. The host does not
+implement raster display, vector editing, or tile services. Automated checks
+require Windows and an interactive desktop session. The host does not provide
+a manual rendering-backend selector.

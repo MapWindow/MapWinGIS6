@@ -29,6 +29,8 @@ reference systems. Vector layers report that value, and a map adopts and keeps
 the first available layer projection until a host explicitly changes it.
 Individual map layers can also use an on-the-fly display projection. Core
 transforms render scenes and extents without changing their source datasets.
+The ActiveX control exposes WKT and EPSG values, dataset projection probes,
+and display reprojection through `IMapWinGISControlProjection`.
 
 The core also supports a shared map viewport with pan, center zoom, anchored
 zoom, and fitting to the visible map or a named layer. These navigation calls

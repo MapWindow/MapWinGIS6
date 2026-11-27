@@ -149,6 +149,16 @@ namespace mwg
         return _impl->_viewport;
     }
 
+    void MapView::SetProjection(mwg::Projection projection)
+    {
+        _impl->_map.SetProjection(std::move(projection));
+    }
+
+    void MapView::ClearProjection() noexcept
+    {
+        _impl->_map.ClearProjection();
+    }
+
     LayerId MapView::AddLayer(std::shared_ptr<VectorDataset> dataset, const int layerIndex)
     {
         const std::optional<mwg::Projection> previousProjection =

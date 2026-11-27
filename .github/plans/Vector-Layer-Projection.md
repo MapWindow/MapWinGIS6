@@ -10,7 +10,11 @@ complete when its acceptance criteria have been met and its PR is ready.
   - Reprojection remains display-only; source-coordinate editing and on-disk
     geometry changes are intentionally out of scope.
   - ActiveX projection operations and the host mismatch prompt remain Phase 3.
-- [ ] **Phase 3 – ActiveX projection interface + test-host prompt and EPSG status bar** (PR 3)
+- [x] **Phase 3 – ActiveX projection interface + test-host prompt and EPSG status bar** (PR 3)
+  - Projection mismatch UI belongs to the test host. Reprojection remains
+    display-only and never rewrites source data.
+  - The automated host run stays non-interactive. Its generated EPSG:28992
+    shapefile verifies probe, map, layer, and status-bar reporting.
 
 **Target branch:** `development`
 
@@ -243,11 +247,14 @@ dispatch interface, not a version bump of the core contract.
 
 - `MapProjection` (propget/put, BSTR WKT, `""` when unknown) and `MapEpsg`
   (propget, LONG, -1 when unknown).
-- `LayerProjection(LONGLONG layerId)` → BSTR WKT; `LayerEpsg(LONGLONG)` →
-  LONG.
-- `ProbeVectorProjection(BSTR path, LONG* epsg, BSTR* wkt)`: opens the
-  dataset read-only, reports its projection, closes it — lets a host decide
-  before committing a load.
+- `LayerProjection(LONGLONG layerId)` → source BSTR WKT;
+  `LayerEpsg(LONGLONG)` → source LONG. `LayerDisplayProjection` /
+  `LayerDisplayEpsg` report only an explicit display reprojection and return
+  an empty value / -1 otherwise.
+- `ProbeVectorProjection(BSTR path, LONG* epsg, BSTR* wkt,
+  VARIANT_BOOL* matchesMapProjection)`: opens the dataset read-only, reports
+  its projection, and uses Core's CRS identity rules to compare it with the
+  map projection before a host commits a load.
 - `ReprojectLayer(LONGLONG layerId)` / `ClearLayerReprojection(LONGLONG)`:
   drive `Map::SetLayerDisplayProjection` / `ClearLayerDisplayProjection`
   (Phase 2).

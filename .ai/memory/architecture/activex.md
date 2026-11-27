@@ -15,6 +15,10 @@ remain in Core.
   vector loading to `IMapWinGISControl4`; the independent generic GDAL
   capability uses `IMapWinGISControlGdal`, and both operations use the
   separate `IMapWinGISControlEvents` dispinterface.
+- Projection facts and operations use the independent
+  `IMapWinGISControlProjection` dispatch interface. It maps WKT and EPSG values
+  between COM and Core. Hosts own mismatch prompts. The OCX never owns that
+  user-policy decision.
 - These are new v6 interfaces, not the MapWinGIS 5 type-library contracts.
   The current control does not claim v5 binary compatibility.
 - Keep COM conversions and COM error translation at this boundary. Core
@@ -94,10 +98,9 @@ exist only when `MWG_ACTIVEX_TEST_HOOKS` is defined
 ## Current limits
 
 The control exposes a deliberately small v6 automation API. It does not expose
-the broad MapWinGIS 5 map, layer, shape, event, or editing surface. Core can
-build scenes in an independently selected layer display projection, but the
-control currently leaves its loaded scenes in source coordinates because the
-projection automation surface is not implemented. Backend support differs: GDI
+the broad MapWinGIS 5 map, layer, shape, event, or editing surface. Projection
+automation can probe, report, and change display projections, but it does not
+write transformed source data. Backend support differs: GDI
 draws the original rings with an alternate fill rule,
 while OpenGL fill draws require triangle meshes. Normal Core scene
 creation is mesh-free; OpenGL fills prepare missing meshes lazily and fall

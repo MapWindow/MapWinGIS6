@@ -36,6 +36,7 @@ internal sealed class MainForm : Form
     private readonly ToolStripStatusLabel _coreStatusLabel;
     private readonly ToolStripStatusLabel _layerCountLabel;
     private readonly ToolStripStatusLabel _featureCountLabel;
+    private readonly ToolStripStatusLabel _epsgLabel;
     private readonly ToolStripStatusLabel _backendLabel;
     private readonly ToolStripStatusLabel _renderingStatusLabel;
     private readonly ToolStripStatusLabel _timingLabel;
@@ -49,7 +50,7 @@ internal sealed class MainForm : Form
     private readonly CancellationTokenSource _watchdogCancellation = new();
     private readonly string _testDatasetDirectory =
         Path.Combine(Path.GetTempPath(), $"MapWinGIS.ActiveXTestHost-{Guid.NewGuid():N}");
-    private string TestDatasetPath => Path.Combine(_testDatasetDirectory, "sample.geojson");
+    private string TestDatasetPath => Path.Combine(_testDatasetDirectory, "sample.shp");
     private string TestRasterPath => Path.Combine(_testDatasetDirectory, "sample.asc");
     private string TestRasterOutputPath => Path.Combine(_testDatasetDirectory, "sample.tif");
     private ActiveXHostControl? _host;
@@ -147,6 +148,7 @@ internal sealed class MainForm : Form
         _coreStatusLabel = new ToolStripStatusLabel("Core: starting");
         _layerCountLabel = new ToolStripStatusLabel("Layers: 0");
         _featureCountLabel = new ToolStripStatusLabel("Features: 0");
+        _epsgLabel = new ToolStripStatusLabel("EPSG: -");
         _backendLabel = new ToolStripStatusLabel("Backend: unavailable");
         _renderingStatusLabel = new ToolStripStatusLabel("Rendering: starting")
         {
@@ -161,6 +163,8 @@ internal sealed class MainForm : Form
             _layerCountLabel,
             new ToolStripStatusLabel("|"),
             _featureCountLabel,
+            new ToolStripStatusLabel("|"),
+            _epsgLabel,
             new ToolStripStatusLabel("|"),
             _backendLabel,
             new ToolStripStatusLabel("|"),
@@ -252,6 +256,9 @@ internal sealed class MainForm : Form
                 RefreshStatus();
             });
             RecordCheck("Load vector layer", LoadTestLayer);
+            RecordCheck(
+                "Projection automation",
+                VerifyProjectionAutomation);
             RecordCheck("Invalid dataset handling", VerifyInvalidDatasetHandling);
             await RecordCheckAsync("GDAL COM event sinks", VerifyGdalEventSinksAsync);
             RecordCheck("Rendering backends", VerifyRenderingBackendsWhereSupported);
@@ -341,33 +348,7 @@ internal sealed class MainForm : Form
     private void CreateTestDataset()
     {
         Directory.CreateDirectory(_testDatasetDirectory);
-        File.WriteAllText(
-            TestDatasetPath,
-            """
-            {
-              "type": "FeatureCollection",
-              "name": "sample",
-              "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-              "features": [
-                {
-                  "type": "Feature",
-                  "properties": { "id": 1, "name": "west" },
-                  "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [[[0, 0], [1.5, 0], [1.5, 2], [0, 2], [0, 0]]]
-                  }
-                },
-                {
-                  "type": "Feature",
-                  "properties": { "id": 2, "name": "east" },
-                  "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [[[2.5, 0], [4, 0], [4, 2], [2.5, 2], [2.5, 0]]]
-                  }
-                }
-              ]
-            }
-            """);
+        ShapefileFixture.Write(TestDatasetPath);
 
         var raster = new StringBuilder();
         raster.AppendLine("ncols 512");
@@ -631,12 +612,48 @@ internal sealed class MainForm : Form
         var item = new ListViewItem(layer.Name)
         {
             Tag = layer,
-            ToolTipText = layer.Path
+            ToolTipText = GetLayerToolTip(layer)
         };
         item.SubItems.Add(layer.FeatureCount?.ToString() ?? "unavailable");
         item.SubItems.Add(layer.Id.ToString());
         _layerList.Items.Add(item);
         return item;
+    }
+
+    private string GetLayerToolTip(LoadedLayer layer)
+    {
+        if (_host?.AutomationObject is object automationObject)
+        {
+            try
+            {
+                var projection =
+                    (IMapWinGISControlProjection)automationObject;
+                int epsg = projection.LayerDisplayEpsg(layer.Id);
+                if (epsg < 0)
+                {
+                    epsg = projection.LayerEpsg(layer.Id);
+                }
+                return epsg >= 0
+                    ? $"{layer.Path}\nEPSG: {epsg}"
+                    : $"{layer.Path}\nEPSG: unknown";
+            }
+            catch (COMException)
+            {
+            }
+        }
+        return layer.Path;
+    }
+
+    private void RefreshLayerToolTip(LoadedLayer layer)
+    {
+        foreach (ListViewItem item in _layerList.Items)
+        {
+            if (item.Tag is LoadedLayer { Id: long id } && id == layer.Id)
+            {
+                item.ToolTipText = GetLayerToolTip(layer);
+                return;
+            }
+        }
     }
 
     private async void OpenVectorDatasets()
@@ -683,7 +700,28 @@ internal sealed class MainForm : Form
             {
                 try
                 {
-                    await AddVectorDatasetAsync(path, warnings);
+                    if (_host?.AutomationObject is not object automationObject)
+                    {
+                        throw new InvalidOperationException(
+                            "The ActiveX automation object is unavailable.");
+                    }
+
+                    var projection =
+                        (IMapWinGISControlProjection)automationObject;
+                    ProjectionMismatchChoice choice =
+                        ChooseProjectionMismatch(path, projection);
+                    if (choice == ProjectionMismatchChoice.Cancel)
+                    {
+                        continue;
+                    }
+
+                    LoadedLayer layer =
+                        await AddVectorDatasetAsync(path, warnings);
+                    if (choice == ProjectionMismatchChoice.Reproject)
+                    {
+                        projection.ReprojectLayer(layer.Id);
+                        RefreshLayerToolTip(layer);
+                    }
                 }
                 catch (Exception exception)
                 {
@@ -722,6 +760,67 @@ internal sealed class MainForm : Form
                 MessageBoxIcon.Warning);
         }
         return null;
+    }
+
+    private ProjectionMismatchChoice ChooseProjectionMismatch(
+        string path,
+        IMapWinGISControlProjection projection)
+    {
+        projection.ProbeVectorProjection(
+            path,
+            out int layerEpsg,
+            out string layerWkt,
+            out bool sameProjection);
+        string mapWkt = projection.MapProjection;
+        if (string.IsNullOrWhiteSpace(mapWkt) ||
+            string.IsNullOrWhiteSpace(layerWkt))
+        {
+            return ProjectionMismatchChoice.LoadAsIs;
+        }
+
+        int mapEpsg = projection.MapEpsg;
+        if (sameProjection)
+        {
+            return ProjectionMismatchChoice.LoadAsIs;
+        }
+        if (_options.Automated)
+        {
+            return ProjectionMismatchChoice.LoadAsIs;
+        }
+
+        using var dialog = new ProjectionMismatchDialog(
+            Path.GetFileName(path),
+            DescribeProjection(layerEpsg, layerWkt),
+            DescribeProjection(mapEpsg, mapWkt));
+        return dialog.ShowDialog(this) == DialogResult.OK
+            ? dialog.Choice
+            : ProjectionMismatchChoice.Cancel;
+    }
+
+    private static string DescribeProjection(int epsg, string wkt)
+    {
+        int openingQuote = wkt.IndexOf("[\"", StringComparison.Ordinal);
+        string? name = null;
+        if (openingQuote >= 0)
+        {
+            int nameStart = openingQuote + 2;
+            int nameEnd = wkt.IndexOf('"', nameStart);
+            if (nameEnd > nameStart)
+            {
+                name = wkt[nameStart..nameEnd];
+            }
+        }
+        if (epsg >= 0)
+        {
+            return name is null
+                ? $"EPSG: {epsg}"
+                : $"{name} (EPSG: {epsg})";
+        }
+        if (name is not null)
+        {
+            return $"{name} (EPSG: unknown)";
+        }
+        return "Unknown (EPSG: -)";
     }
 
     private void ClearLayers()
@@ -1073,6 +1172,7 @@ internal sealed class MainForm : Form
             _coreStatusLabel.Text = "Core: inactive";
             _layerCountLabel.Text = $"Layers: {_layerList.Items.Count}";
             _featureCountLabel.Text = "Features: unavailable";
+            _epsgLabel.Text = "EPSG: -";
             _backendLabel.Text = "Backend: unavailable";
             _renderingStatusLabel.Text = "Rendering: control is not active.";
             return;
@@ -1084,6 +1184,10 @@ internal sealed class MainForm : Form
             : "Core: not initialized";
         _layerCountLabel.Text = $"Layers: {(int)automation.LayerCount}";
         _featureCountLabel.Text = $"Features: {(long)automation.FeatureCount}";
+        var projection = (IMapWinGISControlProjection)automationObject;
+        _epsgLabel.Text = projection.MapEpsg >= 0
+            ? $"EPSG: {projection.MapEpsg}"
+            : "EPSG: -";
         _backendLabel.Text = $"Backend: {(string)automation.RenderingBackend}";
         _renderingStatusLabel.Text = $"Rendering: {(string)automation.RenderingStatus}";
     }
@@ -1144,6 +1248,44 @@ internal sealed class MainForm : Form
             throw new InvalidOperationException(
                 $"The ActiveX control reported CoreInitialized=false after {activation}.");
         }
+    }
+
+    private void VerifyProjectionAutomation()
+    {
+        if (_host?.AutomationObject is not object automationObject)
+        {
+            throw new InvalidOperationException(
+                "The ActiveX automation object is unavailable.");
+        }
+
+        var projection = (IMapWinGISControlProjection)automationObject;
+        dynamic automation = automationObject;
+        long layerId = (long)automation.GetLayerId(0);
+        projection.ProbeVectorProjection(
+            TestDatasetPath,
+            out int probedEpsg,
+            out string probedWkt,
+            out bool matchesMapProjection);
+        if (probedEpsg != 28992)
+            throw new InvalidOperationException($"ProbeVectorProjection returned EPSG:{probedEpsg}.");
+        if (string.IsNullOrWhiteSpace(probedWkt))
+            throw new InvalidOperationException("ProbeVectorProjection returned no WKT.");
+        if (!matchesMapProjection)
+            throw new InvalidOperationException("ProbeVectorProjection did not match the map CRS.");
+        if (projection.MapEpsg != 28992)
+            throw new InvalidOperationException($"MapEpsg returned EPSG:{projection.MapEpsg}.");
+        if (projection.LayerEpsg(layerId) != 28992)
+            throw new InvalidOperationException($"LayerEpsg returned EPSG:{projection.LayerEpsg(layerId)}.");
+        if (projection.LayerDisplayEpsg(layerId) != -1)
+            throw new InvalidOperationException("A non-reprojected layer reported a display EPSG.");
+        if (string.IsNullOrWhiteSpace(projection.MapProjection))
+            throw new InvalidOperationException("MapProjection returned no WKT.");
+        if (string.IsNullOrWhiteSpace(projection.LayerProjection(layerId)))
+            throw new InvalidOperationException("LayerProjection returned no source WKT.");
+        if (!string.IsNullOrWhiteSpace(projection.LayerDisplayProjection(layerId)))
+            throw new InvalidOperationException("A non-reprojected layer reported display WKT.");
+        if (_epsgLabel.Text != "EPSG: 28992")
+            throw new InvalidOperationException($"The EPSG label was '{_epsgLabel.Text}'.");
     }
 
     private void VerifyRenderingBackendsWhereSupported()
