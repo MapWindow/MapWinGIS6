@@ -22,10 +22,12 @@
 #include <ogr_api.h>
 #include <ogrsf_frmts.h>
 
+#include "internal/CoordinateMetadata.h"
 #include "internal/Utf8.h"
 #include "internal/VectorLayerAccess.h"
 #include "mapwingis/core/Error.h"
 #include "mapwingis/diagnostics/PerformanceDiagnostics.h"
+#include "mapwingis/gdal/GdalDiagnostics.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
 
 namespace mwg
@@ -140,6 +142,61 @@ namespace mwg
 
         constexpr std::size_t kMaxWktExcerptBytes = 200;
 
+        bool IsUndefinedGeoPackageSrs(
+            GDALDataset& dataset, OGRLayer& layer, const GdalErrorScope& diagnostics)
+        {
+            const GDALDriver* driver = dataset.GetDriver();
+            if (driver == nullptr ||
+                std::string_view(driver->GetDescription()) != "GPKG")
+            {
+                return false;
+            }
+
+            const char* const layerName = layer.GetName();
+            if (layerName == nullptr)
+            {
+                return false;
+            }
+
+            std::string escapedName(layerName);
+            std::size_t quote = escapedName.find('\'');
+            while (quote != std::string::npos)
+            {
+                escapedName.replace(quote, 1, "''");
+                quote = escapedName.find('\'', quote + 2);
+            }
+            const std::string sql =
+                "SELECT srs_id FROM gpkg_geometry_columns WHERE table_name = '" +
+                escapedName + "'";
+            const auto release = [&dataset](OGRLayer* result)
+            {
+                if (result != nullptr)
+                {
+                    dataset.ReleaseResultSet(result);
+                }
+            };
+            CPLErrorReset();
+            std::unique_ptr<OGRLayer, decltype(release)> result(
+                dataset.ExecuteSQL(sql.c_str(), nullptr, nullptr), release);
+            diagnostics.RethrowCaptureException();
+            if (result == nullptr || CPLGetLastErrorType() >= CE_Failure)
+            {
+                throw CoreError("Cannot read GeoPackage layer SRS ID");
+            }
+            const OGRFeatureUniquePtr feature(result->GetNextFeature());
+            diagnostics.RethrowCaptureException();
+            if (CPLGetLastErrorType() >= CE_Failure)
+            {
+                throw CoreError("Cannot read GeoPackage layer SRS ID");
+            }
+            if (feature == nullptr)
+            {
+                return false;
+            }
+            const GIntBig srsId = feature->GetFieldAsInteger64(0);
+            return srsId == -1 || srsId == 0;
+        }
+
         std::string WktExcerpt(const std::string_view wkt)
         {
             if (wkt.size() <= kMaxWktExcerptBytes)
@@ -172,6 +229,15 @@ namespace mwg
                 for (int i = 0; i < defn->GetFieldCount(); ++i)
                     _fields.push_back(ToFieldInfo(*defn->GetFieldDefn(i)));
             }
+        }
+
+        [[nodiscard]] mwg::Projection GetProjection() const
+        {
+            if (!_projection.has_value())
+            {
+                _projection = ReadProjection();
+            }
+            return *_projection;
         }
 
         /// Borrowed pointer, valid until the next call. Throws when the index is
@@ -459,6 +525,8 @@ namespace mwg
         mutable std::int64_t _cachedIndex = -1;
         mutable std::optional<std::int64_t> _featureCount;
         mutable std::optional<Extent> _extent;
+        [[nodiscard]] mwg::Projection ReadProjection() const;
+        mutable std::optional<mwg::Projection> _projection;
         mutable bool _extentNeedsExactRecalculation = false;
         mutable bool _storedExtentDirty = false;
     };
@@ -716,21 +784,45 @@ namespace mwg
         return -1;
     }
 
-    std::string VectorLayer::ProjectionWkt() const
+    Projection VectorLayer::Impl::ReadProjection() const
     {
-        const OGRSpatialReference* srs = _impl->_layer->GetSpatialRef();
-        if (srs == nullptr) return {};
-
-        char* wkt = nullptr;
-        if (srs->exportToWkt(&wkt) != OGRERR_NONE || wkt == nullptr)
+        const GdalErrorScope diagnostics;
+        CPLErrorReset();
+        const OGRSpatialReference* srs = _layer->GetSpatialRef();
+        diagnostics.RethrowCaptureException();
+        if (CPLGetLastErrorType() >= CE_Failure)
         {
-            CPLFree(wkt);
+            throw CoreError("Cannot read vector layer spatial reference");
+        }
+        if (srs == nullptr ||
+            IsUndefinedGeoPackageSrs(_dataset, *_layer, diagnostics))
+        {
             return {};
         }
 
-        std::string result(wkt);
-        CPLFree(wkt);
-        return result;
+        char* wkt = nullptr;
+        static constexpr const char* options[] = {"FORMAT=WKT2_2019", nullptr};
+        const OGRErr exported = srs->exportToWkt(&wkt, options);
+        const std::unique_ptr<char, decltype([](char* text) { CPLFree(text); })> text(wkt);
+        diagnostics.RethrowCaptureException();
+        if (exported != OGRERR_NONE || text == nullptr)
+        {
+            throw CoreError("Cannot export vector layer projection");
+        }
+
+        const std::optional<mwg::Projection> projection =
+            mwg::Projection::TryFromWkt(
+                detail::AddCoordinateMetadata(text.get(), srs->GetCoordinateEpoch()));
+        if (!projection.has_value())
+        {
+            throw CoreError("Cannot read vector layer projection");
+        }
+        return *projection;
+    }
+
+    Projection VectorLayer::Projection() const
+    {
+        return _impl->GetProjection();
     }
 
     bool VectorLayer::IsCellNull(const int fieldIndex, const std::int64_t featureIndex) const

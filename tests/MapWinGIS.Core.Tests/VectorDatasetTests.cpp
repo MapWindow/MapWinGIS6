@@ -9,6 +9,11 @@
  */
 #include <gtest/gtest.h>
 
+#include <fstream>
+#include <optional>
+#include <stdexcept>
+#include <string_view>
+
 #include <gdal_priv.h>
 #include <ogrsf_frmts.h>
 
@@ -23,12 +28,6 @@ using namespace mwg::test;
 
 namespace
 {
-    std::string ToUtf8(const std::filesystem::path& path)
-    {
-        const std::u8string utf8 = path.u8string();
-        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
-    }
-
     class FlushFailureDataset : public GDALDataset
     {
     public:
@@ -69,6 +68,38 @@ TEST_F(VectorDatasetTest, ReportsTheDriverAndPath)
 {
     EXPECT_EQ(_dataset->DriverName(), "ESRI Shapefile");
     EXPECT_EQ(_dataset->Path(), _shp);
+}
+
+TEST(VectorDataset, ReadsLayerProjectionOnlyOnceEvenWhenUndefined)
+{
+    for (const int epsg : {0, 4326})
+    {
+        SCOPED_TRACE(epsg);
+        VectorReadTestDriver driver;
+        driver.projectionEpsg = epsg;
+        const auto dataset = VectorDataset::Open(VectorReadTestDriver::kPath);
+        const VectorLayer& layer = dataset->Layer(0);
+        const int initialReads = driver.projectionReads;
+
+        EXPECT_EQ(layer.Projection().Epsg().value_or(0), epsg);
+        EXPECT_EQ(layer.Projection().Epsg().value_or(0), epsg);
+        EXPECT_EQ(driver.projectionReads, initialReads + 1);
+    }
+}
+
+TEST_F(VectorDatasetTest, DoesNotConsumeAnUnrelatedGdalLoggerException)
+{
+    GdalEnvironment::SetLogHandler([](LogLevel, std::string_view)
+    {
+        throw std::runtime_error("Logger failed during a separate GDAL operation");
+    });
+    CPLError(CE_Warning, CPLE_AppDefined, "%s", "Unrelated GDAL warning");
+    GdalEnvironment::SetLogHandler({});
+
+    std::optional<int> epsg;
+    EXPECT_NO_THROW(epsg = _layer->Projection().Epsg());
+    EXPECT_EQ(epsg, 28992);
+    EXPECT_THROW(GdalEnvironment::RethrowLogException(), std::runtime_error);
 }
 
 TEST_F(VectorDatasetTest, HasOneLayer)
@@ -168,9 +199,111 @@ TEST_F(VectorDatasetTest, ReportsPerFeatureExtents)
 
 TEST_F(VectorDatasetTest, ReportsTheProjection)
 {
-    const std::string wkt = _layer->ProjectionWkt();
-    ASSERT_FALSE(wkt.empty());
-    EXPECT_NE(wkt.find("Amersfoort"), std::string::npos) << wkt;
+    const Projection projection = _layer->Projection();
+    EXPECT_FALSE(projection.IsEmpty());
+    EXPECT_EQ(projection.Epsg(), Provinces::kEpsg);
+    EXPECT_NE(projection.ExportToWkt().find("Amersfoort"), std::string::npos);
+}
+
+TEST(VectorDataset, ReportsWgs84ForRfc7946GeoJsonWithoutCrsMember)
+{
+    const TempDirectory dir;
+    const std::unique_ptr<VectorDataset> dataset =
+        VectorDataset::Open(MakeRfc7946GeoJson(dir.Path(), "rfc7946.geojson"));
+
+    ASSERT_EQ(dataset->LayerCount(), 1);
+    const Projection projection = dataset->Layer(0).Projection();
+    EXPECT_EQ(projection.Epsg(), 4326);
+}
+
+TEST(VectorDataset, ReadsEscapedGeoJsonCrsMember)
+{
+    const TempDirectory dir;
+    const std::filesystem::path path = dir.Path() / "escaped-key.geojson";
+    std::ofstream file(path, std::ios::binary);
+    ASSERT_TRUE(file.is_open());
+    file << R"({"type":"FeatureCollection","cr\u0073":{"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::3857"}},"features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]})";
+    file.close();
+
+    const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+    const Projection projection = dataset->Layer(0).Projection();
+    EXPECT_EQ(projection.Epsg(), 3857);
+}
+
+TEST(VectorDataset, ReportsEmptyProjectionForReservedGeoPackageSrsIds)
+{
+    for (const int srsId : {-1, 0})
+    {
+        SCOPED_TRACE(srsId);
+        const TempDirectory dir;
+        const std::vector<Extent> rectangles{{0, 0, 1, 1}};
+        const std::filesystem::path path =
+            MakeRectanglesDataset(dir.Path(), "undefined.gpkg", rectangles);
+        SetGeoPackageSrsId(path, srsId);
+
+        const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+        EXPECT_TRUE(dataset->Layer(0).Projection().IsEmpty());
+    }
+}
+
+TEST(VectorDataset, PreservesGeoPackageCoordinateEpoch)
+{
+    GdalEnvironment::Initialize();
+    const TempDirectory dir;
+    const std::filesystem::path path = dir.Path() / "dynamic.gpkg";
+    GDALDriver* const driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+    ASSERT_NE(driver, nullptr);
+    GDALDatasetUniquePtr creator(
+        driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+    ASSERT_NE(creator, nullptr);
+
+    OGRSpatialReference dynamic;
+    ASSERT_EQ(dynamic.importFromEPSG(7912), OGRERR_NONE);
+    dynamic.SetCoordinateEpoch(2020.5);
+    ASSERT_NE(creator->CreateLayer("dynamic", &dynamic, wkbPoint), nullptr);
+    creator.reset();
+
+    GDALDatasetUniquePtr raw(
+        GDALDataset::Open(ToUtf8(path).c_str(), GDAL_OF_VECTOR));
+    ASSERT_NE(raw, nullptr);
+    const OGRSpatialReference* const rawSrs = raw->GetLayer(0)->GetSpatialRef();
+    ASSERT_NE(rawSrs, nullptr);
+    EXPECT_DOUBLE_EQ(rawSrs->GetCoordinateEpoch(), 2020.5);
+    raw.reset();
+
+    const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+    const std::string exported = dataset->Layer(0).Projection().ExportToWkt();
+    ASSERT_TRUE(exported.starts_with("COORDINATEMETADATA["));
+    EXPECT_NE(exported.find("EPOCH[2020.5]"), std::string::npos);
+
+    OGRSpatialReference independent;
+    const char* text = exported.c_str();
+    ASSERT_EQ(independent.importFromWkt(&text), OGRERR_NONE);
+    EXPECT_DOUBLE_EQ(independent.GetCoordinateEpoch(), 2020.5);
+    EXPECT_NE(Projection::FromWkt(exported).ExportToWkt().find("EPOCH[2020.5]"),
+              std::string::npos);
+}
+
+TEST(VectorDataset, UsesGeoPackageSrsIdNotAReservedNameToDetectUndefinedCrs)
+{
+    GdalEnvironment::Initialize();
+    const TempDirectory dir;
+    const std::filesystem::path path = dir.Path() / "named.gpkg";
+    GDALDriver* const driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+    ASSERT_NE(driver, nullptr);
+    GDALDatasetUniquePtr creator(
+        driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+    ASSERT_NE(creator, nullptr);
+
+    OGRSpatialReference named;
+    ASSERT_EQ(named.importFromEPSG(28992), OGRERR_NONE);
+    ASSERT_EQ(named.SetProjCS("Undefined Cartesian SRS"), OGRERR_NONE);
+    ASSERT_EQ(named.SetAuthority("PROJCS", "PRIVATE", 10001), OGRERR_NONE);
+    ASSERT_NE(creator->CreateLayer("named", &named, wkbPolygon), nullptr);
+    creator.reset();
+
+    const std::unique_ptr<VectorDataset> dataset = VectorDataset::Open(path);
+    EXPECT_FALSE(dataset->Layer(0).Projection().IsEmpty());
 }
 
 TEST(VectorDataset, ReportsMissingFiles)

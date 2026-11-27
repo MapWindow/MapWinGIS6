@@ -278,10 +278,10 @@ TEST_P(VectorLayerTest, ReadsDatesAsText)
 
 TEST_P(VectorLayerTest, ReportsTheProjection)
 {
-    const std::string wkt = _layer->ProjectionWkt();
-    ASSERT_FALSE(wkt.empty());
-    EXPECT_NE(wkt.find("Amersfoort"), std::string::npos) << wkt;
-    EXPECT_NE(wkt.find("28992"), std::string::npos) << wkt;
+    const Projection projection = _layer->Projection();
+    EXPECT_FALSE(projection.IsEmpty());
+    EXPECT_EQ(projection.Epsg(), Provinces::kEpsg);
+    EXPECT_NE(projection.ExportToWkt().find("Amersfoort"), std::string::npos);
 }
 
 TEST_P(VectorLayerTest, ReadsGeometry)

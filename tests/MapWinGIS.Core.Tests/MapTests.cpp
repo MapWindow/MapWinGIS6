@@ -77,6 +77,106 @@ TEST_F(MapTest, AddsLayersWithDistinctValidIdentities)
     EXPECT_TRUE(_map.Layer(0).IsVisible());
 }
 
+TEST_F(MapTest, AdoptsTheFirstProjectedLayerProjection)
+{
+    const std::shared_ptr<VectorDataset> dataset =
+        VectorDataset::Open(MakeSampleShapefile(_directory.Path()));
+
+    (void)_map.AddLayer(dataset);
+
+    ASSERT_TRUE(_map.Projection().has_value());
+    EXPECT_TRUE(_map.Projection()->IsSame(dataset->Layer(0).Projection()));
+    EXPECT_EQ(_map.Projection()->Epsg(), 28992);
+}
+
+TEST_F(MapTest, DoesNotAdoptFromAProjectionlessLayer)
+{
+    (void)_map.AddLayer(OpenRectangles({{0, 0, 1, 1}}));
+
+    EXPECT_FALSE(_map.Projection().has_value());
+
+    const std::shared_ptr<VectorDataset> projected =
+        VectorDataset::Open(MakeSampleShapefile(_directory.Path()));
+    (void)_map.AddLayer(projected);
+    ASSERT_TRUE(_map.Projection().has_value());
+    EXPECT_EQ(_map.Projection()->Epsg(), 28992);
+}
+
+TEST_F(MapTest, DoesNotAdoptReservedUndefinedGeoPackageProjections)
+{
+    for (const int srsId : {-1, 0})
+    {
+        SCOPED_TRACE(srsId);
+        const std::vector<Extent> rectangles{{0, 0, 1, 1}};
+        const std::filesystem::path path =
+            MakeRectanglesDataset(_directory.Path(), "undefined-" +
+                                   std::to_string(srsId) + ".gpkg", rectangles);
+        SetGeoPackageSrsId(path, srsId);
+
+        Map map;
+        (void)map.AddLayer(VectorDataset::Open(path));
+        EXPECT_FALSE(map.Projection().has_value());
+
+        (void)map.AddLayer(
+            VectorDataset::Open(MakeSampleShapefile(
+                _directory.Path(), "projected-" + std::to_string(srsId))));
+        ASSERT_TRUE(map.Projection().has_value());
+        EXPECT_EQ(map.Projection()->Epsg(), 28992);
+    }
+}
+
+TEST(MapProjection, AddsLayerWithUnreadableProjectionWithoutAdoptingIt)
+{
+    VectorReadTestDriver driver;
+    driver.unreadableProjection = true;
+    const std::shared_ptr<VectorDataset> unreadable =
+        VectorDataset::Open(VectorReadTestDriver::kPath);
+    ASSERT_THROW((void)unreadable->Layer(0).Projection(), CoreError);
+
+    Map map;
+    const LayerId id = map.AddLayer(unreadable);
+    EXPECT_NE(map.FindLayer(id), nullptr);
+    EXPECT_FALSE(map.Projection().has_value());
+
+    TempDirectory directory;
+    (void)map.AddLayer(VectorDataset::Open(MakeSampleShapefile(directory.Path())));
+    ASSERT_TRUE(map.Projection().has_value());
+    EXPECT_EQ(map.Projection()->Epsg(), 28992);
+}
+
+TEST_F(MapTest, KeepsProjectionWhenLayersAreRemovedOrCleared)
+{
+    const LayerId projected =
+        _map.AddLayer(VectorDataset::Open(MakeSampleShapefile(_directory.Path())));
+    ASSERT_TRUE(_map.Projection().has_value());
+
+    EXPECT_TRUE(_map.RemoveLayer(projected));
+    ASSERT_TRUE(_map.Projection().has_value());
+    EXPECT_EQ(_map.Projection()->Epsg(), 28992);
+
+    (void)_map.AddLayer(OpenRectangles({{0, 0, 1, 1}}));
+    _map.Clear();
+    ASSERT_TRUE(_map.Projection().has_value());
+    EXPECT_EQ(_map.Projection()->Epsg(), 28992);
+}
+
+TEST_F(MapTest, ChangesProjectionOnlyExplicitly)
+{
+    (void)_map.AddLayer(VectorDataset::Open(MakeSampleShapefile(_directory.Path())));
+    ASSERT_TRUE(_map.Projection().has_value());
+
+    _map.SetProjection(Projection::FromEpsg(4326));
+    (void)_map.AddLayer(VectorDataset::Open(
+        MakeSampleShapefile(_directory.Path(), "second")));
+    ASSERT_TRUE(_map.Projection().has_value());
+    EXPECT_EQ(_map.Projection()->Epsg(), 4326);
+
+    _map.ClearProjection();
+    EXPECT_FALSE(_map.Projection().has_value());
+    EXPECT_THROW(_map.SetProjection(Projection{}), InvalidArgument);
+    EXPECT_FALSE(_map.Projection().has_value());
+}
+
 TEST_F(MapTest, AppendsNewLayersOnTop)
 {
     const LayerId bottom = _map.AddLayer(OpenRectangles({{0, 0, 1, 1}}));

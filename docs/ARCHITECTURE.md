@@ -156,9 +156,22 @@ state; hosts and renderers read from it.
   rather than cached, so visibility changes, added or removed layers, and
   source edits are reflected without invalidation. A map with no valid layer
   extent reports an empty `Extent`.
+- **Projection.** `mwg::Projection` is the shared immutable CRS value. It
+  imports EPSG, WKT, and PROJ4 definitions, prefers EPSG identity, and provides
+  stateless coordinate transformations in traditional GIS axis order.
+  `VectorLayer::Projection()` reads the layer CRS; WKT export remains available
+  from the value type rather than through a parallel string property.
+  For RFC 7946 GeoJSON without a `crs` member, GDAL supplies WGS 84 (EPSG:4326).
+  A layer with no defined CRS returns an empty projection.
+- **Map projection.** When `Map` has no projection, adding the first layer with
+  a readable CRS sets the map projection. If the map cannot read the layer's
+  CRS, it logs a warning and still adds the layer. A host can call
+  `SetProjection` or `ClearProjection` explicitly. Removing layers and
+  `Clear()` do not change the map projection.
 - **Coordinates.** Layers are assumed to share compatible source coordinates.
-  The map does not reproject; layers in different coordinate reference
-  systems do not align until coordinate transformations are implemented.
+  Phase 1 records CRS state but does not reproject; layers in different
+  coordinate reference systems do not align until display-time coordinate
+  transformations are implemented.
 
 Vector layer extent queries cache successful results. Read failures throw
 without caching an empty result. If a driver cannot provide an extent and

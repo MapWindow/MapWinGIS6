@@ -23,14 +23,14 @@
 
 namespace mwg::test
 {
+    std::string ToUtf8(const std::filesystem::path& path)
+    {
+        const std::u8string utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
     namespace
     {
-        std::string ToUtf8(const std::filesystem::path& path)
-        {
-            const std::u8string utf8 = path.u8string();
-            return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
-        }
-
         std::string RandomName()
         {
             static std::mt19937_64 engine{std::random_device{}()};
@@ -52,6 +52,19 @@ namespace mwg::test
                 _definition->AddFieldDefn(&nameField);
                 OGRFieldDefn valueField("VALUE", OFTInteger);
                 _definition->AddFieldDefn(&valueField);
+                if (state.unreadableProjection)
+                {
+                    // A non-null SRS without a CRS definition cannot be imported.
+                    _spatialRef = std::make_unique<OGRSpatialReference>();
+                }
+                else if (state.projectionEpsg > 0)
+                {
+                    _spatialRef = std::make_unique<OGRSpatialReference>();
+                    if (_spatialRef->importFromEPSG(state.projectionEpsg) != OGRERR_NONE)
+                    {
+                        throw std::runtime_error("Cannot create synthetic test projection");
+                    }
+                }
             }
 
             ~VectorReadTestLayer() override
@@ -138,6 +151,12 @@ namespace mwg::test
                 return _definition;
             }
 
+            const OGRSpatialReference* GetSpatialRef() const override
+            {
+                ++_state.projectionReads;
+                return _spatialRef.get();
+            }
+
             int TestCapability(const char* capability) const override
             {
                 if (capability != nullptr && std::string_view(capability) == OLCFastGetExtent)
@@ -213,6 +232,7 @@ namespace mwg::test
         private:
             VectorReadTestDriver& _state;
             OGRFeatureDefn* _definition;
+            std::unique_ptr<OGRSpatialReference> _spatialRef;
         };
 
         class VectorReadTestDataset final : public GDALDataset
@@ -457,6 +477,33 @@ namespace mwg::test
         return path;
     }
 
+    void SetGeoPackageSrsId(const std::filesystem::path& path, const int srsId)
+    {
+        const GDALDatasetUniquePtr dataset(GDALDataset::Open(
+            ToUtf8(path).c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE));
+        if (!dataset)
+        {
+            throw std::runtime_error("Cannot open GeoPackage fixture for SRS update");
+        }
+
+        for (const char* table : {"gpkg_geometry_columns", "gpkg_contents"})
+        {
+            const std::string sql = std::string("UPDATE ") + table +
+                                    " SET srs_id = " + std::to_string(srsId);
+            CPLErrorReset();
+            if (OGRLayer* result = dataset->ExecuteSQL(sql.c_str(), nullptr, nullptr))
+            {
+                dataset->ReleaseResultSet(result);
+                throw std::runtime_error("Unexpected result from " + sql);
+            }
+            if (CPLGetLastErrorType() >= CE_Failure)
+            {
+                throw std::runtime_error("Cannot update GeoPackage fixture: " +
+                                         std::string(CPLGetLastErrorMsg()));
+            }
+        }
+    }
+
     std::filesystem::path MakeTwoLayerDataset(const std::filesystem::path& directory,
                                               const std::string& fileName)
     {
@@ -474,6 +521,42 @@ namespace mwg::test
             dataset->CreateLayer("second", nullptr, wkbPolygon, nullptr) == nullptr)
         {
             throw std::runtime_error("Cannot create the two test layers");
+        }
+
+        dataset.reset();
+        return path;
+    }
+
+    std::filesystem::path MakeRfc7946GeoJson(
+        const std::filesystem::path& directory,
+        const std::string& fileName)
+    {
+        GdalEnvironment::Initialize();
+
+        const std::filesystem::path path = directory / fileName;
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GeoJSON");
+        if (driver == nullptr) throw std::runtime_error("GeoJSON driver is not available");
+
+        GDALDatasetUniquePtr dataset(
+            driver->Create(ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+        if (!dataset) throw std::runtime_error("Cannot create " + ToUtf8(path));
+
+        OGRLayer* layer = dataset->CreateLayer("projectionless", nullptr, wkbPolygon);
+        if (layer == nullptr) throw std::runtime_error("Cannot create projectionless layer");
+
+        OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
+        OGRPolygon polygon;
+        OGRLinearRing ring;
+        ring.addPoint(0.0, 0.0);
+        ring.addPoint(1.0, 0.0);
+        ring.addPoint(1.0, 1.0);
+        ring.addPoint(0.0, 1.0);
+        ring.closeRings();
+        polygon.addRing(&ring);
+        feature->SetGeometry(&polygon);
+        if (layer->CreateFeature(feature.get()) != OGRERR_NONE)
+        {
+            throw std::runtime_error("Cannot write projectionless feature");
         }
 
         dataset.reset();
