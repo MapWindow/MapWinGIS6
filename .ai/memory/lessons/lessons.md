@@ -3,7 +3,13 @@
 ## Projection identity belongs in Core
 
 Projection matching first uses an autodetected EPSG code. It falls back to OGR
-equivalence and normalized names only when EPSG identity is unavailable.
+equivalence and PROJ.4-normalized definitions only when EPSG identity is
+unavailable. The MapWinGIS 5 name-only fallback was rejected because custom
+CRSs can share a name but differ in parameters
+(`ProjectionTest.DoesNotEquateDifferentCustomDefinitionsWithSharedMetadata`).
+EPSG autodetection for ESRI WKT without authority codes needs
+`morphFromESRI`, `AutoIdentifyEPSG`, and then `FindMatches` with confidence
+of at least 80.
 Display reprojection belongs at the Core scene-build boundary, where geometry
 and extents use one transformation without changing source data. The ActiveX
 control translates that model through a separate dispatch interface. Hosts own

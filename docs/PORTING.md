@@ -36,6 +36,14 @@ autodetection are supported, but `.prj` file I/O and mutable transformation
 state are not part of the value type. Coordinate transforms are stateless
 objects created with `Projection::TransformTo`.
 
+`Projection::IsSame` compares EPSG codes when both sides resolve one. Otherwise
+it uses `OGRSpatialReference::IsSame` and then compares the definitions after a
+PROJ.4 round trip. It deliberately does not adopt the MapWinGIS 5 fallback that
+compares only normalized CRS and projection names: two custom definitions can
+share a name but have different parameters, and treating them as the same CRS
+would skip a needed reprojection. Dynamic CRSs and CRSs with different
+dimensionality never match through the PROJ.4 fallback.
+
 `VectorLayer::Projection()` replaces the v6-only
 `ProjectionWkt()` string accessor. Callers that need WKT use
 `Projection::ExportToWkt()`. There is intentionally no compatibility alias:

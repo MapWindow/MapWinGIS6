@@ -12,6 +12,8 @@
  */
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <new>
@@ -468,6 +470,86 @@ TEST_F(MapViewTest, FitAndMixedSceneUseTransformedDisplayCoordinates)
 
     ASSERT_TRUE(_view.ZoomToLayer(transformed, 0.0));
     EXPECT_TRUE(IsVisible(_view.GetViewport(), transformedExtent));
+}
+
+TEST_F(MapViewTest, MixedMapCombinesReprojectedNativeAndProjectionlessExtents)
+{
+    ASSERT_TRUE(_view.Resize(400, 200));
+    const std::shared_ptr<VectorDataset> projected = VectorDataset::Open(
+        MakeProvincesDataset(_directory.Path(), "mixed3-projected.gpkg"));
+    const std::shared_ptr<VectorDataset> wgs84 = VectorDataset::Open(
+        MakeRfc7946GeoJson(_directory.Path(), "mixed3-wgs84.geojson"));
+    const Extent projectionlessSource{3.0, 50.0, 4.0, 51.0};
+    const LayerId transformed = _view.AddLayer(projected);
+    const LayerId native = _view.AddLayer(wgs84);
+    const LayerId projectionless = _view.AddLayer(OpenRectangles({projectionlessSource}));
+    ASSERT_TRUE(_view.GetMap().FindLayer(projectionless)->Source().Projection().IsEmpty());
+    ASSERT_TRUE(_view.SetLayerDisplayProjection(
+        transformed, Projection::FromEpsg(4326)));
+    ASSERT_TRUE(_view.FitToMap(0.0));
+
+    const Extent transformedExtent =
+        _view.GetMap().FindLayer(transformed)->GetExtent();
+    const Extent nativeExtent = _view.GetMap().FindLayer(native)->GetExtent();
+    const Extent projectionlessExtent =
+        _view.GetMap().FindLayer(projectionless)->GetExtent();
+    ASSERT_TRUE(transformedExtent.IsValid());
+    ASSERT_TRUE(nativeExtent.IsValid());
+    EXPECT_DOUBLE_EQ(projectionlessExtent.xMin, projectionlessSource.xMin);
+    EXPECT_DOUBLE_EQ(projectionlessExtent.yMin, projectionlessSource.yMin);
+    EXPECT_DOUBLE_EQ(projectionlessExtent.xMax, projectionlessSource.xMax);
+    EXPECT_DOUBLE_EQ(projectionlessExtent.yMax, projectionlessSource.yMax);
+
+    const Extent combined = _view.GetMap().GetExtent();
+    EXPECT_DOUBLE_EQ(combined.xMin, std::min({transformedExtent.xMin,
+        nativeExtent.xMin, projectionlessExtent.xMin}));
+    EXPECT_DOUBLE_EQ(combined.yMin, std::min({transformedExtent.yMin,
+        nativeExtent.yMin, projectionlessExtent.yMin}));
+    EXPECT_DOUBLE_EQ(combined.xMax, std::max({transformedExtent.xMax,
+        nativeExtent.xMax, projectionlessExtent.xMax}));
+    EXPECT_DOUBLE_EQ(combined.yMax, std::max({transformedExtent.yMax,
+        nativeExtent.yMax, projectionlessExtent.yMax}));
+    EXPECT_LT(std::abs(combined.CenterX()), 180.0);
+    EXPECT_LT(std::abs(combined.CenterY()), 90.0);
+    EXPECT_TRUE(IsVisible(_view.GetViewport(), combined));
+    ASSERT_EQ(_view.Scene().layers.size(), 3U);
+}
+
+TEST_F(MapViewTest, ReprojectedLayerAlignsWithANativeLayerInTheMapProjection)
+{
+    const Projection rdNew = Projection::FromEpsg(28992);
+    const Projection wgs84 = Projection::FromEpsg(4326);
+    const Extent geographic{5.0, 52.0, 5.2, 52.2};
+    Extent expected;
+    ASSERT_TRUE(wgs84.TransformTo(rdNew).TransformBounds(geographic, expected));
+
+    const LayerId native =
+        _view.AddLayer(OpenProjectedRectangles({expected}, 28992));
+    ASSERT_TRUE(_view.GetMap().Projection().has_value());
+    ASSERT_EQ(_view.GetMap().Projection()->Epsg(), 28992);
+    const LayerId reprojected =
+        _view.AddLayer(OpenProjectedRectangles({geographic}, 4326));
+    ASSERT_TRUE(_view.SetLayerDisplayProjection(
+        reprojected, *_view.GetMap().Projection()));
+
+    const Extent nativeExtent = _view.GetMap().FindLayer(native)->GetExtent();
+    const Extent reprojectedExtent =
+        _view.GetMap().FindLayer(reprojected)->GetExtent();
+    constexpr double kMetreTolerance = 1e-3;
+    EXPECT_NEAR(reprojectedExtent.xMin, nativeExtent.xMin, kMetreTolerance);
+    EXPECT_NEAR(reprojectedExtent.yMin, nativeExtent.yMin, kMetreTolerance);
+    EXPECT_NEAR(reprojectedExtent.xMax, nativeExtent.xMax, kMetreTolerance);
+    EXPECT_NEAR(reprojectedExtent.yMax, nativeExtent.yMax, kMetreTolerance);
+
+    const auto& scene = _view.Scene();
+    ASSERT_EQ(scene.layers.size(), 2U);
+    double cornerX = geographic.xMin;
+    double cornerY = geographic.yMin;
+    ASSERT_TRUE(wgs84.TransformTo(rdNew)(cornerX, cornerY));
+    const rendering::Point first = scene.layers[1].scene->polygons.front().front()[0];
+    EXPECT_NEAR(first.x, cornerX, kMetreTolerance);
+    EXPECT_NEAR(first.y, cornerY, kMetreTolerance);
+    EXPECT_TRUE(nativeExtent.Contains(first.x, first.y));
 }
 
 TEST_F(MapViewTest, RebuildsCompleteSceneWhenLongitudeFilteringIsAmbiguous)
