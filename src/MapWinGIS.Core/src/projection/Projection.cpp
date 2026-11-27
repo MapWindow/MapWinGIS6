@@ -255,12 +255,14 @@ namespace mwg
     class ProjectionTransform::Impl
     {
     public:
-        explicit Impl(TransformationPtr transformation)
-            : _transformation(std::move(transformation))
+        Impl(TransformationPtr transformation, const bool targetIsGeographic)
+            : _transformation(std::move(transformation)),
+              _targetIsGeographic(targetIsGeographic)
         {
         }
 
         TransformationPtr _transformation;
+        bool _targetIsGeographic;
     };
 
     class Projection::Impl
@@ -365,6 +367,42 @@ namespace mwg
             count, x, y, z, perPointSuccess) == TRUE;
         diagnostics.RethrowCaptureException();
         return succeeded;
+    }
+
+    bool ProjectionTransform::TransformBounds(
+        const Extent& source,
+        Extent& destination,
+        const int densifyPoints) const
+    {
+        if (!source.IsValid() || densifyPoints < 0 || _impl == nullptr)
+        {
+            return false;
+        }
+
+        Extent transformed;
+        const GdalErrorScope diagnostics;
+        const bool succeeded = _impl->_transformation->TransformBounds(
+            source.xMin,
+            source.yMin,
+            source.xMax,
+            source.yMax,
+            &transformed.xMin,
+            &transformed.yMin,
+            &transformed.xMax,
+            &transformed.yMax,
+            densifyPoints) == TRUE;
+        diagnostics.RethrowCaptureException();
+        if (!succeeded)
+        {
+            return false;
+        }
+        if (_impl->_targetIsGeographic && transformed.xMin > transformed.xMax)
+        {
+            transformed.xMin = -180.0;
+            transformed.xMax = 180.0;
+        }
+        destination = transformed;
+        return true;
     }
 
     Projection::Projection() = default;
@@ -595,6 +633,7 @@ namespace mwg
                 "Cannot create coordinate reference system transformation"));
         }
         return ProjectionTransform(
-            std::make_shared<ProjectionTransform::Impl>(std::move(transformation)));
+            std::make_shared<ProjectionTransform::Impl>(
+                std::move(transformation), target.IsGeographic()));
     }
 }

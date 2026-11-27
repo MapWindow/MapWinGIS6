@@ -94,9 +94,11 @@ exist only when `MWG_ACTIVEX_TEST_HOOKS` is defined
 ## Current limits
 
 The control exposes a deliberately small v6 automation API. It does not expose
-the broad MapWinGIS 5 map, layer, shape, event, or editing surface. The current
-render scene is built in source coordinates, without reprojection; backend
-support differs: GDI draws the original rings with an alternate fill rule,
+the broad MapWinGIS 5 map, layer, shape, event, or editing surface. Core can
+build scenes in an independently selected layer display projection, but the
+control currently leaves its loaded scenes in source coordinates because the
+projection automation surface is not implemented. Backend support differs: GDI
+draws the original rings with an alternate fill rule,
 while OpenGL fill draws require triangle meshes. Normal Core scene
 creation is mesh-free; OpenGL fills prepare missing meshes lazily and fall
 back to GDI if preparation fails or an explicitly prepared mesh is unusable.

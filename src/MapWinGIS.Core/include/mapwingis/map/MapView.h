@@ -111,6 +111,15 @@ namespace mwg
         /// changed. Returns false when the map has no such layer.
         bool SetLayerVisible(LayerId id, bool visible) noexcept;
 
+        /// Changes one layer's display-only projection and invalidates only
+        /// that layer's cached scene when its displayed geometry changes.
+        /// See Map::SetLayerDisplayProjection for errors and source rules.
+        bool SetLayerDisplayProjection(LayerId id, mwg::Projection projection);
+
+        /// Restores one layer's source projection and invalidates its scene
+        /// when the displayed geometry changes.
+        bool ClearLayerDisplayProjection(LayerId id) noexcept;
+
         /// Changes the viewport size, keeping the center and resolution so
         /// the map neither moves nor changes scale; see Viewport::SetSize.
         /// Completes a pending fit once both dimensions are positive.

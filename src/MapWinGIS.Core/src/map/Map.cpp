@@ -34,6 +34,7 @@ namespace mwg
         VectorLayer* _source;
         int _sourceLayerIndex;
         bool _visible = true;
+        std::optional<mwg::Projection> _displayProjection;
     };
 
     MapLayer::MapLayer(std::unique_ptr<Impl> impl)
@@ -68,10 +69,38 @@ namespace mwg
         return _impl->_visible;
     }
 
+    const std::optional<mwg::Projection>& MapLayer::DisplayProjection() const noexcept
+    {
+        return _impl->_displayProjection;
+    }
+
     Extent MapLayer::GetExtent() const
     {
         const Extent extent = _impl->_source->GetExtent();
-        return extent.IsValid() ? extent : Extent{};
+        if (!extent.IsValid() || !_impl->_displayProjection.has_value())
+        {
+            return extent.IsValid() ? extent : Extent{};
+        }
+
+        const Projection sourceProjection = _impl->_source->Projection();
+        if (sourceProjection.IsEmpty())
+        {
+            throw CoreError("Cannot transform an extent from a projectionless source");
+        }
+        if (sourceProjection.IsSame(*_impl->_displayProjection))
+        {
+            return extent;
+        }
+
+        Extent transformed;
+        const ProjectionTransform transform =
+            sourceProjection.TransformTo(*_impl->_displayProjection);
+        if (!transform.TransformBounds(extent, transformed) ||
+            !transformed.IsValid())
+        {
+            throw CoreError("Cannot transform vector layer extent");
+        }
+        return transformed;
     }
 
     class Map::Impl
@@ -220,6 +249,50 @@ namespace mwg
         }
 
         (*layer)->_impl->_visible = visible;
+        return true;
+    }
+
+    bool Map::SetLayerDisplayProjection(
+        const LayerId id,
+        mwg::Projection projection)
+    {
+        const auto layer = _impl->Find(id);
+        if (layer == _impl->_layers.end())
+        {
+            return false;
+        }
+        if (projection.IsEmpty())
+        {
+            throw InvalidArgument("Cannot set an empty layer display projection");
+        }
+
+        const mwg::Projection sourceProjection = (*layer)->Source().Projection();
+        if (sourceProjection.IsEmpty())
+        {
+            throw InvalidArgument("Cannot reproject a vector layer without a source projection");
+        }
+        if (sourceProjection.IsSame(projection))
+        {
+            return ClearLayerDisplayProjection(id);
+        }
+        if ((*layer)->_impl->_displayProjection.has_value() &&
+            (*layer)->_impl->_displayProjection->IsSame(projection))
+        {
+            return false;
+        }
+        (*layer)->_impl->_displayProjection = std::move(projection);
+        return true;
+    }
+
+    bool Map::ClearLayerDisplayProjection(const LayerId id) noexcept
+    {
+        const auto layer = _impl->Find(id);
+        if (layer == _impl->_layers.end() ||
+            !(*layer)->_impl->_displayProjection.has_value())
+        {
+            return false;
+        }
+        (*layer)->_impl->_displayProjection.reset();
         return true;
     }
 

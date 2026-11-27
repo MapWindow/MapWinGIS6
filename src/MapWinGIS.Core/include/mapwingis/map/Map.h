@@ -8,9 +8,9 @@
  * visibility, coordinate reference system, and calculates the combined
  * extent of its layers. It holds no windowing, COM, or rendering-backend state.
  *
- * Layer coordinates are used as stored in their source. The map assumes all
- * layers use compatible coordinates; it does not reproject, so layers in
- * different coordinate reference systems do not align.
+ * Source coordinates remain immutable. A map layer can optionally assign a
+ * display projection so its scene and extent are transformed without changing
+ * the dataset on disk.
  */
 #pragma once
 
@@ -85,9 +85,15 @@ namespace mwg
         /// Map::SetLayerVisible.
         [[nodiscard]] bool IsVisible() const noexcept;
 
-        /// Extent of the source layer, read from the layer on every call so
-        /// that edits to the source are reflected. Empty when the layer has no
-        /// geometry or its extent is not valid (see Extent::IsValid).
+        /// Explicit display projection, or std::nullopt when the source CRS
+        /// is used. Reprojection is display-only; editing remains in source
+        /// coordinates.
+        [[nodiscard]] const std::optional<mwg::Projection>& DisplayProjection() const noexcept;
+
+        /// Extent in display coordinates, read from the source on every call
+        /// so that edits are reflected. An explicit display projection uses a
+        /// densified bounds transform. Empty when the layer has no geometry or
+        /// its extent is not valid (see Extent::IsValid).
         /// May read the whole layer for formats that don't store an extent;
         /// the source layer caches the result.
         [[nodiscard]] Extent GetExtent() const;
@@ -175,6 +181,19 @@ namespace mwg
         /// Shows or hides a layer. Returns false when the map has no layer
         /// with this identity.
         bool SetLayerVisible(LayerId id, bool visible) noexcept;
+
+        /// Sets a display-only projection for one layer. The stored dataset is
+        /// not changed. Setting the source projection restores the default.
+        /// Projectionless layers cannot be reprojected.
+        /// Returns false for an unknown identity or an unchanged display CRS.
+        /// \throws InvalidArgument when projection is empty or the source has
+        ///         no readable projection.
+        /// \throws CoreError when the source projection cannot be read.
+        bool SetLayerDisplayProjection(LayerId id, mwg::Projection projection);
+
+        /// Restores the source projection for display. Returns false for an
+        /// unknown identity or a layer already using its source projection.
+        bool ClearLayerDisplayProjection(LayerId id) noexcept;
 
         /// Union of the valid extents of the layers in scope, or an empty
         /// Extent when none of them has a valid extent. Deterministic for a

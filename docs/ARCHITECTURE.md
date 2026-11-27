@@ -168,10 +168,12 @@ state; hosts and renderers read from it.
   CRS, it logs a warning and still adds the layer. A host can call
   `SetProjection` or `ClearProjection` explicitly. Removing layers and
   `Clear()` do not change the map projection.
-- **Coordinates.** Layers are assumed to share compatible source coordinates.
-  Phase 1 records CRS state but does not reproject; layers in different
-  coordinate reference systems do not align until display-time coordinate
-  transformations are implemented.
+- **Coordinates.** A map layer uses its source CRS by default. A host can set
+  an independent display projection with
+  `SetLayerDisplayProjection`; clearing it restores source coordinates.
+  Reprojection is display-only and does not write to the dataset. Duplicate
+  map layers can choose different display projections. Editing a reprojected
+  layer remains a source-coordinate operation.
 
 Vector layer extent queries cache successful results. Read failures throw
 without caching an empty result. If a driver cannot provide an extent and
@@ -248,7 +250,11 @@ has no extent or transform of its own.
   Exceptions outside that hierarchy also propagate. The scene
   holds no view state and no references to the map or its datasets. The
   lower-level scene options can apply an OGR spatial filter so callers load
-  only feature envelopes that intersect a requested extent.
+  only feature envelopes that intersect a requested extent. Before a
+  reprojected scene reads source data, Core inverse-transforms that display
+  extent; it then transforms polygon coordinates, prepared meshes, and the
+  result extent into display coordinates. Native layers skip the transform
+  path.
 - **Shared viewport.** Renderers draw the scene through the `Viewport` passed
   with it, so every layer uses the same transformation. `MapView` builds
   automatically prepared layer scenes from the visible extent plus a
@@ -258,7 +264,8 @@ has no extent or transform of its own.
   layer scenes; prepared scenes supplied by a caller are complete snapshots
   and remain reusable for every view.
 - **Redraws.** Map changes go through `MapView` (`AddLayer`, `RemoveLayer`,
-  `ClearLayers`, `SetLayerVisible`), which marks the scene stale; `Scene()`
+  `ClearLayers`, `SetLayerVisible`, `SetLayerDisplayProjection`,
+  `ClearLayerDisplayProjection`), which marks the scene stale; `Scene()`
   assembles it from cached layer scenes on the next call.
   The `AddLayer` overload that accepts a prepared
   vector scene transfers that geometry into the current scene without another
@@ -413,9 +420,10 @@ failures, and drawing failures use the GDI backend. GDI fills and outlines
 the original rings, so a self-intersecting ring that GEOS cannot triangulate
 can still be displayed.
 The GDI backend draws the original rings of the whole supported polygon scene,
-including its interior rings and concave boundaries. Both backends draw source coordinates without reprojection,
-and scene preparation currently supports Polygon, MultiPolygon, CurvePolygon,
-and MultiSurface features.
+including its interior rings and concave boundaries. Both backends draw the
+coordinates Core placed in the immutable scene; those may be source or
+display coordinates. Scene preparation currently supports Polygon,
+MultiPolygon, CurvePolygon, and MultiSurface features.
 
 The `RenderingBackendPreference` automation property is configurable as
 `Automatic`, `OpenGL`, or `GDI`. `Automatic` paints with GDI while fill
@@ -516,9 +524,9 @@ COM property reads do not scan datasets or rebuild the scene. `FitToMap`,
 `ZoomToLayer`, `ZoomIn`, `ZoomOut`, `ZoomAt`, and `Pan` forward navigation to
 the control's one `MapView` and request a redraw only when its view changes.
 Each successful load still fits the view to the combined map extent. Raster
-layers and other geometry types are not rendered. There is no reprojection, so
-coordinates remain in the source coordinate system and layers are assumed to
-share one.
+layers and other geometry types are not rendered. Core can assign each map
+layer a display projection, but the current ActiveX automation surface does
+not expose this operation and loads layers in their source coordinates.
 
 For direct `CreateVectorRenderScene` and `CreateMapRenderScene` calls, Core
 prepares and retains the complete supported polygon scene in memory. `MapView`

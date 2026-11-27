@@ -297,6 +297,28 @@ namespace mwg
         return true;
     }
 
+    bool MapView::SetLayerDisplayProjection(
+        const LayerId id,
+        mwg::Projection projection)
+    {
+        if (!_impl->_map.SetLayerDisplayProjection(id, std::move(projection)))
+        {
+            return false;
+        }
+        (void)InvalidateLayerScene(id);
+        return true;
+    }
+
+    bool MapView::ClearLayerDisplayProjection(const LayerId id) noexcept
+    {
+        if (!_impl->_map.ClearLayerDisplayProjection(id))
+        {
+            return false;
+        }
+        (void)InvalidateLayerScene(id);
+        return true;
+    }
+
     bool MapView::Resize(const int width, const int height)
     {
         Viewport& viewport = _impl->_viewport;

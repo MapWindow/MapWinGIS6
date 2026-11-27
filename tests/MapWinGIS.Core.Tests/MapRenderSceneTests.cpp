@@ -9,6 +9,7 @@
  */
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -123,6 +124,55 @@ namespace
             layer->CreateFeature(feature.get()) != OGRERR_NONE)
         {
             throw std::runtime_error("Cannot write the line feature");
+        }
+        return path;
+    }
+
+    std::filesystem::path MakeWktDataset(
+        const std::filesystem::path& directory,
+        const std::string_view fileName,
+        const int epsg,
+        const char* const wkt)
+    {
+        GdalEnvironment::Initialize();
+        const std::filesystem::path path = directory / fileName;
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GPKG");
+        if (driver == nullptr)
+        {
+            throw std::runtime_error("GPKG driver is not available");
+        }
+        GDALDatasetUniquePtr output(driver->Create(
+            ToUtf8(path).c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+        if (output == nullptr)
+        {
+            throw std::runtime_error("Cannot create the WKT dataset");
+        }
+        OGRSpatialReference reference;
+        if (reference.importFromEPSG(epsg) != OGRERR_NONE)
+        {
+            throw std::runtime_error("Cannot create the WKT dataset projection");
+        }
+        OGRLayer* layer =
+            output->CreateLayer("polygons", &reference, wkbPolygon, nullptr);
+        if (layer == nullptr)
+        {
+            throw std::runtime_error("Cannot create the WKT dataset layer");
+        }
+        const char* cursor = wkt;
+        OGRGeometry* geometry = nullptr;
+        if (OGRGeometryFactory::createFromWkt(
+                &cursor, nullptr, &geometry) != OGRERR_NONE ||
+            geometry == nullptr)
+        {
+            throw std::runtime_error("Cannot parse the polygon WKT");
+        }
+        OGRFeatureUniquePtr feature(OGRFeature::CreateFeature(layer->GetLayerDefn()));
+        const OGRErr result = feature->SetGeometry(geometry);
+        OGRGeometryFactory::destroyGeometry(geometry);
+        if (result != OGRERR_NONE ||
+            layer->CreateFeature(feature.get()) != OGRERR_NONE)
+        {
+            throw std::runtime_error("Cannot write the WKT polygon");
         }
         return path;
     }
@@ -263,6 +313,128 @@ TEST_F(MapRenderSceneTest, DuplicateLayersAreSeparateSceneLayers)
     ASSERT_EQ(scene.layers.size(), 2U);
     EXPECT_EQ(scene.layers[0].layerId, first);
     EXPECT_EQ(scene.layers[1].layerId, second);
+}
+
+TEST_F(MapRenderSceneTest, ReprojectsSceneCoordinatesAndPreparedMeshes)
+{
+    const std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(
+        MakeProvincesDataset(_directory.Path(), "projected.gpkg"));
+    const LayerId id = _map.AddLayer(dataset);
+    const Projection source = dataset->Layer(0).Projection();
+    const Projection display = Projection::FromEpsg(4326);
+    ASSERT_TRUE(_map.SetLayerDisplayProjection(id, display));
+
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(
+        _map,
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
+
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_EQ(scene.skippedLayers.size(), 0U);
+    const rendering::VectorRenderScene& projected = *scene.layers.front().scene;
+    ASSERT_FALSE(projected.polygons.empty());
+    ASSERT_EQ(projected.fillMeshes.size(), projected.polygons.size());
+    const ProjectionTransform transform = source.TransformTo(display);
+    double x = Provinces::kMinX;
+    double y = Provinces::kMinY;
+    ASSERT_TRUE(transform(x, y));
+    EXPECT_NEAR(projected.polygons.front().front()[0].x, x, 1e-10);
+    EXPECT_NEAR(projected.polygons.front().front()[0].y, y, 1e-10);
+    ASSERT_TRUE(projected.fillMeshes.front().has_value());
+    ASSERT_FALSE(projected.fillMeshes.front()->vertices.empty());
+    for (const rendering::Point& point :
+         projected.fillMeshes.front()->vertices)
+    {
+        EXPECT_TRUE(projected.extent.Contains(point.x, point.y));
+        EXPECT_LT(std::abs(point.x), 180.0);
+        EXPECT_LT(std::abs(point.y), 90.0);
+    }
+    EXPECT_TRUE(projected.extent.Contains(
+        projected.polygons.front().front()[0].x,
+        projected.polygons.front().front()[0].y));
+}
+
+TEST_F(MapRenderSceneTest, RebuildsFillMeshesAfterNonlinearReprojection)
+{
+    const std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(
+        MakeWktDataset(
+            _directory.Path(),
+            "concave-after-reprojection.gpkg",
+            4326,
+            "POLYGON ((0 0, 170 85, 100 80, 50 55, 0 0))"));
+    const LayerId id = _map.AddLayer(dataset);
+    ASSERT_TRUE(_map.SetLayerDisplayProjection(id, Projection::FromEpsg(3857)));
+
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(
+        _map,
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
+
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_TRUE(scene.skippedLayers.empty());
+    const rendering::VectorRenderScene& projected = *scene.layers.front().scene;
+    ASSERT_EQ(projected.fillMeshes.size(), 1U);
+    ASSERT_TRUE(projected.fillMeshes.front().has_value());
+    const rendering::TriangleMesh& mesh = *projected.fillMeshes.front();
+    ASSERT_FALSE(mesh.indices.empty());
+    ASSERT_EQ(mesh.indices.size() % 3U, 0U);
+    for (std::size_t index = 0; index < mesh.indices.size(); index += 3)
+    {
+        const rendering::Point& a = mesh.vertices[mesh.indices[index]];
+        const rendering::Point& b = mesh.vertices[mesh.indices[index + 1]];
+        const rendering::Point& c = mesh.vertices[mesh.indices[index + 2]];
+        const double twiceArea =
+            (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        EXPECT_GT(twiceArea, 0.0);
+    }
+}
+
+TEST_F(MapRenderSceneTest, SplitsWrappedProjectedPolygonsAtTheLongitudeSeam)
+{
+    const std::shared_ptr<VectorDataset> dataset = VectorDataset::Open(
+        MakeWktDataset(
+            _directory.Path(),
+            "antimeridian.gpkg",
+            3857,
+            "POLYGON ("
+            "(18924313 -1000000, 21150790 -1000000, "
+            "21150790 1000000, 18924313 1000000, 18924313 -1000000), "
+            "(19370000 -250000, 19600000 -250000, "
+            "19600000 250000, 19370000 250000, 19370000 -250000))"));
+    const LayerId id = _map.AddLayer(dataset);
+    ASSERT_TRUE(_map.SetLayerDisplayProjection(id, Projection::FromEpsg(4326)));
+
+    const rendering::MapRenderScene scene = rendering::CreateMapRenderScene(
+        _map,
+        rendering::VectorRenderSceneOptions{.prepareFillMeshes = true});
+
+    ASSERT_EQ(scene.layers.size(), 1U);
+    ASSERT_TRUE(scene.skippedLayers.empty());
+    const rendering::VectorRenderScene& projected = *scene.layers.front().scene;
+    ASSERT_EQ(projected.polygons.size(), 2U);
+    std::size_t ringCount = 0;
+    for (std::size_t index = 0; index < projected.polygons.size(); ++index)
+    {
+        const rendering::PolygonView polygon = projected.polygons[index];
+        ringCount += polygon.size();
+        for (std::size_t ringIndex = 0; ringIndex < polygon.size(); ++ringIndex)
+        {
+            for (const rendering::Point& point : polygon[ringIndex])
+            {
+                EXPECT_GT(std::abs(point.x), 169.0);
+                EXPECT_LT(std::abs(point.x), 180.000001);
+            }
+        }
+    }
+    EXPECT_EQ(ringCount, 3U);
+    ASSERT_EQ(projected.fillMeshes.size(), 2U);
+    for (const std::optional<rendering::TriangleMesh>& mesh : projected.fillMeshes)
+    {
+        ASSERT_TRUE(mesh.has_value());
+        for (const rendering::Point& point : mesh->vertices)
+        {
+            EXPECT_GT(std::abs(point.x), 169.0);
+            EXPECT_LT(std::abs(point.x), 180.000001);
+        }
+    }
 }
 
 TEST_F(MapRenderSceneTest, IsolatesStandardExceptionsButPropagatesAllocationFailures)

@@ -6,7 +6,10 @@ Copilot: Update this checklist as each phase is implemented. Only mark a phase
 complete when its acceptance criteria have been met and its PR is ready.
 
 - [x] **Phase 1 – Core `Projection` model + layer/map projection plumbing** (PR 1)
-- [ ] **Phase 2 – On-the-fly reprojection of map layers in Core** (PR 2)
+- [x] **Phase 2 – On-the-fly reprojection of map layers in Core** (PR 2)
+  - Reprojection remains display-only; source-coordinate editing and on-disk
+    geometry changes are intentionally out of scope.
+  - ActiveX projection operations and the host mismatch prompt remain Phase 3.
 - [ ] **Phase 3 – ActiveX projection interface + test-host prompt and EPSG status bar** (PR 3)
 
 **Target branch:** `development`
