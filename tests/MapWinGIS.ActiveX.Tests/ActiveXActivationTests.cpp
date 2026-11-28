@@ -49,6 +49,8 @@ namespace
     using VectorPreparationHook = void(*)(void*, bool) noexcept;
     using VectorPreparationHookSetter =
         void(__cdecl*)(VectorPreparationHook, void*) noexcept;
+    using ResultMarshallingFailureSetter =
+        void(__cdecl*)(UINT, HRESULT) noexcept;
 
     [[nodiscard]] std::string ToUtf8(const std::filesystem::path& path)
     {
@@ -560,6 +562,45 @@ namespace
 
     private:
         VectorPreparationHookSetter _setter;
+    };
+
+    class ScopedResultMarshallingFailure final
+    {
+    public:
+        explicit ScopedResultMarshallingFailure(const HMODULE module) noexcept
+            : _setter(reinterpret_cast<ResultMarshallingFailureSetter>(
+                  GetProcAddress(
+                      module,
+                      "MapWinGISControlSetResultMarshallingFailureForTesting")))
+        {
+            Reset();
+        }
+
+        ~ScopedResultMarshallingFailure()
+        {
+            Reset();
+        }
+
+        [[nodiscard]] bool IsAvailable() const noexcept
+        {
+            return _setter != nullptr;
+        }
+
+        void FailOnCall(const UINT call, const HRESULT failure) const noexcept
+        {
+            if (_setter != nullptr)
+            {
+                _setter(call, failure);
+            }
+        }
+
+        void Reset() const noexcept
+        {
+            FailOnCall(0, S_OK);
+        }
+
+    private:
+        ResultMarshallingFailureSetter _setter;
     };
 
     class GdalEventSubscription final
@@ -1438,6 +1479,115 @@ TEST_F(ActiveXMapTest, EndWaitsForOwnerThreadVectorLoadFinalization)
     EXPECT_EQ(succeeded, VARIANT_TRUE);
     EXPECT_EQ(cancelled, VARIANT_FALSE);
     EXPECT_GT(layerId, 0);
+}
+
+TEST_F(ActiveXMapTest, EndLoadVectorDatasetCanRetryAfterMarshallingFailure)
+{
+    ComPtr<IMapWinGISControl5> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    GdalEventSubscription subscription(control.Get());
+    ASSERT_EQ(subscription.Result(), S_OK);
+    ScopedResultMarshallingFailure failure(_module->Get());
+    if (!failure.IsAvailable())
+    {
+        GTEST_SKIP() << "MapWinGIS.ocx was built without MWG_ENABLE_ACTIVEX_TEST_HOOKS.";
+    }
+
+    const auto path = mwg::test::MakeRectanglesDataset(
+        _directory.Path(),
+        "async-marshalling-retry.gpkg",
+        std::vector<mwg::Extent>{{0, 0, 2, 2}});
+    LONGLONG operationId = 0;
+    ASSERT_EQ(control->BeginLoadVectorDataset(
+        ATL::CComBSTR(path.c_str()),
+        &operationId), S_OK);
+    ASSERT_TRUE(PumpUntilGdalCompletion(
+        *subscription.Sink(),
+        operationId,
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+
+    failure.FailOnCall(2, E_FAIL);
+    VARIANT_BOOL succeeded = VARIANT_TRUE;
+    VARIANT_BOOL cancelled = VARIANT_TRUE;
+    LONGLONG layerId = -1;
+    BSTR summary = nullptr;
+    BSTR diagnostics = nullptr;
+    EXPECT_EQ(control->EndLoadVectorDataset(
+        operationId,
+        &succeeded,
+        &cancelled,
+        &layerId,
+        &summary,
+        &diagnostics), E_FAIL);
+    EXPECT_EQ(succeeded, VARIANT_FALSE);
+    EXPECT_EQ(cancelled, VARIANT_FALSE);
+    EXPECT_EQ(layerId, 0);
+    EXPECT_EQ(summary, nullptr);
+    EXPECT_EQ(diagnostics, nullptr);
+
+    failure.Reset();
+    ASSERT_EQ(control->EndLoadVectorDataset(
+        operationId,
+        &succeeded,
+        &cancelled,
+        &layerId,
+        &summary,
+        &diagnostics), S_OK);
+    std::unique_ptr<wchar_t, decltype(&SysFreeString)> summaryText(
+        summary,
+        &SysFreeString);
+    std::unique_ptr<wchar_t, decltype(&SysFreeString)> diagnosticText(
+        diagnostics,
+        &SysFreeString);
+    EXPECT_EQ(succeeded, VARIANT_TRUE);
+    EXPECT_EQ(cancelled, VARIANT_FALSE);
+    EXPECT_GT(layerId, 0);
+    ASSERT_NE(summaryText, nullptr);
+    EXPECT_NE(
+        std::wstring(summaryText.get()).find(L"loaded"),
+        std::wstring::npos);
+    LONG layerCount = 0;
+    ASSERT_EQ(control->get_LayerCount(&layerCount), S_OK);
+    EXPECT_EQ(layerCount, 1);
+}
+
+TEST_F(ActiveXMapTest, EndGdalOperationCanRetryAfterMarshallingFailure)
+{
+    RegisterHostedTestAlgorithms();
+    ComPtr<IMapWinGISControlGdal> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    GdalEventSubscription subscription(control.Get());
+    ASSERT_EQ(subscription.Result(), S_OK);
+    ScopedResultMarshallingFailure failure(_module->Get());
+    if (!failure.IsAvailable())
+    {
+        GTEST_SKIP() << "MapWinGIS.ocx was built without MWG_ENABLE_ACTIVEX_TEST_HOOKS.";
+    }
+
+    LONGLONG operationId = 0;
+    ASSERT_EQ(StartGdalOperation(
+        control.Get(),
+        L"mwg-test-activex diagnostics",
+        {},
+        &operationId), S_OK);
+    ASSERT_TRUE(PumpUntilGdalCompletion(
+        *subscription.Sink(),
+        operationId,
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+
+    failure.FailOnCall(2, E_OUTOFMEMORY);
+    ComGdalResult failedResult;
+    EXPECT_EQ(EndGdalOperation(control.Get(), operationId, failedResult), E_OUTOFMEMORY);
+
+    failure.Reset();
+    ComGdalResult result;
+    ASSERT_EQ(EndGdalOperation(control.Get(), operationId, result), S_OK);
+    EXPECT_EQ(result.succeeded, VARIANT_TRUE);
+    EXPECT_EQ(result.cancelled, VARIANT_FALSE);
+    EXPECT_EQ(result.warnings.size(), 1u);
+    EXPECT_NE(
+        result.warnings.front().find(L"COM test warning"),
+        std::wstring::npos);
 }
 
 TEST_F(ActiveXMapTest, LoadsVectorDatasetAsynchronouslyAndCommitsBeforeCompletionEvent)

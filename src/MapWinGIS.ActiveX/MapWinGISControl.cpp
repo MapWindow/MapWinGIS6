@@ -58,6 +58,10 @@ namespace
     using VectorPreparationHook = void(*)(void*, bool) noexcept;
     std::atomic<VectorPreparationHook> g_vectorPreparationHook{nullptr};
     std::atomic<void*> g_vectorPreparationContext{nullptr};
+#if defined(MWG_ACTIVEX_TEST_HOOKS)
+    std::atomic<UINT> g_resultMarshallingFailureCall{0};
+    std::atomic<HRESULT> g_resultMarshallingFailureCode{S_OK};
+#endif
 
     using mwg::activex::ComConversion::BstrToUtf8;
     using mwg::activex::ComConversion::CopyStringArray;
@@ -65,6 +69,20 @@ namespace
     using mwg::activex::ComConversion::CreateDiagnosticStringArray;
     using mwg::activex::ComConversion::DiagnosticToBstr;
     using mwg::activex::ComConversion::Utf8ToBstr;
+
+    [[nodiscard]] HRESULT ResultMarshallingTestFailure(
+        const UINT call) noexcept
+    {
+#if defined(MWG_ACTIVEX_TEST_HOOKS)
+        if (g_resultMarshallingFailureCall.load(std::memory_order_acquire) == call)
+        {
+            return g_resultMarshallingFailureCode.load(std::memory_order_relaxed);
+        }
+#else
+        static_cast<void>(call);
+#endif
+        return S_OK;
+    }
 
     [[nodiscard]] HRESULT SetControlComErrorInfo(
         const char* message,
@@ -294,6 +312,15 @@ MapWinGISControlSetVectorPreparationHookForTesting(
     g_vectorPreparationContext.store(context, std::memory_order_relaxed);
     g_vectorPreparationHook.store(hook, std::memory_order_release);
 }
+
+extern "C" __declspec(dllexport) void __cdecl
+MapWinGISControlSetResultMarshallingFailureForTesting(
+    const UINT call,
+    const HRESULT failure) noexcept
+{
+    g_resultMarshallingFailureCode.store(failure, std::memory_order_relaxed);
+    g_resultMarshallingFailureCall.store(call, std::memory_order_release);
+}
 #endif
 
 struct CMapWinGISControl::VectorLoadState final
@@ -472,11 +499,10 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
             E_INVALIDARG);
     }
 
-    mwg::activex::GdalOperationLookup ended;
+    mwg::activex::GdalOperationLookup lookup;
     try
     {
-        // Remove the operation slot before any COM allocations or string conversions.
-        ended = _gdalEvents.End(static_cast<std::uint64_t>(operationId));
+        lookup = _gdalEvents.GetResult(static_cast<std::uint64_t>(operationId));
     }
     catch (const std::bad_alloc&)
     {
@@ -491,28 +517,72 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
         return SetComErrorInfo("An unexpected error occurred while retrieving the GDAL operation result.", E_UNEXPECTED);
     }
 
-    if (ended.status == mwg::activex::GdalEndResult::Pending)
+    if (lookup.status == mwg::activex::GdalEndResult::Pending)
         return SetComErrorInfo("The GDAL operation has not finished or is still delivering events.", E_PENDING);
-    if (ended.status != mwg::activex::GdalEndResult::Ended || !ended.result.has_value())
+    if (lookup.status != mwg::activex::GdalEndResult::Ended || !lookup.result.has_value())
         return SetComErrorInfo("The GDAL operation ID was not found.", E_INVALIDARG);
 
-    const auto& value = *ended.result;
+    const auto& value = *lookup.result;
     BSTR callbackText = nullptr;
     BSTR summaryText = nullptr;
     BSTR diagnosticText = nullptr;
     SAFEARRAY* warningArray = nullptr;
-    HRESULT result = DiagnosticToBstr(value.callbackError, &callbackText);
-    if (SUCCEEDED(result)) result = DiagnosticToBstr(value.summary, &summaryText);
-    if (SUCCEEDED(result)) result = DiagnosticToBstr(value.diagnostics, &diagnosticText);
-    if (SUCCEEDED(result)) result = CreateDiagnosticStringArray(value.warnings, &warningArray);
-    if (FAILED(result))
+    const auto releaseMarshalledOutputs = [&]() noexcept
     {
         ::SysFreeString(callbackText);
         ::SysFreeString(summaryText);
         ::SysFreeString(diagnosticText);
-        if (warningArray != nullptr) ::SafeArrayDestroy(warningArray);
+        if (warningArray != nullptr)
+        {
+            ::SafeArrayDestroy(warningArray);
+        }
+    };
+    HRESULT result = ResultMarshallingTestFailure(1);
+    if (SUCCEEDED(result)) result = DiagnosticToBstr(value.callbackError, &callbackText);
+    if (SUCCEEDED(result)) result = ResultMarshallingTestFailure(2);
+    if (SUCCEEDED(result)) result = DiagnosticToBstr(value.summary, &summaryText);
+    if (SUCCEEDED(result)) result = ResultMarshallingTestFailure(3);
+    if (SUCCEEDED(result)) result = DiagnosticToBstr(value.diagnostics, &diagnosticText);
+    if (SUCCEEDED(result)) result = ResultMarshallingTestFailure(4);
+    if (SUCCEEDED(result)) result = CreateDiagnosticStringArray(value.warnings, &warningArray);
+    if (FAILED(result))
+    {
+        releaseMarshalledOutputs();
         return SetComErrorInfo("The completed GDAL result could not be marshalled to COM.", result);
     }
+
+    mwg::activex::GdalOperationLookup consumed;
+    try
+    {
+        consumed = _gdalEvents.End(static_cast<std::uint64_t>(operationId));
+    }
+    catch (const std::bad_alloc&)
+    {
+        releaseMarshalledOutputs();
+        return SetComErrorInfo("Out of memory while retrieving the GDAL operation result.", E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        releaseMarshalledOutputs();
+        return SetComErrorInfo(exception.what(), E_FAIL);
+    }
+    catch (...)
+    {
+        releaseMarshalledOutputs();
+        return SetComErrorInfo("An unexpected error occurred while retrieving the GDAL operation result.", E_UNEXPECTED);
+    }
+    if (consumed.status == mwg::activex::GdalEndResult::Pending)
+    {
+        releaseMarshalledOutputs();
+        return SetComErrorInfo("The GDAL operation has not finished or is still delivering events.", E_PENDING);
+    }
+    if (consumed.status != mwg::activex::GdalEndResult::Ended ||
+        !consumed.result.has_value())
+    {
+        releaseMarshalledOutputs();
+        return SetComErrorInfo("The GDAL operation ID was not found.", E_INVALIDARG);
+    }
+
     *succeeded = value.succeeded ? VARIANT_TRUE : VARIANT_FALSE;
     *cancelled = value.cancelled ? VARIANT_TRUE : VARIANT_FALSE;
     *errorCode = value.errorCode;
@@ -1441,10 +1511,11 @@ STDMETHODIMP CMapWinGISControl::EndLoadVectorDataset(
             E_PENDING);
     }
 
-    mwg::activex::GdalOperationLookup ended;
+    const std::shared_ptr<VectorLoadState> state = found->second;
+    mwg::activex::GdalOperationLookup lookup;
     try
     {
-        ended = _gdalEvents.End(static_cast<std::uint64_t>(operationId));
+        lookup = _gdalEvents.GetResult(static_cast<std::uint64_t>(operationId));
     }
     catch (const std::bad_alloc&)
     {
@@ -1468,15 +1539,15 @@ STDMETHODIMP CMapWinGISControl::EndLoadVectorDataset(
             E_UNEXPECTED);
     }
 
-    if (ended.status == mwg::activex::GdalEndResult::Pending)
+    if (lookup.status == mwg::activex::GdalEndResult::Pending)
     {
         return SetControlComErrorInfo(
             "The vector load has not finished or is still delivering events.",
             IID_IMapWinGISControl5,
             E_PENDING);
     }
-    if (ended.status != mwg::activex::GdalEndResult::Ended ||
-        !ended.result.has_value())
+    if (lookup.status != mwg::activex::GdalEndResult::Ended ||
+        !lookup.result.has_value())
     {
         _vectorLoadOperations.erase(found);
         return SetControlComErrorInfo(
@@ -1485,14 +1556,21 @@ STDMETHODIMP CMapWinGISControl::EndLoadVectorDataset(
             E_INVALIDARG);
     }
 
-    const auto state = found->second;
-    _vectorLoadOperations.erase(found);
+    const auto& value = *lookup.result;
     BSTR summaryText = nullptr;
     BSTR diagnosticText = nullptr;
-    HRESULT result = DiagnosticToBstr(ended.result->summary, &summaryText);
+    HRESULT result = ResultMarshallingTestFailure(1);
     if (SUCCEEDED(result))
     {
-        result = DiagnosticToBstr(ended.result->diagnostics, &diagnosticText);
+        result = DiagnosticToBstr(value.summary, &summaryText);
+    }
+    if (SUCCEEDED(result))
+    {
+        result = ResultMarshallingTestFailure(2);
+    }
+    if (SUCCEEDED(result))
+    {
+        result = DiagnosticToBstr(value.diagnostics, &diagnosticText);
     }
     if (FAILED(result))
     {
@@ -1504,8 +1582,62 @@ STDMETHODIMP CMapWinGISControl::EndLoadVectorDataset(
             result);
     }
 
-    *succeeded = ended.result->succeeded ? VARIANT_TRUE : VARIANT_FALSE;
-    *cancelled = ended.result->cancelled ? VARIANT_TRUE : VARIANT_FALSE;
+    mwg::activex::GdalOperationLookup consumed;
+    try
+    {
+        consumed = _gdalEvents.End(static_cast<std::uint64_t>(operationId));
+    }
+    catch (const std::bad_alloc&)
+    {
+        ::SysFreeString(summaryText);
+        ::SysFreeString(diagnosticText);
+        return SetControlComErrorInfo(
+            "Out of memory while retrieving the vector load result.",
+            IID_IMapWinGISControl5,
+            E_OUTOFMEMORY);
+    }
+    catch (const std::exception& exception)
+    {
+        ::SysFreeString(summaryText);
+        ::SysFreeString(diagnosticText);
+        return SetControlComErrorInfo(
+            exception.what(),
+            IID_IMapWinGISControl5,
+            E_FAIL);
+    }
+    catch (...)
+    {
+        ::SysFreeString(summaryText);
+        ::SysFreeString(diagnosticText);
+        return SetControlComErrorInfo(
+            "An unexpected error occurred while retrieving the vector load result.",
+            IID_IMapWinGISControl5,
+            E_UNEXPECTED);
+    }
+    if (consumed.status == mwg::activex::GdalEndResult::Pending)
+    {
+        ::SysFreeString(summaryText);
+        ::SysFreeString(diagnosticText);
+        return SetControlComErrorInfo(
+            "The vector load has not finished or is still delivering events.",
+            IID_IMapWinGISControl5,
+            E_PENDING);
+    }
+    if (consumed.status != mwg::activex::GdalEndResult::Ended ||
+        !consumed.result.has_value())
+    {
+        ::SysFreeString(summaryText);
+        ::SysFreeString(diagnosticText);
+        _vectorLoadOperations.erase(operationId);
+        return SetControlComErrorInfo(
+            "The vector load operation ID was not found.",
+            IID_IMapWinGISControl5,
+            E_INVALIDARG);
+    }
+
+    _vectorLoadOperations.erase(operationId);
+    *succeeded = value.succeeded ? VARIANT_TRUE : VARIANT_FALSE;
+    *cancelled = value.cancelled ? VARIANT_TRUE : VARIANT_FALSE;
     *layerId = state->committed ? state->layerId : 0;
     *summary = summaryText;
     *diagnostics = diagnosticText;
