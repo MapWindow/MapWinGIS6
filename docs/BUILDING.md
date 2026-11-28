@@ -375,6 +375,22 @@ cmake --build --preset x64-debug
 ctest --preset x64-debug
 ```
 
+From a plain PowerShell or IDE terminal without an MSVC environment, use
+`build\scripts\Invoke-CMakeBuild.ps1` instead of the last three commands. It
+finds Visual Studio 2026 with `vswhere` (or `-VsInstallPath` /
+`MWG_VS_INSTALL_PATH`), imports its `vcvarsall` environment for the preset's
+architecture, and skips that step when the shell already has a matching one.
+An existing build tree is driven by the CMake recorded in its `CMakeCache.txt`,
+so a tree configured by CLion's bundled CMake keeps working; mixing CMake
+versions in one tree fails, for example with `Unknown CMake command
+"discover_tests"` from an older `ctest`.
+
+```powershell
+pwsh -File build\scripts\Invoke-CMakeBuild.ps1 -Configure -Test   # x64-debug
+pwsh -File build\scripts\Invoke-CMakeBuild.ps1 -Test              # rebuild and test
+pwsh -File build\scripts\Invoke-CMakeBuild.ps1 -Preset x86-debug -Target MapWinGIS.Core
+```
+
 The root `CMakeLists.txt` resolves the vcpkg root before `project()` in this
 order: `MWG_VCPKG_ROOT` (cache variable or environment variable), the sibling
 `..\vcpkg` directory, then `VCPKG_ROOT`. Set `MWG_VCPKG_ROOT` to override the

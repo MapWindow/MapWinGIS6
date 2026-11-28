@@ -1531,6 +1531,36 @@ TEST(VectorLayerRenderer, FailsWithoutDrawingNonFiniteCoordinates)
     EXPECT_EQ(GetPixel(surface.Get(), 60, 50), RGB(0, 0, 0));
 }
 
+TEST(VectorLayerRenderer, AFrameNotRenderedBeforeAnyDrawKeepsTheInitialStatus)
+{
+    mwg::activex::VectorLayerRenderer renderer;
+    renderer.MarkFrameNotRendered(L"There are no layers to render.");
+    EXPECT_FALSE(renderer.GetActiveBackend().has_value());
+    EXPECT_EQ(renderer.GetDiagnostic(), L"Rendering has not been attempted.");
+    EXPECT_TRUE(renderer.GetFailedLayers().empty());
+}
+
+TEST(VectorLayerRenderer, AFrameNotRenderedAfterAFailedFrameReplacesItsStatus)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+
+    mwg::rendering::MapRenderScene scene = MakeConvexPolygonScene();
+    Edit(scene.layers.front()).polygons.AppendPolygon(
+        {{{1.0, 1.0}, {std::numeric_limits<double>::quiet_NaN(), 5.0}, {9.0, 9.0}, {1.0, 1.0}}});
+    TriangulateScene(Edit(scene.layers.front()));
+
+    mwg::activex::VectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, FitViewport(bounds)), E_INVALIDARG);
+    ASSERT_EQ(renderer.GetFailedLayers().size(), 1U);
+
+    renderer.MarkFrameNotRendered(L"There are no layers to render.");
+    EXPECT_FALSE(renderer.GetActiveBackend().has_value());
+    EXPECT_EQ(renderer.GetDiagnostic(), L"There are no layers to render.");
+    EXPECT_TRUE(renderer.GetFailedLayers().empty());
+}
+
 TEST(VectorLayerRenderer, SkipsOnlyTheLayerThatCannotBeDrawn)
 {
     BitmapSurface surface(200, 120);

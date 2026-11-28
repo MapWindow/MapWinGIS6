@@ -86,7 +86,7 @@ Compare warnings with the latest known `Debug | x64` baseline for the same toolc
 **9. Commit.** Before committing, check that `README.md` and the Markdown files in `docs/` are up to date for the selected step; update directly related documentation as needed. Make one commit containing code, tests, relevant documentation and memory changes, and the plan update if the plan is repository-local. Follow [`.github/commit-conventions.instructions.md`](../../commit-conventions.instructions.md), including its gitmoji, conventional type and scope, and description-list format. Example subject: `✨ feat(core): add memory store serialization`.
 
 **10. Push and open PR** against the base branch selected in step 3:
-- Title: the plan title.
+- Title: the plan title, combined with the phase title.
 - Body: motivation, context, key design decisions, dependencies. Short. No filler or empty sections.
 - Mention memory changes briefly if any were made.
 - Require the `gh` CLI to be installed and authenticated. If it is unavailable or unauthenticated, stop and report the blocker rather than claiming the PR was opened.

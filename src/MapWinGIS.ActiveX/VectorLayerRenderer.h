@@ -55,10 +55,11 @@ namespace mwg::activex
             VectorRenderMode renderMode = VectorRenderMode::Fill) noexcept;
 
         /// Layers skipped by the last Draw call; empty when every layer was
-        /// drawn.
+        /// drawn, when OpenGL drew the frame, or when no backend attempted
+        /// the last frame.
         [[nodiscard]] std::span<const LayerId> GetFailedLayers() const noexcept
         {
-            if (_activeBackend == VectorRenderBackendKind::OpenGL)
+            if (!_gdiAttemptedLastFrame)
             {
                 return {};
             }
@@ -73,6 +74,23 @@ namespace mwg::activex
         [[nodiscard]] std::wstring_view GetDiagnostic() const noexcept
         {
             return _diagnostic;
+        }
+
+        /// Records an interactive frame that no backend drew, for example
+        /// because the map has no drawable layers or the view is not valid:
+        /// the previous frame's backend, failed layers, and diagnostic must
+        /// not be reported. diagnostic must have static storage duration.
+        /// Before the first Draw call the initial status is kept. The
+        /// backend preference is kept.
+        void MarkFrameNotRendered(const std::wstring_view diagnostic) noexcept
+        {
+            if (!_renderAttempted)
+            {
+                return;
+            }
+            _activeBackend.reset();
+            _gdiAttemptedLastFrame = false;
+            _diagnostic = diagnostic;
         }
 
         void InvalidateSceneCache() noexcept
@@ -135,6 +153,8 @@ namespace mwg::activex
             VectorRenderBackendPreference::Automatic;
         std::optional<VectorRenderBackendKind> _activeBackend;
         std::wstring_view _diagnostic = L"Rendering has not been attempted.";
+        bool _renderAttempted = false;
+        bool _gdiAttemptedLastFrame = false;
         bool _ownerPublishesFillMeshes = false;
     };
 }

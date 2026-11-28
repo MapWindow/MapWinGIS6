@@ -39,7 +39,7 @@ complexity or limiting improvements. Do not transliterate the legacy code.
 | `src/MapWinGIS.Core/` | Core engine. Public headers in `include/mapwingis/`, implementation in `src/`, grouped by area (`core`, `gdal`, `vector`, ...) |
 | `tests/MapWinGIS.Core.Tests/` | Core GoogleTest unit tests and shared fixtures in `TestData.h/.cpp` |
 | `tests/MapWinGIS.ActiveX.Tests/` | ActiveX implementation and COM-hosting GoogleTest unit tests |
-| `build/` | Shared MSBuild props, vcpkg overlay triplets, bootstrap scripts |
+| `build/` | Shared MSBuild props, vcpkg overlay triplets, bootstrap and build scripts |
 | `docs/` | Detailed documentation (see table below) |
 
 ## Build, test, validate
@@ -50,6 +50,11 @@ cmake --preset x64-debug
 cmake --build --preset x64-debug
 ctest --preset x64-debug
 ```
+
+Outside a VS 2026 Developer PowerShell, run
+`pwsh -File build\scripts\Invoke-CMakeBuild.ps1 -Test` (add `-Configure` for a
+new build tree); it loads the MSVC environment and uses the CMake that
+configured the tree.
 
 When `MWG_BUILD_ACTIVEX` is enabled, CMake also registers the ActiveX native
 tests with CTest. The registered-control activation check is labeled

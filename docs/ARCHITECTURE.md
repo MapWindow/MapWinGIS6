@@ -163,6 +163,9 @@ state; hosts and renderers read from it.
   from the value type rather than through a parallel string property.
   For RFC 7946 GeoJSON without a `crs` member, GDAL supplies WGS 84 (EPSG:4326).
   A layer with no defined CRS returns an empty projection.
+  The type lives in the separate `projection/` area rather than under
+  `vector/` because it is the shared CRS model: a future raster `projection`
+  property will build the same value from `GDALDataset::GetSpatialRef()`.
 - **Map projection.** When `Map` has no projection, adding the first layer with
   a readable CRS sets the map projection. If the map cannot read the layer's
   CRS, it logs a warning and still adds the layer. A host can call
