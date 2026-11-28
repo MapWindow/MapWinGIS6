@@ -510,7 +510,8 @@ namespace mwg::activex
         {
             return {GdalEndResult::Pending, std::nullopt};
         }
-        if (operation->second->notificationDeliveryInProgress)
+        if (operation->second->completionPending ||
+            operation->second->notificationDeliveryInProgress)
         {
             return {GdalEndResult::Pending, std::nullopt};
         }
