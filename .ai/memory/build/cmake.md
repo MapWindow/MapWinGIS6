@@ -30,11 +30,20 @@ PR #71, where `PolygonTriangulationTests.cpp` was listed in
 report (`out/parity/parity-Debug-x64.json` on the runner) names the lost
 TU; the job log only shows the lost count.
 
+`MapWinGIS.RuntimeData` tracks every deployed GDAL and PROJ file as a build
+output. Its sync manifest lets the build repair missing files and prune files
+removed from vcpkg while preserving unrelated files in the runtime directory.
+See `MwgRuntimeDeploy.cmake`, `MwgSyncRuntimeData.cmake`, and
+`Test-CMakeRuntimeDataRepair.ps1`.
+
 ## References
 
 - [CMake presets](../../../CMakePresets.json)
 - [Root CMake project](../../../CMakeLists.txt)
 - [CMake and MSBuild CI jobs](../../../.github/workflows/build.yml)
+- [Runtime data target](../../../cmake/MwgRuntimeDeploy.cmake)
+- [Runtime data sync](../../../cmake/MwgSyncRuntimeData.cmake)
+- [Runtime data repair check](../../../build/scripts/Test-CMakeRuntimeDataRepair.ps1)
 - [Shared MSBuild properties](../../../Directory.Build.props)
 - [Build configuration checks](../../../build/scripts/Test-BuildConfiguration.ps1)
 - [Build guide](../../../docs/BUILDING.md#building-with-cmake)

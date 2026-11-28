@@ -83,6 +83,18 @@ mwg_add_runtime_data_target()
         throw 'The newly added runtime-data file was not deployed.'
     }
 
+    Remove-Item -LiteralPath $newSource
+    Invoke-CMakeChecked @('-S', $source, '-B', $build) `
+        'The runtime-data fixture failed to reconfigure after an input was removed.'
+    Invoke-CMakeChecked @('--build', $build, '--target', 'MapWinGIS.RuntimeData') `
+        'The runtime-data target failed after an input was removed.'
+    if (Test-Path -LiteralPath (Join-Path $runtime 'gdal-data\added.csv')) {
+        throw 'A runtime-data file removed from the source set was not pruned.'
+    }
+    if ((Get-Content -LiteralPath $marker -Raw) -ne 'preserve') {
+        throw 'Pruning stale runtime data removed unrelated files.'
+    }
+
     Write-Host 'CMake runtime-data repair check passed.'
 }
 finally {
