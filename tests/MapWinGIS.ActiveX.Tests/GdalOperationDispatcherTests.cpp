@@ -493,7 +493,7 @@ TEST(GdalOperationDispatcher, NotificationDeliveryDefersEndUntilCallbacksReturn)
         operationId,
         callbackError,
         "event callback failed");
-    dispatcher.EndNotificationDelivery(operationId);
+    dispatcher.EndNotificationDelivery(operationId, false);
     result = dispatcher.End(operationId);
     ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
     ASSERT_TRUE(result.result.has_value());
@@ -530,6 +530,71 @@ TEST(GdalOperationDispatcher, EndWaitsUntilQueuedCompletionIsDrained)
     ASSERT_EQ(ended.status, mwg::activex::GdalEndResult::Ended);
     ASSERT_TRUE(ended.result.has_value());
     EXPECT_TRUE(ended.result->succeeded);
+}
+
+TEST(GdalOperationDispatcher, DeliveredCompletionIsNotRequeuedAfterResume)
+{
+    mwg::GdalEnvironment::Initialize();
+    RegisterDispatcherAlgorithms();
+
+    DispatchSignal signal;
+    mwg::activex::GdalOperationDispatcher dispatcher;
+    dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
+    const std::uint64_t operationId =
+        dispatcher.Begin("mwg-test-dispatcher diagnostics", {});
+
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    auto result = dispatcher.GetResult(operationId);
+    while (result.status == mwg::activex::GdalEndResult::Pending &&
+           std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(1ms);
+        result = dispatcher.GetResult(operationId);
+    }
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+
+    const auto notifications = dispatcher.DrainNotifications();
+    ASSERT_EQ(notifications.size(), 1u);
+    ASSERT_EQ(
+        notifications.front().kind,
+        mwg::activex::GdalNotificationKind::Completed);
+    ASSERT_TRUE(dispatcher.BeginNotificationDelivery(operationId));
+    dispatcher.EndNotificationDelivery(operationId, true);
+
+    dispatcher.Suspend();
+    dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
+    EXPECT_TRUE(dispatcher.DrainNotifications().empty());
+}
+
+TEST(GdalOperationDispatcher, ResumeQueuesUndeliveredCompletion)
+{
+    mwg::GdalEnvironment::Initialize();
+    RegisterDispatcherAlgorithms();
+
+    DispatchSignal signal;
+    mwg::activex::GdalOperationDispatcher dispatcher;
+    dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
+    dispatcher.Suspend();
+    const std::uint64_t operationId =
+        dispatcher.Begin("mwg-test-dispatcher diagnostics", {});
+
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    auto result = dispatcher.GetResult(operationId);
+    while (result.status == mwg::activex::GdalEndResult::Pending &&
+           std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(1ms);
+        result = dispatcher.GetResult(operationId);
+    }
+    ASSERT_EQ(result.status, mwg::activex::GdalEndResult::Ended);
+
+    dispatcher.SetWakeCallback(&DispatchSignal::Wake, &signal);
+    const auto notifications = dispatcher.DrainNotifications();
+    ASSERT_EQ(notifications.size(), 1u);
+    EXPECT_EQ(
+        notifications.front().kind,
+        mwg::activex::GdalNotificationKind::Completed);
+    EXPECT_EQ(notifications.front().operationId, operationId);
 }
 
 TEST(GdalOperationDispatcher, CompletionRemainsAvailableWhenWakeCallbackFails)

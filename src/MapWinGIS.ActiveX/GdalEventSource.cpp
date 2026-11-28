@@ -290,15 +290,22 @@ namespace mwg::activex
                 GdalOperationDispatcher& dispatcher;
                 std::uint64_t operationId;
                 std::uint64_t generation;
+                bool completionDelivered;
 
                 ~NotificationGuard()
                 {
                     if (dispatcher.GetGeneration() == generation)
                     {
-                        dispatcher.EndNotificationDelivery(operationId);
+                        dispatcher.EndNotificationDelivery(
+                            operationId,
+                            completionDelivered);
                     }
                 }
-            } notificationGuard{_dispatcher, notification.operationId, generation};
+            } notificationGuard{
+                _dispatcher,
+                notification.operationId,
+                generation,
+                notification.kind == GdalNotificationKind::Completed};
 
             if (notification.kind == GdalNotificationKind::Completed &&
                 _completionCallback != nullptr)

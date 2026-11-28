@@ -143,7 +143,9 @@ namespace mwg::activex
         [[nodiscard]] bool BeginNotificationDelivery(
             std::uint64_t operationId) noexcept;
         /// Completes owner-thread delivery begun by BeginNotificationDelivery.
-        void EndNotificationDelivery(std::uint64_t operationId) noexcept;
+        void EndNotificationDelivery(
+            std::uint64_t operationId,
+            bool completionDelivered) noexcept;
         /// Safe to query from any thread.
         [[nodiscard]] bool IsDispatchActive() const noexcept;
         /// Drains notifications on the owner thread.
