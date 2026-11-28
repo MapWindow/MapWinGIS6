@@ -168,6 +168,27 @@ TEST(ProjectionTest, DoesNotIgnoreGeographicDimensionalityDuringNormalization)
     EXPECT_FALSE(threeDimensions.IsSame(twoDimensions));
 }
 
+TEST(ProjectionTest, IncludesCoordinateEpochInEquality)
+{
+    const Projection dynamicCrs = Projection::FromEpsg(7912);
+    const std::string wkt = dynamicCrs.ExportToWkt();
+    const auto atEpoch = [&wkt](const std::string_view epoch)
+    {
+        return Projection::FromWkt(
+            "COORDINATEMETADATA[" + wkt + ",EPOCH[" + std::string(epoch) + "]]");
+    };
+
+    const Projection epoch2020 = atEpoch("2020.5");
+    const Projection epoch2021 = atEpoch("2021.5");
+    const Projection sameEpoch = atEpoch("2020.5");
+
+    ASSERT_EQ(epoch2020.Epsg(), 7912);
+    ASSERT_EQ(epoch2021.Epsg(), 7912);
+    EXPECT_TRUE(epoch2020.IsSame(sameEpoch));
+    EXPECT_FALSE(epoch2020.IsSame(epoch2021));
+    EXPECT_FALSE(dynamicCrs.IsSame(epoch2020));
+}
+
 TEST(ProjectionTest, TreatsCoordinateEpochMarkerInsideQuotedNameAsNameText)
 {
     constexpr std::string_view wkt =

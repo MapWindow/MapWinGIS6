@@ -33,6 +33,7 @@ namespace mwg::activex
             GdalCancellationToken cancellation;
             bool completed = false;
             bool completionPending = false;
+            bool completionDelivered = false;
             bool notificationDeliveryInProgress = false;
             bool honorCancellationAtCompletion = false;
             int callbackErrorCode = 0;
@@ -510,7 +511,8 @@ namespace mwg::activex
         {
             return {GdalEndResult::Pending, std::nullopt};
         }
-        if (operation->second->notificationDeliveryInProgress)
+        if (operation->second->completionPending ||
+            operation->second->notificationDeliveryInProgress)
         {
             return {GdalEndResult::Pending, std::nullopt};
         }
@@ -535,7 +537,8 @@ namespace mwg::activex
         {
             return {GdalEndResult::Pending, std::nullopt};
         }
-        if (operation->second->notificationDeliveryInProgress)
+        if (operation->second->completionPending ||
+            operation->second->notificationDeliveryInProgress)
         {
             return {GdalEndResult::Pending, std::nullopt};
         }
@@ -598,13 +601,19 @@ namespace mwg::activex
     }
 
     void GdalOperationDispatcher::EndNotificationDelivery(
-        const std::uint64_t operationId) noexcept
+        const std::uint64_t operationId,
+        const bool completionDelivered) noexcept
     {
         std::lock_guard lock(_state->mutex);
         const auto operation = _state->operations.find(operationId);
         if (operation != _state->operations.end())
         {
             operation->second->notificationDeliveryInProgress = false;
+            if (completionDelivered)
+            {
+                operation->second->completionDelivered = true;
+                operation->second->completionPending = false;
+            }
         }
     }
 
@@ -747,7 +756,8 @@ namespace mwg::activex
         {
             static_cast<void>(operationId);
             operation->progress.reset();
-            operation->completionPending = operation->completed;
+            operation->completionPending =
+                operation->completed && !operation->completionDelivered;
         }
     }
 }

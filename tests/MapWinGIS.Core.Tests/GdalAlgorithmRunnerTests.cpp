@@ -31,6 +31,7 @@
 
 #include "mapwingis/gdal/GdalAlgorithmRunner.h"
 #include "mapwingis/gdal/GdalEnvironment.h"
+#include "mapwingis/gdal/GdalTypedOptions.h"
 #include "TestData.h"
 
 using namespace mwg;
@@ -1346,4 +1347,101 @@ TEST(GdalAlgorithmRunner, DestroysDatasetInsideProgressCallbackWithoutDeadlock)
         return true;
     }));
     EXPECT_EQ(dataset, nullptr);
+}
+
+TEST(GdalOperationResult, DestroysOutputBeforeRetainedDatasets)
+{
+    struct LifetimeState
+    {
+        bool retainedDatasetAlive = true;
+        bool outputDestroyedWhileRetainedAlive = false;
+    };
+    class LifetimeProbeDataset final : public GDALDataset
+    {
+    public:
+        LifetimeProbeDataset(
+            std::shared_ptr<LifetimeState> state,
+            const bool isOutput)
+            : _state(std::move(state)),
+              _isOutput(isOutput)
+        {
+        }
+
+        ~LifetimeProbeDataset() override
+        {
+            if (_isOutput)
+            {
+                _state->outputDestroyedWhileRetainedAlive =
+                    _state->retainedDatasetAlive;
+            }
+            else
+            {
+                _state->retainedDatasetAlive = false;
+            }
+        }
+
+    private:
+        std::shared_ptr<LifetimeState> _state;
+        bool _isOutput;
+    };
+
+    const auto state = std::make_shared<LifetimeState>();
+    {
+        GdalOperationResult result;
+        result.outputDataset.reset(new LifetimeProbeDataset(state, true));
+        result.retainedDatasets.emplace_back(
+            new LifetimeProbeDataset(state, false));
+    }
+
+    EXPECT_TRUE(state->outputDestroyedWhileRetainedAlive);
+    EXPECT_FALSE(state->retainedDatasetAlive);
+}
+
+TEST(GdalAlgorithmRunner, ReturnsRasterInfoReport)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    const test::TempDirectory directory;
+    const auto input = MakeRaster(directory.Path(), "info-raster.tif");
+
+    RasterInfoOptions options;
+    options.input = input;
+    options.outputFormat = "json";
+    GdalAlgorithmRunner runner("raster info");
+    ASSERT_TRUE(ConfigureGdalAlgorithm(runner, options.ToArgs()))
+        << runner.Result().DetailedErrorMsg();
+    ASSERT_TRUE(runner.Run()) << runner.Result().DetailedErrorMsg();
+
+    const GdalOperationResult result = runner.Result();
+    ASSERT_TRUE(result.Succeeded());
+    ASSERT_EQ(result.stringOutputs.size(), 1u);
+    EXPECT_FALSE(result.stringOutputs.front().name.empty());
+    EXPECT_NE(
+        result.stringOutputs.front().value.find("info-raster.tif"),
+        std::string::npos);
+}
+
+TEST(GdalAlgorithmRunner, ReturnsVectorInfoReport)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    const test::TempDirectory directory;
+    const auto input = test::MakeProvincesDataset(directory.Path(), "info-vector.gpkg");
+
+    VectorInfoOptions options;
+    options.input = input;
+    options.outputFormat = "json";
+    options.summary = true;
+    GdalAlgorithmRunner runner("vector info");
+    ASSERT_TRUE(ConfigureGdalAlgorithm(runner, options.ToArgs()))
+        << runner.Result().DetailedErrorMsg();
+    ASSERT_TRUE(runner.Run()) << runner.Result().DetailedErrorMsg();
+
+    const GdalOperationResult result = runner.Result();
+    ASSERT_TRUE(result.Succeeded());
+    ASSERT_EQ(result.stringOutputs.size(), 1u);
+    EXPECT_FALSE(result.stringOutputs.front().name.empty());
+    EXPECT_NE(
+        result.stringOutputs.front().value.find("info-vector.gpkg"),
+        std::string::npos);
 }

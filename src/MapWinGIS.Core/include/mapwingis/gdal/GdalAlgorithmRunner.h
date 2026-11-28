@@ -109,8 +109,9 @@ namespace mwg
         /// Returns all diagnostics captured since construction.
         [[nodiscard]] const std::vector<GdalError>& Errors() const noexcept;
 
-        /// Snapshots execution state and diagnostics without transferring datasets.
-        /// Succeeded() is true only after execution and finalization succeed.
+        /// Snapshots execution state, diagnostics, and named string outputs
+        /// without transferring datasets. Succeeded() is true only after
+        /// execution and finalization succeed.
         [[nodiscard]] GdalOperationResult Result() const;
 
         /// Returns the GDAL usage metadata as JSON, or an empty string when

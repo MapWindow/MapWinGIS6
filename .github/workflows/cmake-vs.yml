@@ -47,6 +47,14 @@ jobs:
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v3
 
+      - name: Check C# core-only CMake configuration
+        shell: pwsh
+        run: pwsh -NoProfile -File build/scripts/Test-CSharpCoreOnlyCMake.ps1
+
+      - name: Check CMake runtime-data repair
+        shell: pwsh
+        run: pwsh -NoProfile -File build/scripts/Test-CMakeRuntimeDataRepair.ps1
+
       - name: Configure CMake
         shell: pwsh
         run: |
@@ -91,6 +99,9 @@ jobs:
             "-DVCPKG_INSTALLED_DIR=$installedDir",
             '-DVCPKG_MANIFEST_INSTALL=OFF'
           )
+          if ($release) {
+            $arguments += '-DMWG_ENABLE_ACTIVEX_TEST_HOOKS=OFF'
+          }
           cmake --preset $configurePreset `
             -T "v145,version=$toolsetVersion" `
             @arguments
@@ -101,6 +112,15 @@ jobs:
         shell: pwsh
         run: |
           cmake --build --preset $env:MWG_CMAKE_BUILD_PRESET --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify Release ActiveX exports
+        if: ${{ inputs.configuration == 'Release' }}
+        shell: pwsh
+        run: |
+          $architecture = if ('${{ inputs.platform }}' -eq 'x64') { 'vs-x64' } else { 'vs-x86' }
+          $ocx = Join-Path "out\b\$architecture\bin\Release" 'MapWinGIS.ocx'
+          pwsh -NoProfile -File build/scripts/Test-ActiveXExports.ps1 -OcxPath $ocx
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test CMake preset

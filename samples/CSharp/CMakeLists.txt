@@ -2,6 +2,12 @@
 #
 # .NET ActiveX host targets. CMake builds the native dependencies separately.
 
+if(NOT TARGET MapWinGIS.ActiveX)
+    message(STATUS
+        "Skipping ActiveX test-host targets: the MapWinGIS.ActiveX target was not built.")
+    return()
+endif()
+
 find_program(MWG_DOTNET_EXECUTABLE NAMES dotnet)
 if(NOT MWG_DOTNET_EXECUTABLE)
     message(WARNING

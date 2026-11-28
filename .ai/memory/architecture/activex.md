@@ -90,10 +90,17 @@ by a sink's nested message pump is re-posted after the batch. Do not
 reintroduce a drain-until-empty loop: it keeps the STA thread busy for as long
 as an operation reports progress.
 
+Terminal notification delivery is tracked separately from operation
+completion. Suspending or recreating the dispatch window requeues only
+undelivered completions; a callback already delivered to the owner thread must
+not be fired again, while an undelivered completion must remain available.
+
 Test-only exports such as `MapWinGISControlSetVectorPreparationHookForTesting`
 exist only when `MWG_ACTIVEX_TEST_HOOKS` is defined
 (`MWG_ENABLE_ACTIVEX_TEST_HOOKS` in CMake, which defaults to `MWG_BUILD_TESTS`;
-`MwgEnableActiveXTestHooks` in MSBuild). Tests that need them skip when absent.
+Release CMake workflows explicitly disable it. `MwgEnableActiveXTestHooks` in
+MSBuild defaults to Debug and is explicitly disabled for Release builds. Tests
+that need hooks skip when absent.
 
 ## Current limits
 
@@ -105,8 +112,11 @@ draws the original rings with an alternate fill rule,
 while OpenGL fill draws require triangle meshes. Normal Core scene
 creation is mesh-free; OpenGL fills prepare missing meshes lazily and fall
 back to GDI if preparation fails or an explicitly prepared mesh is unusable.
-GDI fills the original rings. The OpenGL renderer also has an outline mode
-that draws those rings without triangulation.
+GDI fills the original rings. Finite transformed coordinates are clipped to
+an expanded safe device range before integer conversion; the host clip removes
+the offscreen margin. A non-finite transformed vertex still invalidates the
+whole layer. The OpenGL renderer also has an outline mode that draws those
+rings without triangulation.
 Consult the current implementation and architecture documentation before
 assuming a capability or compatibility guarantee.
 

@@ -46,7 +46,8 @@
   </ImportGroup>
 
   <PropertyGroup>
-    <MwgEnableActiveXTestHooks Condition="'$(MwgEnableActiveXTestHooks)' == ''">true</MwgEnableActiveXTestHooks>
+    <MwgEnableActiveXTestHooks Condition="'$(MwgEnableActiveXTestHooks)' == '' and '$(Configuration)' == 'Debug'">true</MwgEnableActiveXTestHooks>
+    <MwgEnableActiveXTestHooks Condition="'$(MwgEnableActiveXTestHooks)' == ''">false</MwgEnableActiveXTestHooks>
   </PropertyGroup>
 
   <ItemDefinitionGroup>

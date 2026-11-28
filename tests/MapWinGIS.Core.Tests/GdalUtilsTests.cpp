@@ -12,6 +12,8 @@
 #include <array>
 #include <atomic>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -114,6 +116,29 @@ namespace
     {
         const std::u8string pathUtf8 = path.u8string();
         return {reinterpret_cast<const char*>(pathUtf8.data()), pathUtf8.size()};
+    }
+
+    std::filesystem::path WithEmbeddedNull(const std::filesystem::path& path)
+    {
+        std::filesystem::path::string_type native = path.native();
+        native.push_back(std::filesystem::path::value_type{});
+        native.push_back(static_cast<std::filesystem::path::value_type>('x'));
+        return std::filesystem::path(std::move(native));
+    }
+
+    bool WriteSentinelFile(
+        const std::filesystem::path& path,
+        const std::string& contents)
+    {
+        std::ofstream output(path, std::ios::binary);
+        output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+        return output.good();
+    }
+
+    std::string ReadFileContents(const std::filesystem::path& path)
+    {
+        std::ifstream input(path, std::ios::binary);
+        return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     }
 
     std::filesystem::path MakeWgs84Shapefile(const std::filesystem::path& directory)
@@ -466,6 +491,166 @@ TEST(GdalUtils, ReportsInvalidOverviewConfigurationThroughTheDocumentedContracts
         EXPECT_NE(utils.DetailedErrorMsg().find("resampling"), std::string::npos);
         EXPECT_FALSE(utils.Result().Succeeded());
     }
+}
+
+TEST(GdalUtils, RejectsEmbeddedNullBytesInEveryUtilityPath)
+{
+    GdalEnvironment::Initialize();
+    GdalEnvironment::QuietScope quiet;
+    test::TempDirectory directory;
+    const std::filesystem::path rasterInput = test::MakeRaster(directory.Path());
+    const std::filesystem::path vectorInput =
+        test::MakeProvincesDataset(directory.Path(), "input.gpkg");
+    const std::filesystem::path overlay = MakeClipOverlay(directory.Path());
+    ASSERT_FALSE(overlay.empty());
+
+    const std::filesystem::path rasterOutput = directory.Path() / "existing-raster.tif";
+    const std::filesystem::path vectorOutput = directory.Path() / "existing-vector.gpkg";
+    constexpr char kSentinel[] = "must remain unchanged";
+    ASSERT_TRUE(WriteSentinelFile(rasterOutput, kSentinel));
+    ASSERT_TRUE(WriteSentinelFile(vectorOutput, kSentinel));
+
+    const auto expectRejected = [](auto&& operation)
+    {
+        GdalUtils utils;
+        EXPECT_FALSE(operation(utils));
+        EXPECT_FALSE(utils.Result().Succeeded());
+        EXPECT_NE(
+            utils.DetailedErrorMsg().find("null bytes"),
+            std::string::npos);
+    };
+    const auto expectRasterSentinelUnchanged = [&]()
+    {
+        EXPECT_EQ(ReadFileContents(rasterOutput), kSentinel);
+    };
+    const auto expectVectorSentinelUnchanged = [&]()
+    {
+        EXPECT_EQ(ReadFileContents(vectorOutput), kSentinel);
+    };
+    const std::vector<std::string> rasterTranslateOptions{"-of", "GTiff"};
+    const std::vector<std::string> rasterWarpOptions{"-t_srs", "EPSG:3857"};
+    const std::vector<std::string> vectorTranslateOptions{"-f", "GPKG", "-overwrite"};
+
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyRasterTranslate(
+            utils,
+            WithEmbeddedNull(rasterInput),
+            rasterOutput,
+            rasterTranslateOptions);
+    });
+    expectRasterSentinelUnchanged();
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyRasterTranslate(
+            utils,
+            rasterInput,
+            WithEmbeddedNull(rasterOutput),
+            rasterTranslateOptions);
+    });
+    expectRasterSentinelUnchanged();
+
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyRasterWarp(
+            utils,
+            WithEmbeddedNull(rasterInput),
+            rasterOutput,
+            rasterWarpOptions);
+    });
+    expectRasterSentinelUnchanged();
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyRasterWarp(
+            utils,
+            rasterInput,
+            WithEmbeddedNull(rasterOutput),
+            rasterWarpOptions);
+    });
+    expectRasterSentinelUnchanged();
+
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyVectorTranslate(
+            utils,
+            WithEmbeddedNull(vectorInput),
+            vectorOutput,
+            vectorTranslateOptions);
+    });
+    expectVectorSentinelUnchanged();
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyVectorTranslate(
+            utils,
+            vectorInput,
+            WithEmbeddedNull(vectorOutput),
+            vectorTranslateOptions);
+    });
+    expectVectorSentinelUnchanged();
+
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyVectorReproject(
+            utils,
+            WithEmbeddedNull(vectorInput),
+            vectorOutput,
+            28992,
+            4326);
+    });
+    expectVectorSentinelUnchanged();
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyVectorReproject(
+            utils,
+            vectorInput,
+            WithEmbeddedNull(vectorOutput),
+            28992,
+            4326);
+    });
+    expectVectorSentinelUnchanged();
+
+    const std::string rasterContents = ReadFileContents(rasterInput);
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyBuildOverviews(
+            utils,
+            WithEmbeddedNull(rasterInput),
+            "NEAREST",
+            {2},
+            {1});
+    });
+    EXPECT_EQ(ReadFileContents(rasterInput), rasterContents);
+    std::filesystem::path overviewFile = rasterInput;
+    overviewFile += ".ovr";
+    EXPECT_FALSE(std::filesystem::exists(overviewFile));
+
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyClipVectorWithVector(
+            utils,
+            WithEmbeddedNull(vectorInput),
+            overlay,
+            vectorOutput);
+    });
+    expectVectorSentinelUnchanged();
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyClipVectorWithVector(
+            utils,
+            vectorInput,
+            WithEmbeddedNull(overlay),
+            vectorOutput);
+    });
+    expectVectorSentinelUnchanged();
+    expectRejected([&](GdalUtils& utils)
+    {
+        return RunLegacyClipVectorWithVector(
+            utils,
+            vectorInput,
+            overlay,
+            WithEmbeddedNull(vectorOutput));
+    });
+    expectVectorSentinelUnchanged();
 }
 
 TEST(GdalUtils, ClipsVectorFeaturesWithAnOverlayDataset)

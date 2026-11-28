@@ -91,9 +91,10 @@ namespace mwg
         [[nodiscard]] std::string ExportToWkt() const;
         [[nodiscard]] std::string ExportToProj4() const;
 
-        /// Compares CRS identity by EPSG code when possible, otherwise by OGR
-        /// equivalence and then by PROJ.4-normalized definitions. Unlike
-        /// MapWinGIS 5, matching names alone never make two CRSs the same.
+        /// Requires matching coordinate epochs, then compares CRS identity by
+        /// EPSG code when possible, otherwise by OGR equivalence and then by
+        /// PROJ.4-normalized definitions. Unlike MapWinGIS 5, matching names
+        /// alone never make two CRSs the same.
         [[nodiscard]] bool IsSame(const Projection& other) const;
 
         /// Creates a stateless transformation using traditional GIS axis order.

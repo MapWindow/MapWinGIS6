@@ -36,16 +36,25 @@ namespace mwg
     /// actively using the dataset.
     using GdalDatasetPtr = std::unique_ptr<GDALDataset, GdalDatasetDeleter>;
 
+    /// One named string-valued output produced by a GDAL algorithm.
+    struct GdalStringOutput
+    {
+        std::string name;
+        std::string value;
+    };
+
     /// Owns an operation's diagnostics and any returned datasets.
     /// Keep the result alive while using outputs that depend on retained datasets.
     /// Not thread-safe for shared instances. Diagnostic queries copy strings.
     struct MWG_CORE_API GdalOperationResult
     {
         bool succeeded = false;
-        GdalDatasetPtr outputDataset;
-        std::vector<GdalDatasetPtr> retainedDatasets;
+        std::vector<GdalStringOutput> stringOutputs;
         std::vector<GdalError> errors;
         bool cancelled = false;
+        // Declared before outputDataset so dependent outputs are destroyed first.
+        std::vector<GdalDatasetPtr> retainedDatasets;
+        GdalDatasetPtr outputDataset;
 
         [[nodiscard]] bool Succeeded() const noexcept { return succeeded; }
         [[nodiscard]] bool WasCancelled() const noexcept { return cancelled; }

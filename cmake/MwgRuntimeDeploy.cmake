@@ -4,9 +4,9 @@
 #
 # vcpkg installs the GDAL and PROJ data under share/; GdalEnvironment looks for
 # "gdal-data" and "proj" beside the loaded module. The target
-# MapWinGIS.RuntimeData copies both into the runtime folder. A stamp file in
-# that folder keeps the copy from running on every build: it reruns only when
-# a data file changes or the runtime folder was cleaned.
+# MapWinGIS.RuntimeData tracks each deployed file as an output. Missing files
+# are repaired and files removed from vcpkg are pruned without clearing the
+# runtime directories or deleting unrelated files.
 
 option(MWG_DEPLOY_RUNTIME_DATA "Copy gdal-data and proj into the runtime folder (MSBuild: MwgDeployRuntimeData)" ON)
 
@@ -28,30 +28,67 @@ function(mwg_add_runtime_data_target)
         return()
     endif()
 
-    file(GLOB_RECURSE data_files CONFIGURE_DEPENDS "${gdal_dir}/*" "${proj_dir}/*")
-    list(SORT data_files)
+    file(GLOB_RECURSE gdal_files
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES false
+        "${gdal_dir}/*")
+    set(data_files ${gdal_files})
+    set(runtime_data_outputs)
+    set(runtime_data_paths)
+    foreach(data_file IN LISTS gdal_files)
+        file(RELATIVE_PATH relative_file "${gdal_dir}" "${data_file}")
+        list(APPEND runtime_data_paths "gdal-data/${relative_file}")
+        list(APPEND runtime_data_outputs
+            "${MWG_RUNTIME_DIR}/gdal-data/${relative_file}")
+    endforeach()
 
-    set(input_manifest "${MWG_RUNTIME_DIR}/.mwg-runtime-data.inputs")
-    file(GENERATE OUTPUT "${input_manifest}" CONTENT "${data_files}")
-
-    set(stamp "${MWG_RUNTIME_DIR}/.mwg-runtime-data.stamp")
-    set(commands
-        COMMAND "${CMAKE_COMMAND}" -E rm -rf "${MWG_RUNTIME_DIR}/gdal-data" "${MWG_RUNTIME_DIR}/proj"
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different "${gdal_dir}" "${MWG_RUNTIME_DIR}/gdal-data")
     if(EXISTS "${proj_dir}")
-        list(APPEND commands
-            COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different "${proj_dir}" "${MWG_RUNTIME_DIR}/proj")
+        file(GLOB_RECURSE proj_files
+            CONFIGURE_DEPENDS
+            LIST_DIRECTORIES false
+            "${proj_dir}/*")
+        list(APPEND data_files ${proj_files})
+        foreach(data_file IN LISTS proj_files)
+            file(RELATIVE_PATH relative_file "${proj_dir}" "${data_file}")
+            list(APPEND runtime_data_paths "proj/${relative_file}")
+            list(APPEND runtime_data_outputs
+                "${MWG_RUNTIME_DIR}/proj/${relative_file}")
+        endforeach()
     endif()
 
+    if(NOT data_files)
+        add_custom_target(MapWinGIS.RuntimeData)
+        return()
+    endif()
+
+    list(SORT data_files)
+    list(SORT runtime_data_outputs)
+    list(SORT runtime_data_paths)
+    list(JOIN runtime_data_paths "\n" runtime_data_manifest_content)
+    string(APPEND runtime_data_manifest_content "\n")
+    set(current_manifest "${CMAKE_CURRENT_BINARY_DIR}/.mwg-runtime-data.inputs")
+    file(GENERATE
+        OUTPUT "${current_manifest}"
+        CONTENT "${runtime_data_manifest_content}")
+
+    set(stamp "${MWG_RUNTIME_DIR}/.mwg-runtime-data.stamp")
+
     add_custom_command(
-        OUTPUT "${stamp}"
-        ${commands}
-        COMMAND "${CMAKE_COMMAND}" -E touch "${stamp}"
-        DEPENDS ${data_files} "${input_manifest}"
+        OUTPUT ${runtime_data_outputs} "${stamp}"
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMWG_RUNTIME_DIR=${MWG_RUNTIME_DIR}"
+            "-DMWG_GDAL_SOURCE_DIR=${gdal_dir}"
+            "-DMWG_PROJ_SOURCE_DIR=${proj_dir}"
+            "-DMWG_CURRENT_MANIFEST=${current_manifest}"
+            "-DMWG_STAMP_FILE=${stamp}"
+            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MwgSyncRuntimeData.cmake"
+        DEPENDS ${data_files}
+            "${current_manifest}"
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MwgSyncRuntimeData.cmake"
         COMMENT "Deploying GDAL and PROJ runtime data"
         VERBATIM
     )
-    add_custom_target(MapWinGIS.RuntimeData DEPENDS "${stamp}")
+    add_custom_target(MapWinGIS.RuntimeData DEPENDS ${runtime_data_outputs} "${stamp}")
 endfunction()
 
 function(mwg_deploy_runtime_dlls target)

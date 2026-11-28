@@ -116,16 +116,14 @@ namespace mwg::activex
             return originY + transform.ToDeviceY(point);
         }
 
-        [[nodiscard]] bool IsDrawableCoordinate(const double value) noexcept
+        [[nodiscard]] bool IsFiniteCoordinate(const double value) noexcept
         {
-            return std::isfinite(value) &&
-                value >= -kMaximumGdiCoordinate &&
-                value <= kMaximumGdiCoordinate;
+            return std::isfinite(value);
         }
 
-        /// Checks every vertex of a layer before drawing so invalid geometry
-        /// skips the whole layer instead of being partially rasterized.
-        [[nodiscard]] bool HasDrawableCoordinates(
+        /// Checks every transformed vertex before drawing so non-finite
+        /// geometry skips the whole layer instead of being partly rasterized.
+        [[nodiscard]] bool HasFiniteCoordinates(
             const rendering::VectorRenderScene& scene,
             const ViewTransform& transform,
             const double originX,
@@ -133,8 +131,8 @@ namespace mwg::activex
         {
             for (const rendering::Point& point : scene.polygons.Coordinates())
             {
-                if (!IsDrawableCoordinate(ToDeviceX(point, transform, originX)) ||
-                    !IsDrawableCoordinate(ToDeviceY(point, transform, originY)))
+                if (!IsFiniteCoordinate(ToDeviceX(point, transform, originX)) ||
+                    !IsFiniteCoordinate(ToDeviceY(point, transform, originY)))
                 {
                     return false;
                 }
@@ -143,18 +141,152 @@ namespace mwg::activex
             return true;
         }
 
-        /// GDI addresses pixels by integer coordinates, so a continuous
-        /// screen position is drawn in the pixel that contains it, as ToPixel
-        /// defines.
-        [[nodiscard]] POINT ToPoint(
-            const rendering::Point& point,
-            const ViewTransform& transform,
-            const double originX,
-            const double originY) noexcept
+        struct DevicePoint
         {
+            double x;
+            double y;
+        };
+
+        struct DeviceClipBounds
+        {
+            double minimumX;
+            double maximumX;
+            double minimumY;
+            double maximumY;
+        };
+
+        [[nodiscard]] DeviceClipBounds MakeDeviceClipBounds(const RECT& bounds) noexcept
+        {
+            const double left = static_cast<double>(bounds.left);
+            const double right = static_cast<double>(bounds.right);
+            const double top = static_cast<double>(bounds.top);
+            const double bottom = static_cast<double>(bounds.bottom);
+            const double margin = std::max(right - left, bottom - top) + 1.0;
             return {
-                static_cast<LONG>(std::floor(ToDeviceX(point, transform, originX))),
-                static_cast<LONG>(std::floor(ToDeviceY(point, transform, originY)))};
+                std::max(-kMaximumGdiCoordinate, left - margin),
+                std::min(kMaximumGdiCoordinate, right + margin),
+                std::max(-kMaximumGdiCoordinate, top - margin),
+                std::min(kMaximumGdiCoordinate, bottom + margin)};
+        }
+
+        enum class ClipBoundary
+        {
+            MinimumX,
+            MaximumX,
+            MinimumY,
+            MaximumY
+        };
+
+        [[nodiscard]] bool IsInside(
+            const DevicePoint& point,
+            const ClipBoundary boundary,
+            const DeviceClipBounds& bounds) noexcept
+        {
+            switch (boundary)
+            {
+            case ClipBoundary::MinimumX:
+                return point.x >= bounds.minimumX;
+            case ClipBoundary::MaximumX:
+                return point.x <= bounds.maximumX;
+            case ClipBoundary::MinimumY:
+                return point.y >= bounds.minimumY;
+            case ClipBoundary::MaximumY:
+                return point.y <= bounds.maximumY;
+            }
+            return false;
+        }
+
+        [[nodiscard]] double InterpolationParameter(
+            const double start,
+            const double end,
+            const double boundary) noexcept
+        {
+            if (std::signbit(start) != std::signbit(end))
+            {
+                const double halfStart = start * 0.5;
+                const double halfEnd = end * 0.5;
+                return (boundary * 0.5 - halfStart) / (halfEnd - halfStart);
+            }
+            return (boundary - start) / (end - start);
+        }
+
+        [[nodiscard]] DevicePoint IntersectBoundary(
+            const DevicePoint& start,
+            const DevicePoint& end,
+            const ClipBoundary boundary,
+            const DeviceClipBounds& bounds) noexcept
+        {
+            if (boundary == ClipBoundary::MinimumX ||
+                boundary == ClipBoundary::MaximumX)
+            {
+                const double x = boundary == ClipBoundary::MinimumX
+                    ? bounds.minimumX
+                    : bounds.maximumX;
+                const double parameter = InterpolationParameter(start.x, end.x, x);
+                return {x, std::lerp(start.y, end.y, parameter)};
+            }
+
+            const double y = boundary == ClipBoundary::MinimumY
+                ? bounds.minimumY
+                : bounds.maximumY;
+            const double parameter = InterpolationParameter(start.y, end.y, y);
+            return {std::lerp(start.x, end.x, parameter), y};
+        }
+
+        void ClipRingAgainstBoundary(
+            const std::vector<DevicePoint>& input,
+            std::vector<DevicePoint>& output,
+            const ClipBoundary boundary,
+            const DeviceClipBounds& bounds)
+        {
+            output.clear();
+            if (input.empty())
+            {
+                return;
+            }
+
+            DevicePoint previous = input.back();
+            bool previousInside = IsInside(previous, boundary, bounds);
+            for (const DevicePoint& current : input)
+            {
+                const bool currentInside = IsInside(current, boundary, bounds);
+                if (previousInside && currentInside)
+                {
+                    output.push_back(current);
+                }
+                else if (previousInside)
+                {
+                    output.push_back(IntersectBoundary(previous, current, boundary, bounds));
+                }
+                else if (currentInside)
+                {
+                    output.push_back(IntersectBoundary(previous, current, boundary, bounds));
+                    output.push_back(current);
+                }
+                previous = current;
+                previousInside = currentInside;
+            }
+        }
+
+        void ClipRingToBounds(
+            std::vector<DevicePoint>& ring,
+            std::vector<DevicePoint>& scratch,
+            const DeviceClipBounds& bounds)
+        {
+            for (const ClipBoundary boundary : {
+                     ClipBoundary::MinimumX,
+                     ClipBoundary::MaximumX,
+                     ClipBoundary::MinimumY,
+                     ClipBoundary::MaximumY})
+            {
+                ClipRingAgainstBoundary(ring, scratch, boundary, bounds);
+                ring.swap(scratch);
+                if (ring.size() < 3)
+                {
+                    ring.clear();
+                    return;
+                }
+            }
         }
 
         [[nodiscard]] HRESULT DrawLayer(
@@ -163,9 +295,12 @@ namespace mwg::activex
             const ViewTransform& transform,
             const double originX,
             const double originY,
+            const DeviceClipBounds& clipBounds,
             std::vector<POINT>& points,
             std::vector<int>& ringCounts)
         {
+            std::vector<DevicePoint> ringPoints;
+            std::vector<DevicePoint> clippedPoints;
             for (std::size_t polygonIndex = 0; polygonIndex < scene.polygons.size(); ++polygonIndex)
             {
                 const rendering::PolygonView polygon = scene.polygons[polygonIndex];
@@ -176,6 +311,12 @@ namespace mwg::activex
                     const std::span<const rendering::Point> ring = polygon[ringIndex];
                     if (ring.size() < 3)
                     {
+                        if (ringIndex == 0)
+                        {
+                            points.clear();
+                            ringCounts.clear();
+                            break;
+                        }
                         continue;
                     }
 
@@ -187,10 +328,38 @@ namespace mwg::activex
                         return E_INVALIDARG;
                     }
 
-                    ringCounts.push_back(static_cast<int>(ring.size()));
+                    ringPoints.clear();
+                    ringPoints.reserve(ring.size());
                     for (const rendering::Point& point : ring)
                     {
-                        points.push_back(ToPoint(point, transform, originX, originY));
+                        ringPoints.push_back({
+                            ToDeviceX(point, transform, originX),
+                            ToDeviceY(point, transform, originY)});
+                    }
+                    ClipRingToBounds(ringPoints, clippedPoints, clipBounds);
+                    if (ringPoints.size() < 3)
+                    {
+                        if (ringIndex == 0)
+                        {
+                            points.clear();
+                            ringCounts.clear();
+                            break;
+                        }
+                        continue;
+                    }
+
+                    if (ringCounts.size() >= maximumPoints ||
+                        ringPoints.size() > maximumPoints ||
+                        points.size() > maximumPoints - ringPoints.size())
+                    {
+                        return E_INVALIDARG;
+                    }
+                    ringCounts.push_back(static_cast<int>(ringPoints.size()));
+                    for (const DevicePoint& point : ringPoints)
+                    {
+                        points.push_back({
+                            static_cast<LONG>(std::floor(point.x)),
+                            static_cast<LONG>(std::floor(point.y))});
                     }
                 }
 
@@ -274,6 +443,14 @@ namespace mwg::activex
 
         const double originX = static_cast<double>(bounds.left);
         const double originY = static_cast<double>(bounds.top);
+        const DeviceClipBounds coordinateClipBounds = MakeDeviceClipBounds(bounds);
+        if (coordinateClipBounds.minimumX > bounds.left ||
+            coordinateClipBounds.maximumX < bounds.right ||
+            coordinateClipBounds.minimumY > bounds.top ||
+            coordinateClipBounds.maximumY < bounds.bottom)
+        {
+            return E_INVALIDARG;
+        }
         std::size_t drawnLayers = 0;
         try
         {
@@ -284,14 +461,21 @@ namespace mwg::activex
             for (const rendering::LayerRenderScene& layer : scene.layers)
             {
                 if (layer.scene == nullptr ||
-                    !HasDrawableCoordinates(*layer.scene, *transform, originX, originY))
+                    !HasFiniteCoordinates(*layer.scene, *transform, originX, originY))
                 {
                     _failedLayers.push_back(layer.layerId);
                     continue;
                 }
 
                 const HRESULT layerResult = DrawLayer(
-                    deviceContext, *layer.scene, *transform, originX, originY, points, ringCounts);
+                    deviceContext,
+                    *layer.scene,
+                    *transform,
+                    originX,
+                    originY,
+                    coordinateClipBounds,
+                    points,
+                    ringCounts);
                 if (layerResult == E_INVALIDARG)
                 {
                     _failedLayers.push_back(layer.layerId);
