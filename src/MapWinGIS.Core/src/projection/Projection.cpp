@@ -589,6 +589,12 @@ namespace mwg
             return IsEmpty() && other.IsEmpty();
         }
 
+        if (_impl->_reference->GetCoordinateEpoch() !=
+            other._impl->_reference->GetCoordinateEpoch())
+        {
+            return false;
+        }
+
         const std::optional<int> code = Epsg();
         const std::optional<int> otherCode = other.Epsg();
         if (code.has_value() && otherCode.has_value())
