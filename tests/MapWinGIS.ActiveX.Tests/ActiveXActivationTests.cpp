@@ -2072,6 +2072,73 @@ TEST_F(ActiveXMapTest, AnEmptyFrameAfterClearingKeepsThePreferenceButReportsNoBa
     EXPECT_STREQ(backend, L"GDI");
 }
 
+TEST_F(ActiveXMapTest, AnEmptyFrameBeforeAnyRenderKeepsTheInitialStatus)
+{
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+
+    ATL::CComBSTR backend;
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    EXPECT_STREQ(backend, L"Not rendered");
+    ATL::CComBSTR status;
+    ASSERT_EQ(_control->get_RenderingStatus(&status), S_OK);
+    EXPECT_STREQ(status, L"Rendering has not been attempted.");
+}
+
+TEST_F(ActiveXMapTest, AnEmptyFrameWithALayerWithoutGeometryReportsWhyNothingWasDrawn)
+{
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(
+        _control->put_RenderingBackendPreference(ATL::CComBSTR(L"GDI")),
+        S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    ASSERT_EQ(LoadRectangles({}), S_OK);
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    ATL::CComBSTR backend;
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    EXPECT_STREQ(backend, L"Not rendered");
+    ATL::CComBSTR status;
+    ASSERT_EQ(_control->get_RenderingStatus(&status), S_OK);
+    EXPECT_STREQ(
+        status,
+        L"No layer was rendered; every layer is hidden or has no geometry to draw.");
+}
+
+TEST_F(ActiveXMapTest, AnEmptyPrintDrawKeepsTheInteractiveRenderingStatus)
+{
+    ASSERT_EQ(Resize(120, 100), S_OK);
+    ASSERT_EQ(
+        _control->put_RenderingBackendPreference(ATL::CComBSTR(L"GDI")),
+        S_OK);
+    ASSERT_EQ(LoadRectangles({{0, 0, 10, 5}}), S_OK);
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    ATL::CComBSTR status;
+    ASSERT_EQ(_control->get_RenderingStatus(&status), S_OK);
+    const std::wstring interactiveStatus(status, status.Length());
+
+    // A draw at another size, such as a print, must not report its empty
+    // frame as the on-screen status.
+    ASSERT_EQ(_control->ClearLayers(), S_OK);
+    BitmapSurface printSurface(240, 200);
+    ASSERT_TRUE(printSurface.IsValid());
+    ASSERT_EQ(Draw(printSurface.Get(), 240, 200), S_OK);
+    ATL::CComBSTR backend;
+    ASSERT_EQ(_control->get_RenderingBackend(&backend), S_OK);
+    EXPECT_STREQ(backend, L"GDI");
+    status.Empty();
+    ASSERT_EQ(_control->get_RenderingStatus(&status), S_OK);
+    EXPECT_STREQ(status, interactiveStatus.c_str());
+}
+
 TEST_F(ActiveXMapTest, NavigationSucceedsWhenThereIsNoViewToChange)
 {
     ComPtr<IMapWinGISControl4> control;

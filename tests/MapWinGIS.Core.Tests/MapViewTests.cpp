@@ -546,6 +546,7 @@ TEST_F(MapViewTest, ReprojectedLayerAlignsWithANativeLayerInTheMapProjection)
     double cornerX = geographic.xMin;
     double cornerY = geographic.yMin;
     ASSERT_TRUE(wgs84.TransformTo(rdNew)(cornerX, cornerY));
+    ASSERT_EQ(scene.layers[1].layerId, reprojected);
     const rendering::Point first = scene.layers[1].scene->polygons.front().front()[0];
     EXPECT_NEAR(first.x, cornerX, kMetreTolerance);
     EXPECT_NEAR(first.y, cornerY, kMetreTolerance);

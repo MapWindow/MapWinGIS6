@@ -233,6 +233,26 @@ namespace
         }
     }
 
+    /// Explains why a scene without drawable layers drew nothing: the map
+    /// has no layers, a layer could not be rendered, or every layer is
+    /// hidden or has nothing to draw.
+    [[nodiscard]] std::wstring_view EmptySceneDiagnostic(
+        const mwg::rendering::MapRenderScene& scene) noexcept
+    {
+        if (scene.skippedLayers.empty())
+        {
+            return L"There are no layers to render.";
+        }
+        for (const mwg::rendering::SkippedLayer& skipped : scene.skippedLayers)
+        {
+            if (skipped.reason == mwg::rendering::LayerSkipReason::Failed)
+            {
+                return L"No layer was rendered; one or more layers could not be prepared for rendering.";
+            }
+        }
+        return L"No layer was rendered; every layer is hidden or has no geometry to draw.";
+    }
+
     [[nodiscard]] const wchar_t* BackendName(
         const std::optional<mwg::activex::VectorRenderBackendKind> backend) noexcept
     {
@@ -2782,8 +2802,15 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
             return E_FAIL;
         }
 
+        // Only the interactive frame updates the rendering status; prints
+        // and scaled draws must not change what the screen reports.
         if (!drawable)
         {
+            if (!alternateSize)
+            {
+                _renderer.MarkFrameNotRendered(
+                    L"The view has no drawable area of a supported size.");
+            }
             return S_OK;
         }
 
@@ -2819,9 +2846,12 @@ HRESULT CMapWinGISControl::OnDraw(ATL_DRAWINFO& drawInfo)
                     useLayerCache,
                     !alternateSize);
             }
-            if (scene.layers.empty())
+            if (!alternateSize)
             {
-                _renderer.MarkEmptyFrame();
+                _renderer.MarkFrameNotRendered(
+                    scene.layers.empty()
+                        ? EmptySceneDiagnostic(scene)
+                        : L"The view is not valid for rendering.");
             }
             return S_OK;
         }

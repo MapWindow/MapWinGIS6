@@ -25,6 +25,8 @@ namespace mwg::activex
         const VectorRenderMode renderMode) noexcept
     {
         _activeBackend.reset();
+        _renderAttempted = true;
+        _gdiAttemptedLastFrame = false;
 
         rendering::MapRenderScene stableScene;
         try
@@ -134,6 +136,7 @@ namespace mwg::activex
             }
         }
 
+        _gdiAttemptedLastFrame = true;
         const HRESULT gdiResult =
             _gdiRenderer.Draw(
                 deviceContext,

@@ -5,9 +5,13 @@
 
 .DESCRIPTION
     The Ninja presets need an MSVC environment (cl.exe, MIDL, ATL headers).
-    When the current shell does not already provide one for the preset's
-    architecture, this script locates Visual Studio 2026 with vswhere, imports
-    its vcvars environment into this process, and then runs CMake and CTest.
+    When the current shell does not already provide a Visual Studio 2026 one
+    for the configure preset's architecture, this script locates Visual
+    Studio 2026 with vswhere, imports its vcvars environment into this
+    process, and then runs CMake and CTest. A developer shell for another
+    Visual Studio version or architecture is rejected rather than layered
+    with a second vcvars environment. Presets that use a Visual Studio
+    generator locate the toolset themselves and skip the import.
 
     An existing build tree is driven by the CMake that configured it, as
     recorded in its CMakeCache.txt, so trees configured by an IDE-bundled
@@ -41,10 +45,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-
-# x86 presets build Win32 with the x64-hosted cross compiler.
-$vcvarsArch = if ($Preset -like 'x86-*' -or $Preset -like '*-x86*') { 'amd64_x86' } else { 'amd64' }
-$targetArch = if ($vcvarsArch -eq 'amd64_x86') { 'x86' } else { 'x64' }
 
 function Find-VisualStudio {
     if ($VsInstallPath) {
@@ -91,23 +91,40 @@ if ($buildPreset -and $buildPreset.configurePreset) {
     $configurePreset = $buildPreset.configurePreset
 }
 
-function Get-PresetBinaryDirectory([string] $configureName) {
-    $pending = [System.Collections.Generic.Queue[string]]::new()
-    $pending.Enqueue($configureName)
-    while ($pending.Count -gt 0) {
-        $name = $pending.Dequeue()
-        $configure = @($presets.configurePresets) | Where-Object { $_.name -eq $name } | Select-Object -First 1
-        if (-not $configure) { continue }
-        if ($configure.binaryDir) {
-            return [System.IO.Path]::GetFullPath(
-                ($configure.binaryDir -replace '\$\{sourceDir\}', $repoRoot.Replace('\', '/')))
-        }
-        foreach ($parent in @($configure.inherits)) {
-            if ($parent) { $pending.Enqueue($parent) }
+# Returns a configure preset field, following 'inherits' as CMake does: the
+# preset's own value wins, then each parent in order, depth first.
+function Get-PresetValue([string] $configureName, [string] $field) {
+    $configure = @($presets.configurePresets) | Where-Object { $_.name -eq $configureName } | Select-Object -First 1
+    if (-not $configure) { return $null }
+    if ($null -ne $configure.$field) { return $configure.$field }
+    foreach ($parent in @($configure.inherits)) {
+        if ($parent) {
+            $value = Get-PresetValue $parent $field
+            if ($null -ne $value) { return $value }
         }
     }
     return $null
 }
+
+function Get-PresetBinaryDirectory([string] $configureName) {
+    $binaryDir = Get-PresetValue $configureName 'binaryDir'
+    if (-not $binaryDir) { return $null }
+    return [System.IO.Path]::GetFullPath(
+        ($binaryDir -replace '\$\{sourceDir\}', $repoRoot.Replace('\', '/')))
+}
+
+$generator = [string](Get-PresetValue $configurePreset 'generator')
+$architecture = Get-PresetValue $configurePreset 'architecture'
+if ($architecture -and $architecture -isnot [string]) {
+    $architecture = $architecture.value
+}
+# x86 presets build Win32 with the x64-hosted cross compiler.
+$vcvarsArch = switch ([string]$architecture) {
+    { $_ -in @('x86', 'Win32') } { 'amd64_x86'; break }
+    { $_ -in @('', 'x64') } { 'amd64'; break }
+    default { throw "Configure preset '$configurePreset' has unsupported architecture '$architecture'." }
+}
+$targetArch = if ($vcvarsArch -eq 'amd64_x86') { 'x86' } else { 'x64' }
 
 function Resolve-CMakeTools {
     $cmake = 'cmake'
@@ -136,12 +153,22 @@ function Invoke-Tool([string] $tool, [string[]] $arguments) {
     }
 }
 
-$hasMsvc = $env:VSCMD_ARG_TGT_ARCH -eq $targetArch -and
-    (Get-Command cl.exe -ErrorAction SilentlyContinue)
-if (-not $hasMsvc) {
-    $installPath = Find-VisualStudio
-    Write-Host "Using the MSVC $targetArch environment from $installPath"
-    Import-MsvcEnvironment $installPath
+if ($generator -notlike 'Visual Studio*') {
+    $hasMsvc = $env:VSCMD_ARG_TGT_ARCH -eq $targetArch -and $env:VisualStudioVersion -eq '18.0' -and
+        (Get-Command cl.exe -ErrorAction SilentlyContinue)
+    if (-not $hasMsvc) {
+        # vcvars is not designed to be applied on top of another developer
+        # environment; mixing versions or architectures breaks linking.
+        if ($env:VSCMD_VER -or $env:VisualStudioVersion) {
+            throw ("This shell has an MSVC environment for Visual Studio " +
+                "'$env:VisualStudioVersion' ($env:VSCMD_ARG_TGT_ARCH), but preset '$Preset' needs " +
+                "Visual Studio 2026 (18.0) for $targetArch. Run this script from a new shell " +
+                'without a developer environment, or from a matching Developer PowerShell.')
+        }
+        $installPath = Find-VisualStudio
+        Write-Host "Using the MSVC $targetArch environment from $installPath"
+        Import-MsvcEnvironment $installPath
+    }
 }
 
 Push-Location $repoRoot
