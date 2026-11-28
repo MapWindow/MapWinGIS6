@@ -2855,10 +2855,10 @@ TEST_F(ActiveXMapTest, DragDrawBlitsWholePixelShiftsAndRendersFractionalOrHugeSh
     ASSERT_EQ(Draw(surface.Get(), 120, 100), S_OK);
     EXPECT_NE(Access::CachedCenter(control).x, fractional.x);
     ASSERT_TRUE(Access::PanDuringDrag(control, 1e12));
-    // The blit rejects this shift before integer conversion. GDI then
-    // reports its existing coordinate-range failure instead of caching it.
-    EXPECT_EQ(Draw(surface.Get(), 120, 100), E_INVALIDARG);
-    EXPECT_FALSE(Access::CacheValid(control));
+    // The finite offscreen polygon is clipped before GDI integer conversion,
+    // so the resulting frame remains valid for pan caching.
+    EXPECT_EQ(Draw(surface.Get(), 120, 100), S_OK);
+    EXPECT_TRUE(Access::CacheValid(control));
 }
 
 TEST_F(ActiveXMapTest, FailedResizeInvalidatesTheCacheAndNotifiesTheHost)
