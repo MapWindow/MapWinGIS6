@@ -4,9 +4,8 @@
 #
 # vcpkg installs the GDAL and PROJ data under share/; GdalEnvironment looks for
 # "gdal-data" and "proj" beside the loaded module. The target
-# MapWinGIS.RuntimeData copies both into the runtime folder. A stamp file in
-# that folder keeps the copy from running on every build: it reruns only when
-# a data file changes or the runtime folder was cleaned.
+# MapWinGIS.RuntimeData copies both into the runtime folder. Each deployed file
+# is an output so a missing file is repaired without deleting unchanged data.
 
 option(MWG_DEPLOY_RUNTIME_DATA "Copy gdal-data and proj into the runtime folder (MSBuild: MwgDeployRuntimeData)" ON)
 
@@ -28,15 +27,39 @@ function(mwg_add_runtime_data_target)
         return()
     endif()
 
-    file(GLOB_RECURSE data_files CONFIGURE_DEPENDS "${gdal_dir}/*" "${proj_dir}/*")
+    file(GLOB_RECURSE gdal_files
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES false
+        "${gdal_dir}/*")
+    set(data_files ${gdal_files})
+    set(runtime_data_outputs)
+    foreach(data_file IN LISTS gdal_files)
+        file(RELATIVE_PATH relative_file "${gdal_dir}" "${data_file}")
+        list(APPEND runtime_data_outputs
+            "${MWG_RUNTIME_DIR}/gdal-data/${relative_file}")
+    endforeach()
+
+    if(EXISTS "${proj_dir}")
+        file(GLOB_RECURSE proj_files
+            CONFIGURE_DEPENDS
+            LIST_DIRECTORIES false
+            "${proj_dir}/*")
+        list(APPEND data_files ${proj_files})
+        foreach(data_file IN LISTS proj_files)
+            file(RELATIVE_PATH relative_file "${proj_dir}" "${data_file}")
+            list(APPEND runtime_data_outputs
+                "${MWG_RUNTIME_DIR}/proj/${relative_file}")
+        endforeach()
+    endif()
+
+    if(NOT data_files)
+        add_custom_target(MapWinGIS.RuntimeData)
+        return()
+    endif()
+
     list(SORT data_files)
 
-    set(input_manifest "${MWG_RUNTIME_DIR}/.mwg-runtime-data.inputs")
-    file(GENERATE OUTPUT "${input_manifest}" CONTENT "${data_files}")
-
-    set(stamp "${MWG_RUNTIME_DIR}/.mwg-runtime-data.stamp")
     set(commands
-        COMMAND "${CMAKE_COMMAND}" -E rm -rf "${MWG_RUNTIME_DIR}/gdal-data" "${MWG_RUNTIME_DIR}/proj"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different "${gdal_dir}" "${MWG_RUNTIME_DIR}/gdal-data")
     if(EXISTS "${proj_dir}")
         list(APPEND commands
@@ -44,14 +67,13 @@ function(mwg_add_runtime_data_target)
     endif()
 
     add_custom_command(
-        OUTPUT "${stamp}"
+        OUTPUT ${runtime_data_outputs}
         ${commands}
-        COMMAND "${CMAKE_COMMAND}" -E touch "${stamp}"
-        DEPENDS ${data_files} "${input_manifest}"
+        DEPENDS ${data_files}
         COMMENT "Deploying GDAL and PROJ runtime data"
         VERBATIM
     )
-    add_custom_target(MapWinGIS.RuntimeData DEPENDS "${stamp}")
+    add_custom_target(MapWinGIS.RuntimeData DEPENDS ${runtime_data_outputs})
 endfunction()
 
 function(mwg_deploy_runtime_dlls target)

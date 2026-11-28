@@ -51,6 +51,10 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File build/scripts/Test-CSharpCoreOnlyCMake.ps1
 
+      - name: Check CMake runtime-data repair
+        shell: pwsh
+        run: pwsh -NoProfile -File build/scripts/Test-CMakeRuntimeDataRepair.ps1
+
       - name: Configure CMake
         shell: pwsh
         run: |
