@@ -98,7 +98,9 @@ not be fired again, while an undelivered completion must remain available.
 Test-only exports such as `MapWinGISControlSetVectorPreparationHookForTesting`
 exist only when `MWG_ACTIVEX_TEST_HOOKS` is defined
 (`MWG_ENABLE_ACTIVEX_TEST_HOOKS` in CMake, which defaults to `MWG_BUILD_TESTS`;
-`MwgEnableActiveXTestHooks` in MSBuild). Tests that need them skip when absent.
+Release CMake workflows explicitly disable it. `MwgEnableActiveXTestHooks` in
+MSBuild defaults to Debug and is explicitly disabled for Release builds. Tests
+that need hooks skip when absent.
 
 ## Current limits
 
