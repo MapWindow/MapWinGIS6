@@ -90,6 +90,11 @@ by a sink's nested message pump is re-posted after the batch. Do not
 reintroduce a drain-until-empty loop: it keeps the STA thread busy for as long
 as an operation reports progress.
 
+Terminal notification delivery is tracked separately from operation
+completion. Suspending or recreating the dispatch window requeues only
+undelivered completions; a callback already delivered to the owner thread must
+not be fired again, while an undelivered completion must remain available.
+
 Test-only exports such as `MapWinGISControlSetVectorPreparationHookForTesting`
 exist only when `MWG_ACTIVEX_TEST_HOOKS` is defined
 (`MWG_ENABLE_ACTIVEX_TEST_HOOKS` in CMake, which defaults to `MWG_BUILD_TESTS`;

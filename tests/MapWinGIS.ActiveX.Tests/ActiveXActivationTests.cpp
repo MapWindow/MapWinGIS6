@@ -1022,6 +1022,26 @@ namespace
         return PumpUntilGdalCompletionCount(sink, operationId, 1, deadline);
     }
 
+    void PumpGdalMessagesFor(const std::chrono::milliseconds duration)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + duration;
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            MSG message{};
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE)
+            {
+                if (message.message == WM_QUIT)
+                {
+                    PostQuitMessage(static_cast<int>(message.wParam));
+                    return;
+                }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            Sleep(1);
+        }
+    }
+
     [[nodiscard]] bool WaitForGdalDispatchMessage(
         const std::chrono::steady_clock::time_point deadline)
     {
@@ -1638,11 +1658,8 @@ TEST_F(ActiveXMapTest, LoadsVectorDatasetAsynchronouslyAndCommitsBeforeCompletio
         0,
         0,
         &windowMessageResult)));
-    ASSERT_TRUE(PumpUntilGdalCompletionCount(
-        *subscription.Sink(),
-        operationId,
-        2,
-        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    PumpGdalMessagesFor(std::chrono::milliseconds(100));
+    EXPECT_EQ(subscription.Sink()->CompletionCount(operationId), 1u);
     EXPECT_EQ(observation.layerCountResult, S_OK);
     EXPECT_EQ(observation.featureCountResult, S_OK);
     EXPECT_EQ(observation.layerCount, 1);
