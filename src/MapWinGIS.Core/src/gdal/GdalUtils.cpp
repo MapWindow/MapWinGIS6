@@ -43,6 +43,20 @@ namespace mwg
                                });
         }
 
+        bool HasNullBytePath(const std::filesystem::path& path)
+        {
+            return path.native().find(std::filesystem::path::value_type{}) !=
+                   std::filesystem::path::string_type::npos;
+        }
+
+        template <typename... Paths>
+        bool HasNullBytePaths(
+            const std::filesystem::path& first,
+            const Paths&... remaining)
+        {
+            return HasNullBytePath(first) || (HasNullBytePath(remaining) || ...);
+        }
+
         bool RecordFailure(std::vector<GdalError>& errors, std::string message)
         {
             errors.clear();
@@ -257,6 +271,13 @@ namespace mwg
             GdalProgressAdapter::Callback progress,
             const GdalCancellationToken* cancellationToken)
         {
+            if (HasNullBytePaths(sourceFilename, destinationFilename))
+            {
+                return RecordFailure(
+                    errors,
+                    "GDAL utility paths must not contain null bytes.");
+            }
+
             return RunUtilityOperation(
                 errors, cancelled, std::move(progress), cancellationToken,
                 [&](GdalProgressAdapter& adapter)
@@ -404,6 +425,8 @@ namespace mwg
         const detail::GdalExecutionLock lock;
         _impl->succeeded = false;
         _impl->cancelled = false;
+        if (HasNullBytePaths(sourceFilename, destinationFilename))
+            return RecordFailure(_impl->errors, "GDAL utility paths must not contain null bytes.");
         if (HasNullByte(options))
             return RecordFailure(_impl->errors, "GDAL utility options must not contain null bytes.");
 
@@ -446,6 +469,8 @@ namespace mwg
         const detail::GdalExecutionLock lock;
         _impl->succeeded = false;
         _impl->cancelled = false;
+        if (HasNullBytePaths(sourceFilename, destinationFilename))
+            return RecordFailure(_impl->errors, "GDAL utility paths must not contain null bytes.");
         if (HasNullByte(options))
             return RecordFailure(_impl->errors, "GDAL utility options must not contain null bytes.");
         return _impl->succeeded = RunUtilityOperation(
@@ -532,6 +557,8 @@ namespace mwg
         const detail::GdalExecutionLock lock;
         _impl->succeeded = false;
         _impl->cancelled = false;
+        if (HasNullBytePath(sourceFilename))
+            return RecordFailure(_impl->errors, "GDAL utility paths must not contain null bytes.");
         if (resamplingMethod.find('\0') != std::string_view::npos)
             return RecordFailure(_impl->errors, "GDAL resampling method must not contain null bytes.");
         if (overviewList.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
@@ -604,6 +631,8 @@ namespace mwg
         _impl->cancelled = false;
         (void)useSharedConnection;
         _impl->errors.clear();
+        if (HasNullBytePaths(subjectFilename, overlayFilename, destinationFilename))
+            return RecordFailure(_impl->errors, "GDAL utility paths must not contain null bytes.");
         GdalEnvironment::Initialize();
         return _impl->succeeded = RunClipAlgorithm(
             _impl->errors, subjectFilename, overlayFilename, destinationFilename,
