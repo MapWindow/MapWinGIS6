@@ -47,6 +47,10 @@ jobs:
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v3
 
+      - name: Check C# core-only CMake configuration
+        shell: pwsh
+        run: pwsh -NoProfile -File build/scripts/Test-CSharpCoreOnlyCMake.ps1
+
       - name: Configure CMake
         shell: pwsh
         run: |
