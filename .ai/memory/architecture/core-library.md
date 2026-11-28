@@ -38,6 +38,11 @@ outputs retain their references for pipelines. Caller-supplied outputs remain
 caller-owned, so the runner can check their flush but not their final close.
 See `GdalAlgorithmRunner` and its output-failure and ownership tests.
 
+`GdalOperationResult` snapshots named string outputs for report algorithms.
+Pipeline aggregation must carry them forward alongside diagnostics. Retained
+input datasets must be declared before the output dataset: reverse member
+destruction then closes an output before releasing the datasets it depends on.
+
 Core render scenes are owned, backend-neutral snapshots. They are distinct
 from viewport state. `MapView` caches scenes and failure diagnostics by
 `LayerId`, not by source identity. Duplicate map layers that share a source
