@@ -743,6 +743,19 @@ namespace mwg
         result.succeeded = _impl->operationSucceeded;
         result.cancelled = _impl->cancelled;
         result.errors = _impl->errors;
+        GDALAlgorithm* const algorithm = GetActualAlgorithm(_impl->algorithm.get());
+        if (_impl->runAttempted && algorithm != nullptr)
+        {
+            for (const auto& argument : algorithm->GetArgs())
+            {
+                if (argument->IsOutput() && argument->GetType() == GAAT_STRING)
+                {
+                    result.stringOutputs.push_back({
+                        argument->GetName(),
+                        argument->Get<std::string>()});
+                }
+            }
+        }
         return result;
     }
 

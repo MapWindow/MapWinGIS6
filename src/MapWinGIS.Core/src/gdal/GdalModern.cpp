@@ -21,9 +21,16 @@ namespace mwg
         void AppendRunnerErrors(GdalOperationResult& result,
                                 const GdalAlgorithmRunner& runner)
         {
-            const auto& errors = runner.Errors();
-            result.errors.insert(result.errors.end(), errors.begin(), errors.end());
-            result.cancelled = result.cancelled || runner.Result().WasCancelled();
+            const GdalOperationResult runnerResult = runner.Result();
+            result.errors.insert(
+                result.errors.end(),
+                runnerResult.errors.begin(),
+                runnerResult.errors.end());
+            result.stringOutputs.insert(
+                result.stringOutputs.end(),
+                runnerResult.stringOutputs.begin(),
+                runnerResult.stringOutputs.end());
+            result.cancelled = result.cancelled || runnerResult.WasCancelled();
         }
 
         void AddOperationError(GdalOperationResult& result, std::string message)
@@ -93,8 +100,8 @@ namespace mwg
             }
         }
 
-        GdalDatasetPtr previousOutput;
         std::vector<GdalDatasetPtr> retainedDatasets;
+        GdalDatasetPtr previousOutput;
         retainedDatasets.reserve(steps.size() - 1);
         for (std::size_t index = 0; index < steps.size(); ++index)
         {
