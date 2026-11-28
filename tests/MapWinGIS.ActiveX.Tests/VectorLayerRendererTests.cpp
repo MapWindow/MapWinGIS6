@@ -2312,6 +2312,35 @@ TEST(VectorLayerRenderer, GdiClipsCrossingPolygonsAndRestoresTheHostClip)
     }
 }
 
+TEST(VectorLayerRenderer, GdiClipsDistantFiniteRingsBeforeIntegerConversion)
+{
+    BitmapSurface surface(120, 100);
+    ASSERT_TRUE(surface.IsValid());
+    const RECT bounds{0, 0, 120, 100};
+    ASSERT_NE(FillRect(surface.Get(), &bounds, GetSysColorBrush(COLOR_WINDOW)), 0);
+
+    constexpr double distant = 1.0e308;
+    mwg::rendering::VectorRenderScene layer;
+    layer.extent = {-distant, -distant, distant, distant};
+    layer.sourceFeatureCount = 1;
+    layer.polygons = {{
+        {{-distant, -distant}, {distant, -distant}, {distant, distant},
+         {-distant, distant}, {-distant, -distant}},
+        {{-4.0, -4.0}, {-4.0, 4.0}, {4.0, 4.0}, {4.0, -4.0}, {-4.0, -4.0}}}};
+    layer.fillMeshes.push_back(std::nullopt);
+
+    mwg::rendering::MapRenderScene scene;
+    scene.layers.push_back({mwg::LayerId{1}, Share(std::move(layer))});
+    mwg::Viewport viewport(120, 100);
+    viewport.SetView({0.0, 0.0}, 1.0);
+
+    mwg::activex::GdiVectorLayerRenderer renderer;
+    ASSERT_EQ(renderer.Draw(surface.Get(), bounds, scene, viewport), S_OK);
+    EXPECT_TRUE(renderer.GetFailedLayers().empty());
+    EXPECT_EQ(GetPixel(surface.Get(), 60, 50), GetSysColor(COLOR_WINDOW));
+    EXPECT_EQ(GetPixel(surface.Get(), 66, 50), kFill);
+}
+
 TEST(VectorLayerRenderer, GdiSkipsLayerTraversalWhenTheHostClipDoesNotIntersectBounds)
 {
     BitmapSurface surface(160, 160);
