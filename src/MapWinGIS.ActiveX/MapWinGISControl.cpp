@@ -499,6 +499,15 @@ STDMETHODIMP CMapWinGISControl::EndGdalOperation(
             E_INVALIDARG);
     }
 
+    DispatchGdalNotifications(this);
+    if (_vectorLoadOperations.contains(
+            static_cast<std::uint64_t>(operationId)))
+    {
+        return SetComErrorInfo(
+            "The operation ID belongs to an asynchronous vector load.",
+            E_INVALIDARG);
+    }
+
     mwg::activex::GdalOperationLookup lookup;
     try
     {
@@ -1427,7 +1436,7 @@ STDMETHODIMP CMapWinGISControl::CancelLoadVectorDataset(
             try
             {
                 const mwg::activex::GdalOperationLookup completed =
-                    _gdalEvents.GetResult(
+                    _gdalEvents.GetResultForDelivery(
                         static_cast<std::uint64_t>(operationId));
                 if (completed.status == mwg::activex::GdalEndResult::Ended &&
                     completed.result.has_value() &&
@@ -1493,6 +1502,8 @@ STDMETHODIMP CMapWinGISControl::EndLoadVectorDataset(
             IID_IMapWinGISControl5,
             E_INVALIDARG);
     }
+
+    DispatchGdalNotifications(this);
 
     const auto found = _vectorLoadOperations.find(
         static_cast<std::uint64_t>(operationId));

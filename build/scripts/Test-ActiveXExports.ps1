@@ -39,7 +39,7 @@ $exports = & $dumpbinPath /nologo /exports $resolvedOcx | Out-String
 if ($LASTEXITCODE -ne 0) {
     throw "dumpbin failed to inspect '$resolvedOcx'."
 }
-if ($exports -match '\bMapWinGISControlSet\w+ForTesting\b') {
+if ($exports -match '_?MapWinGISControlSet\w+ForTesting\b') {
     throw "The ActiveX binary '$resolvedOcx' exports a test-only hook."
 }
 

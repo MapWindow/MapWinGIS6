@@ -52,6 +52,26 @@ namespace
     using ResultMarshallingFailureSetter =
         void(__cdecl*)(UINT, HRESULT) noexcept;
 
+    template <std::size_t N>
+    [[nodiscard]] FARPROC GetTestHookAddress(
+        const HMODULE module,
+        const char (&name)[N]) noexcept
+    {
+        FARPROC address = ::GetProcAddress(module, name);
+        if (address != nullptr)
+        {
+            return address;
+        }
+
+        char decoratedName[N + 1]{};
+        decoratedName[0] = '_';
+        for (std::size_t index = 0; index < N; ++index)
+        {
+            decoratedName[index + 1] = name[index];
+        }
+        return ::GetProcAddress(module, decoratedName);
+    }
+
     [[nodiscard]] std::string ToUtf8(const std::filesystem::path& path)
     {
         const std::u8string utf8 = path.u8string();
@@ -569,7 +589,7 @@ namespace
     public:
         explicit ScopedResultMarshallingFailure(const HMODULE module) noexcept
             : _setter(reinterpret_cast<ResultMarshallingFailureSetter>(
-                  GetProcAddress(
+                  GetTestHookAddress(
                       module,
                       "MapWinGISControlSetResultMarshallingFailureForTesting")))
         {
@@ -1022,24 +1042,37 @@ namespace
         return PumpUntilGdalCompletionCount(sink, operationId, 1, deadline);
     }
 
-    void PumpGdalMessagesFor(const std::chrono::milliseconds duration)
+    [[nodiscard]] bool PumpGdalMessagesUntilIdle(
+        const std::chrono::milliseconds quietPeriod,
+        const std::chrono::steady_clock::time_point deadline)
     {
-        const auto deadline = std::chrono::steady_clock::now() + duration;
+        auto idleSince = std::chrono::steady_clock::now();
         while (std::chrono::steady_clock::now() < deadline)
         {
+            bool dispatchedMessage = false;
             MSG message{};
             while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE)
             {
                 if (message.message == WM_QUIT)
                 {
                     PostQuitMessage(static_cast<int>(message.wParam));
-                    return;
+                    return false;
                 }
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
+                dispatchedMessage = true;
+            }
+            if (dispatchedMessage)
+            {
+                idleSince = std::chrono::steady_clock::now();
+            }
+            else if (std::chrono::steady_clock::now() - idleSince >= quietPeriod)
+            {
+                return true;
             }
             Sleep(1);
         }
+        return false;
     }
 
     [[nodiscard]] bool WaitForGdalDispatchMessage(
@@ -1440,12 +1473,16 @@ TEST_F(ActiveXMapTest, LoadsStackAndClearReleasesTheDatasets)
     EXPECT_EQ(count, 1);
 }
 
-TEST_F(ActiveXMapTest, EndWaitsForOwnerThreadVectorLoadFinalization)
+TEST_F(ActiveXMapTest, EndLoadVectorDatasetDispatchesCompletionWithoutPumpingMessages)
 {
     ComPtr<IMapWinGISControl5> control;
     ASSERT_EQ(_control.As(&control), S_OK);
     GdalEventSubscription subscription(control.Get());
     ASSERT_EQ(subscription.Result(), S_OK);
+    VectorLoadCompletionObservation observation{control.Get()};
+    subscription.Sink()->SetCompletionCallback(
+        &VectorLoadCompletionObservation::Observe,
+        &observation);
 
     const std::vector<mwg::Extent> rectangles{{0, 0, 2, 2}};
     const auto path = mwg::test::MakeRectanglesDataset(
@@ -1460,36 +1497,32 @@ TEST_F(ActiveXMapTest, EndWaitsForOwnerThreadVectorLoadFinalization)
 
     ASSERT_TRUE(WaitForGdalDispatchMessage(
         std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    EXPECT_EQ(subscription.Sink()->CompletionCount(operationId), 0u);
 
     VARIANT_BOOL succeeded = VARIANT_TRUE;
     VARIANT_BOOL cancelled = VARIANT_TRUE;
     LONGLONG layerId = -1;
     BSTR summary = nullptr;
     BSTR diagnostics = nullptr;
-    EXPECT_EQ(control->EndLoadVectorDataset(
-        operationId,
-        &succeeded,
-        &cancelled,
-        &layerId,
-        &summary,
-        &diagnostics), E_PENDING);
-    EXPECT_EQ(succeeded, VARIANT_FALSE);
-    EXPECT_EQ(cancelled, VARIANT_FALSE);
-    EXPECT_EQ(layerId, 0);
-    EXPECT_EQ(summary, nullptr);
-    EXPECT_EQ(diagnostics, nullptr);
-
-    ASSERT_TRUE(PumpUntilGdalCompletion(
-        *subscription.Sink(),
-        operationId,
-        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
-    EXPECT_EQ(control->EndLoadVectorDataset(
-        operationId,
-        &succeeded,
-        &cancelled,
-        &layerId,
-        &summary,
-        &diagnostics), S_OK);
+    HRESULT endResult = E_PENDING;
+    const auto endDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (endResult == E_PENDING &&
+           std::chrono::steady_clock::now() < endDeadline)
+    {
+        endResult = control->EndLoadVectorDataset(
+            operationId,
+            &succeeded,
+            &cancelled,
+            &layerId,
+            &summary,
+            &diagnostics);
+        if (endResult == E_PENDING)
+        {
+            Sleep(1);
+        }
+    }
+    ASSERT_EQ(endResult, S_OK);
     std::unique_ptr<wchar_t, decltype(&SysFreeString)> summaryText(
         summary,
         &SysFreeString);
@@ -1499,6 +1532,15 @@ TEST_F(ActiveXMapTest, EndWaitsForOwnerThreadVectorLoadFinalization)
     EXPECT_EQ(succeeded, VARIANT_TRUE);
     EXPECT_EQ(cancelled, VARIANT_FALSE);
     EXPECT_GT(layerId, 0);
+    EXPECT_EQ(subscription.Sink()->CompletionCount(operationId), 1u);
+    EXPECT_EQ(observation.layerCountResult, S_OK);
+    EXPECT_EQ(observation.featureCountResult, S_OK);
+    EXPECT_EQ(observation.layerCount, 1);
+    EXPECT_EQ(observation.featureCount, 1);
+    ASSERT_TRUE(PumpGdalMessagesUntilIdle(
+        std::chrono::milliseconds(25),
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    EXPECT_EQ(subscription.Sink()->CompletionCount(operationId), 1u);
 }
 
 TEST_F(ActiveXMapTest, EndLoadVectorDatasetCanRetryAfterMarshallingFailure)
@@ -1610,6 +1652,48 @@ TEST_F(ActiveXMapTest, EndGdalOperationCanRetryAfterMarshallingFailure)
         std::wstring::npos);
 }
 
+TEST_F(ActiveXMapTest, EndGdalOperationDispatchesCompletionWithoutPumpingMessages)
+{
+    RegisterHostedTestAlgorithms();
+    ComPtr<IMapWinGISControlGdal> control;
+    ASSERT_EQ(_control.As(&control), S_OK);
+    GdalEventSubscription subscription(control.Get());
+    ASSERT_EQ(subscription.Result(), S_OK);
+
+    LONGLONG operationId = 0;
+    ASSERT_EQ(StartGdalOperation(
+        control.Get(),
+        L"mwg-test-activex diagnostics",
+        {},
+        &operationId), S_OK);
+    ASSERT_TRUE(WaitForGdalDispatchMessage(
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    EXPECT_EQ(subscription.Sink()->CompletionCount(operationId), 0u);
+
+    ComGdalResult result;
+    HRESULT endResult = E_PENDING;
+    const auto endDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (endResult == E_PENDING &&
+           std::chrono::steady_clock::now() < endDeadline)
+    {
+        endResult = EndGdalOperation(control.Get(), operationId, result);
+        if (endResult == E_PENDING)
+        {
+            Sleep(1);
+        }
+    }
+    ASSERT_EQ(endResult, S_OK);
+    EXPECT_EQ(result.succeeded, VARIANT_TRUE);
+    EXPECT_EQ(result.cancelled, VARIANT_FALSE);
+    EXPECT_EQ(subscription.Sink()->CompletionCount(operationId), 1u);
+
+    ASSERT_TRUE(PumpGdalMessagesUntilIdle(
+        std::chrono::milliseconds(25),
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    EXPECT_EQ(subscription.Sink()->CompletionCount(operationId), 1u);
+}
+
 TEST_F(ActiveXMapTest, LoadsVectorDatasetAsynchronouslyAndCommitsBeforeCompletionEvent)
 {
     ComPtr<IMapWinGISControl5> control;
@@ -1658,7 +1742,9 @@ TEST_F(ActiveXMapTest, LoadsVectorDatasetAsynchronouslyAndCommitsBeforeCompletio
         0,
         0,
         &windowMessageResult)));
-    PumpGdalMessagesFor(std::chrono::milliseconds(100));
+    ASSERT_TRUE(PumpGdalMessagesUntilIdle(
+        std::chrono::milliseconds(25),
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
     EXPECT_EQ(subscription.Sink()->CompletionCount(operationId), 1u);
     EXPECT_EQ(observation.layerCountResult, S_OK);
     EXPECT_EQ(observation.featureCountResult, S_OK);
@@ -1788,6 +1874,8 @@ TEST_F(ActiveXMapTest, CancellingVectorDatasetLoadLeavesTheMapUnchanged)
         ATL::CComBSTR(path.c_str()),
         &operationId), S_OK);
     ASSERT_GT(operationId, 0);
+    ASSERT_TRUE(WaitForGdalDispatchMessage(
+        std::chrono::steady_clock::now() + std::chrono::seconds(10)));
     EXPECT_EQ(control->CancelLoadVectorDataset(operationId), S_OK);
     ASSERT_TRUE(PumpUntilGdalCompletion(
         *subscription.Sink(),
@@ -1873,7 +1961,7 @@ TEST_F(ActiveXMapTest, DestroyingControlDuringVectorLoadDoesNotAccessTheControlF
     ASSERT_TRUE(barrier.IsValid());
     using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
     const auto setPreparationHook =
-        reinterpret_cast<VectorPreparationHookSetter>(GetProcAddress(
+        reinterpret_cast<VectorPreparationHookSetter>(GetTestHookAddress(
             _module->Get(),
             "MapWinGISControlSetVectorPreparationHookForTesting"));
     if (setPreparationHook == nullptr)

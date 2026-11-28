@@ -22,6 +22,8 @@ if(EXISTS "${installed_manifest}")
 endif()
 file(STRINGS "${MWG_CURRENT_MANIFEST}" current_paths)
 
+# Remove pruned files but leave their directories intact: runtime output
+# directories may be user-owned and can contain data not listed in the manifest.
 foreach(runtime_path IN LISTS previous_paths)
     if(NOT runtime_path IN_LIST current_paths)
         file(REMOVE "${MWG_RUNTIME_DIR}/${runtime_path}")
